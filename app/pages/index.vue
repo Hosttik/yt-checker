@@ -133,6 +133,13 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             Проанализировано {{ result.analyzedVideos }} из {{ result.requestedVideos }} видео.
             <span v-if="result.failedVideos">Без transcript: {{ result.failedVideos }}.</span>
           </p>
+          <p class="muted">
+            Контекстный фильтр:
+            {{ result.analysisMode === 'regex_jev' ? 'Jev' : 'выключен (regex-only)' }}.
+            <span v-if="result.contextualFallbackVideos">
+              Fallback на regex: {{ result.contextualFallbackVideos }} видео.
+            </span>
+          </p>
         </div>
       </div>
 
@@ -154,6 +161,9 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               </p>
               <p v-else-if="video.detections.length === 0" class="clean">
                 По выбранным правилам совпадений не найдено.
+              </p>
+              <p v-if="video.contextFilterStatus === 'fallback'" class="muted">
+                Jev был недоступен: показаны консервативные regex-кандидаты.
               </p>
             </div>
             <a :href="`https://www.youtube.com/watch?v=${video.id}`" target="_blank" rel="noreferrer">

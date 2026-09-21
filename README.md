@@ -6,13 +6,14 @@ A parent-oriented YouTube channel checker. The service scans recent videos and r
 
 - Fetch the latest public channel uploads through TranscriptAPI's `/youtube/channel/latest` endpoint.
 - Fetch timestamped transcripts through a replaceable provider adapter.
-- Apply deterministic speech rules in server memory.
+- Use deterministic regex rules to cheaply locate candidate timeline ranges.
+- Optionally pass only small candidate context windows to TypeSafe Jev for contextual false-positive filtering.
 - Return only derived categories, counts, severity, and YouTube timeline ranges.
 - Return per-video failures without failing the entire channel scan.
 - Do **not** persist, cache, log, or return raw transcript text.
 - Do **not** require a YouTube Data API key.
 
-The current rule engine is deliberately conservative and keyword-based. It is evidence location, not a claim that a channel is safe for children. Contextual classification and family-specific policies are the next layer.
+Jev is deliberately used as a conservative second layer, not as the sole detector. A regex candidate is removed only when Jev classifies it as benign with a high configured probability. Ambiguous or low-confidence cases stay visible so a parent can verify the original YouTube moment.
 
 ## Local setup
 
@@ -27,6 +28,7 @@ npm run dev
 Set:
 
 - `NUXT_TRANSCRIPT_API_KEY` — TranscriptAPI server-side API key.
+- `NUXT_TYPESAFE_API_KEY` — TypeSafe API key. Optional: without it, the service runs regex-only.
 
 Then open `http://localhost:3000`.
 
@@ -52,15 +54,22 @@ recent video metadata
    v
 TranscriptAPI /youtube/transcript
    |
-   | raw transcript: memory only
+   | raw transcript: server memory only
    v
-rule engine
+regex candidate finder
    |
-   | transcript discarded
+   | only short local context windows
+   v
+TypeSafe Jev (optional)
+   |
+   | confident benign -> drop
+   | violation/uncertain/low confidence -> keep
    v
 derived detections only:
 category + count + severity + timeline ranges
 ```
+
+If Jev is unavailable for a video, the service falls back to the conservative regex candidates rather than silently losing detections.
 
 ## Raw content policy
 
@@ -75,6 +84,8 @@ It must never be:
 - included in API responses;
 - displayed in the UI.
 
+When Jev contextual filtering is enabled, only a bounded local window around a regex candidate (the matched segment plus at most one neighboring segment on each side, capped in length) is sent to TypeSafe. The full transcript is not sent to Jev. TypeSafe's current customer agreement states that Customer Data is not used to train model weights without prior customer consent.
+
 Persistent/output data is limited to video/channel identifiers and metadata plus our own derived classification: category, count, severity, time ranges, and classifier/rule version when versioning is added.
 
-The provider is isolated behind `VideoSource` and `TranscriptProvider` interfaces so the upstream source can be replaced without changing the analysis layer.
+The transcript provider is isolated behind `VideoSource` and `TranscriptProvider`; contextual filtering is isolated behind `ContextFilter`, so either upstream dependency can be replaced independently.

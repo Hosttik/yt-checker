@@ -1,12 +1,18 @@
 import { z } from 'zod'
 import type {
   ChannelCheckResponse,
+  ContextFilterStatus,
   RuleId,
   TranscriptUnavailableReason,
   VideoScanResult,
 } from '../../shared/types/check'
 import { RULE_IDS } from '../../shared/types/check'
-import { analyzeTranscript, buildRuleSummary } from '../domain/analyze-transcript'
+import {
+  buildDetections,
+  buildRuleSummary,
+  findTranscriptCandidates,
+} from '../domain/analyze-transcript'
+import { JevContextFilter } from '../services/jev-context-filter'
 import {
   TranscriptApiClient,
   TranscriptApiError,
@@ -47,6 +53,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     config.transcriptApiBaseUrl,
   )
 
+  const contextFilter = config.typesafeApiKey
+    ? new JevContextFilter(
+        config.typesafeApiKey,
+        config.typesafeBaseUrl,
+        config.typesafeModel,
+        Number(config.typesafeBenignDropProbability),
+      )
+    : null
+
   let source
 
   try {
@@ -60,19 +75,39 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const enabledRuleIds = parsed.data.ruleIds as RuleId[]
+  let contextualFallbackVideos = 0
+
   const videoResults = await mapWithConcurrency(
     source.videos,
     3,
     async (video): Promise<VideoScanResult> => {
       try {
-        // Raw transcript text exists only in this scope and is never returned.
+        // Raw transcript text exists only in this scope and server-only intermediate candidates.
         const transcript = await provider.getTranscript(video.id)
-        const detections = analyzeTranscript(transcript.segments, enabledRuleIds)
+        const candidates = findTranscriptCandidates(transcript.segments, enabledRuleIds)
+
+        let filteredCandidates = candidates
+        let contextFilterStatus: ContextFilterStatus = contextFilter ? 'not_needed' : 'disabled'
+
+        if (contextFilter && candidates.length > 0) {
+          try {
+            filteredCandidates = await contextFilter.filter(candidates)
+            contextFilterStatus = 'applied'
+          } catch {
+            // Availability beats silent data loss: if Jev fails, keep conservative regex candidates.
+            // Never log the exception because request state contains raw transcript context.
+            contextualFallbackVideos += 1
+            contextFilterStatus = 'fallback'
+          }
+        }
+
+        const detections = buildDetections(filteredCandidates, enabledRuleIds)
 
         return {
           ...video,
           status: 'analyzed',
           transcriptLanguage: transcript.language,
+          contextFilterStatus,
           detections,
         }
       } catch (error) {
@@ -80,6 +115,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           ...video,
           status: 'transcript_unavailable',
           unavailableReason: providerReason(error),
+          contextFilterStatus: contextFilter ? 'not_needed' : 'disabled',
           detections: [],
         }
       }
@@ -93,11 +129,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     requestedVideos: source.videos.length,
     analyzedVideos,
     failedVideos: videoResults.length - analyzedVideos,
+    analysisMode: contextFilter ? 'regex_jev' : 'regex_only',
+    contextualFallbackVideos,
     summary: buildRuleSummary(videoResults, enabledRuleIds),
     videos: videoResults,
     limitations: [
       'Current checks analyze speech transcripts, not visual content.',
-      'Keyword rules can produce false positives because they do not understand context yet.',
+      contextFilter
+        ? 'Regex finds candidates; Jev removes only high-confidence contextual false positives. Ambiguous cases are kept for parental review.'
+        : 'Contextual Jev filtering is disabled because NUXT_TYPESAFE_API_KEY is not configured.',
       'Filler speech, shouting, editing pace, and speech quality are not scored in this MVP.',
       'Raw transcript text is not included in results; use the YouTube timeline links to verify context.',
     ],

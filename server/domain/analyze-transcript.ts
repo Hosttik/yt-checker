@@ -9,6 +9,21 @@ import type { TranscriptSegment } from './transcript'
 import { getRule } from './rules'
 
 const RANGE_MERGE_GAP_MS = 1_000
+const CONTEXT_SEGMENTS_EACH_SIDE = 1
+const MAX_CONTEXT_CHARS = 900
+
+/**
+ * Server-only intermediate that may contain raw transcript context.
+ * Never return, persist, cache, log, or send this type to the client.
+ */
+export interface TranscriptCandidate {
+  id: string
+  ruleId: RuleId
+  hitCount: number
+  startMs: number
+  endMs: number
+  context: string
+}
 
 function mergeRanges(ranges: TimelineRange[]): TimelineRange[] {
   if (ranges.length <= 1) return ranges
@@ -30,35 +45,72 @@ function mergeRanges(ranges: TimelineRange[]): TimelineRange[] {
   return merged
 }
 
-export function analyzeTranscript(
+function buildContext(segments: TranscriptSegment[], segmentIndex: number): string {
+  const start = Math.max(0, segmentIndex - CONTEXT_SEGMENTS_EACH_SIDE)
+  const end = Math.min(segments.length, segmentIndex + CONTEXT_SEGMENTS_EACH_SIDE + 1)
+
+  return segments
+    .slice(start, end)
+    .map((segment, index) => index === segmentIndex - start
+      ? `[CANDIDATE] ${segment.text}`
+      : segment.text)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_CONTEXT_CHARS)
+}
+
+export function findTranscriptCandidates(
   segments: TranscriptSegment[],
   enabledRuleIds: RuleId[],
-): RuleDetection[] {
-  const detections = new Map<RuleId, { count: number; ranges: TimelineRange[] }>()
+): TranscriptCandidate[] {
+  const candidates: TranscriptCandidate[] = []
+  let candidateIndex = 0
 
-  for (const segment of segments) {
+  segments.forEach((segment, segmentIndex) => {
     for (const ruleId of enabledRuleIds) {
       const rule = getRule(ruleId)
-      let segmentHitCount = 0
+      let hitCount = 0
 
       for (const pattern of rule.patterns) {
-        segmentHitCount += Array.from(segment.text.matchAll(pattern)).length
+        hitCount += Array.from(segment.text.matchAll(pattern)).length
       }
 
-      if (segmentHitCount === 0) continue
+      if (hitCount === 0) continue
 
-      const current = detections.get(ruleId) ?? { count: 0, ranges: [] }
-      current.count += segmentHitCount
-      current.ranges.push({
+      candidates.push({
+        id: `c${candidateIndex}`,
+        ruleId,
+        hitCount,
         startMs: segment.startMs,
         endMs: Math.max(segment.endMs, segment.startMs),
+        context: buildContext(segments, segmentIndex),
       })
-      detections.set(ruleId, current)
+      candidateIndex += 1
     }
+  })
+
+  return candidates
+}
+
+export function buildDetections(
+  candidates: TranscriptCandidate[],
+  enabledRuleIds: RuleId[],
+): RuleDetection[] {
+  const grouped = new Map<RuleId, { count: number; ranges: TimelineRange[] }>()
+
+  for (const candidate of candidates) {
+    const current = grouped.get(candidate.ruleId) ?? { count: 0, ranges: [] }
+    current.count += candidate.hitCount
+    current.ranges.push({
+      startMs: candidate.startMs,
+      endMs: candidate.endMs,
+    })
+    grouped.set(candidate.ruleId, current)
   }
 
   return enabledRuleIds.flatMap((ruleId) => {
-    const detection = detections.get(ruleId)
+    const detection = grouped.get(ruleId)
     if (!detection) return []
 
     const rule = getRule(ruleId)
@@ -71,6 +123,13 @@ export function analyzeTranscript(
       ranges: mergeRanges(detection.ranges),
     }]
   })
+}
+
+export function analyzeTranscript(
+  segments: TranscriptSegment[],
+  enabledRuleIds: RuleId[],
+): RuleDetection[] {
+  return buildDetections(findTranscriptCandidates(segments, enabledRuleIds), enabledRuleIds)
 }
 
 export function buildRuleSummary(
