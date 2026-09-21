@@ -15,14 +15,14 @@ A parent-oriented YouTube channel checker. The service scans recent videos and r
 
 Jev is deliberately used as a conservative second layer, not as the sole detector. A regex candidate is removed only when Jev classifies it as benign with a high configured probability. Ambiguous or low-confidence cases stay visible so a parent can verify the original YouTube moment.
 
-## Local setup
+## Docker-only local setup
 
-Requirements: Node.js 22+.
+You do not need Node.js or npm installed on the host. The intended local workflow requires only Docker Desktop / Docker Compose.
+
+Create the local environment file:
 
 ```bash
 cp .env.example .env
-npm install
-npm run dev
 ```
 
 Set:
@@ -30,15 +30,55 @@ Set:
 - `NUXT_TRANSCRIPT_API_KEY` — TranscriptAPI server-side API key.
 - `NUXT_TYPESAFE_API_KEY` — TypeSafe API key. Optional: without it, the service runs regex-only.
 
+Start development:
+
+```bash
+docker compose up --build
+```
+
 Then open `http://localhost:3000`.
+
+The source tree is mounted read-only into the container. Dependencies and Nuxt-generated files live in Docker-managed volumes rather than in host `node_modules`.
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+Remove generated Docker volumes too:
+
+```bash
+docker compose down -v
+```
 
 ## Checks
 
+Run all type checks, tests, and the production build inside Docker:
+
 ```bash
-npm run check
+docker build --target verify .
 ```
 
-Runs strict Nuxt type checking, Vitest, and a production build.
+CI uses the same Docker verification target, so local and CI environments stay aligned.
+
+## Production image
+
+Build the minimal runtime image:
+
+```bash
+docker build --target runtime -t yt-checker:local .
+```
+
+Or run the hardened production compose definition locally:
+
+```bash
+docker compose -f compose.prod.yaml up --build -d
+```
+
+Both compose definitions bind port 3000 only to `127.0.0.1`. Put a properly configured reverse proxy in front when deploying publicly rather than changing the application container to privileged mode.
+
+See [SECURITY.md](./SECURITY.md) for the container threat model and remaining risks.
 
 ## Data flow
 
@@ -84,7 +124,7 @@ It must never be:
 - included in API responses;
 - displayed in the UI.
 
-When Jev contextual filtering is enabled, only a bounded local window around a regex candidate (the matched segment plus at most one neighboring segment on each side, capped in length) is sent to TypeSafe. The full transcript is not sent to Jev. TypeSafe's current customer agreement states that Customer Data is not used to train model weights without prior customer consent.
+When Jev contextual filtering is enabled, only a bounded local window around a regex candidate (the matched segment plus at most one neighboring segment on each side, capped in length) is sent to TypeSafe. The full transcript is not sent to Jev.
 
 Persistent/output data is limited to video/channel identifiers and metadata plus our own derived classification: category, count, severity, time ranges, and classifier/rule version when versioning is added.
 

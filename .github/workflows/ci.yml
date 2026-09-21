@@ -8,17 +8,38 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+      - name: Verify inside Docker
+        run: docker build --target verify --tag yt-checker:verify .
 
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
+      - name: Build production image
+        run: docker build --target runtime --tag yt-checker:runtime .
 
-      - name: Verify
-        run: npm run check
+      - name: Smoke-test hardened runtime
+        run: |
+          docker run -d             --name yt-checker-ci             --read-only             --cap-drop ALL             --security-opt no-new-privileges             --tmpfs /tmp:rw,noexec,nosuid,size=64m             yt-checker:runtime
+
+          for attempt in $(seq 1 20); do
+            status="$(docker inspect --format='{{.State.Health.Status}}' yt-checker-ci)"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+
+            if [ "$status" = "unhealthy" ]; then
+              docker logs yt-checker-ci
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          docker logs yt-checker-ci
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f yt-checker-ci >/dev/null 2>&1 || true

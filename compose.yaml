@@ -1,0 +1,41 @@
+name: yt-checker
+
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    init: true
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+        read_only: true
+      - type: volume
+        source: node_modules
+        target: /app/node_modules
+      - type: volume
+        source: nuxt
+        target: /app/.nuxt
+      - type: volume
+        source: output
+        target: /app/.output
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+
+volumes:
+  node_modules:
+  nuxt:
+  output:
