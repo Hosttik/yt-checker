@@ -12,7 +12,7 @@ export async function mapWithConcurrency<T, R>(
       nextIndex += 1
 
       if (index >= items.length) return
-      results[index] = await mapper(items[index], index)
+      results[index] = await mapper(items[index]!, index)
     }
   }
 
