@@ -243,23 +243,44 @@ legend {
 
 .violations li {
   display: grid;
-  grid-template-columns: 64px 1fr;
-  gap: 12px;
-  padding-top: 12px;
+  grid-template-columns: minmax(180px, .7fr) 1.3fr;
+  gap: 18px;
+  padding-top: 14px;
   border-top: 1px solid #ece9e2;
 }
 
-.timestamp {
-  font-variant-numeric: tabular-nums;
-  font-weight: 900;
-}
-
-.violations p {
-  margin: 4px 0;
+.violations li > div:first-child {
+  display: grid;
+  align-content: start;
+  gap: 4px;
 }
 
 .violations small {
   color: #777;
+}
+
+.range-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.timestamp {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid #dedbd4;
+  border-radius: 999px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  text-decoration: none;
+  background: #f7f6f2;
+}
+
+.timestamp:hover {
+  border-color: #aaa59c;
 }
 
 .limitations {
@@ -280,7 +301,8 @@ legend {
 
   .check-form,
   .rules-grid,
-  .summary-grid {
+  .summary-grid,
+  .violations li {
     grid-template-columns: 1fr;
   }
 
