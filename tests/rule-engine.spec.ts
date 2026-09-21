@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeTranscript, buildRuleSummary } from '../server/domain/analyze-transcript'
+import {
+  analyzeTranscript,
+  buildDetections,
+  buildRuleSummary,
+  findTranscriptCandidates,
+} from '../server/domain/analyze-transcript'
 import type { VideoScanResult } from '../shared/types/check'
 
-describe('analyzeTranscript', () => {
-  it('returns derived detections and timeline ranges without raw transcript text', () => {
+describe('transcript candidate extraction', () => {
+  it('keeps raw text only in server-side candidates and final detections are derived-only', () => {
     const rawText = 'Да ты дебил вообще. Блять, хватит.'
-    const detections = analyzeTranscript(
-      [
-        {
-          text: rawText,
-          startMs: 12_400,
-          endMs: 14_400,
-        },
-      ],
-      ['profanity', 'insults'],
-    )
+    const segments = [
+      { text: 'До этого мы спокойно разговаривали.', startMs: 10_000, endMs: 12_000 },
+      { text: rawText, startMs: 12_400, endMs: 14_400 },
+      { text: 'А потом продолжили игру.', startMs: 14_500, endMs: 16_000 },
+    ]
+
+    const candidates = findTranscriptCandidates(segments, ['profanity', 'insults'])
+    expect(candidates).toHaveLength(2)
+    expect(candidates.every((item) => item.context.includes(rawText))).toBe(true)
+
+    const detections = buildDetections(candidates, ['profanity', 'insults'])
 
     expect(detections).toEqual([
       {
@@ -37,10 +43,29 @@ describe('analyzeTranscript', () => {
     expect(serialized).not.toContain(rawText)
     expect(serialized).not.toContain('дебил')
     expect(serialized).not.toContain('Блять')
-    expect(serialized).not.toContain('excerpt')
-    expect(serialized).not.toContain('matches')
+    expect(serialized).not.toContain('context')
   })
 
+  it('limits contextual text to the candidate segment and one neighboring segment each side', () => {
+    const segments = [
+      { text: 'DISTANT_SECRET_SHOULD_NOT_LEAVE', startMs: 0, endMs: 500 },
+      { text: 'предыдущий контекст', startMs: 500, endMs: 1_000 },
+      { text: 'этот дебил опять пришёл', startMs: 1_000, endMs: 2_000 },
+      { text: 'следующий контекст', startMs: 2_000, endMs: 3_000 },
+      { text: 'ANOTHER_DISTANT_SECRET', startMs: 3_000, endMs: 4_000 },
+    ]
+
+    const [candidate] = findTranscriptCandidates(segments, ['insults'])
+
+    expect(candidate?.context).toContain('предыдущий контекст')
+    expect(candidate?.context).toContain('этот дебил опять пришёл')
+    expect(candidate?.context).toContain('следующий контекст')
+    expect(candidate?.context).not.toContain('DISTANT_SECRET_SHOULD_NOT_LEAVE')
+    expect(candidate?.context).not.toContain('ANOTHER_DISTANT_SECRET')
+  })
+})
+
+describe('analyzeTranscript', () => {
   it('merges adjacent hit segments into one timeline range', () => {
     const detections = analyzeTranscript(
       [

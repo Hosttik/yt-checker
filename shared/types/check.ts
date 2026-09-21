@@ -15,6 +15,11 @@ export type TranscriptUnavailableReason =
   | 'rate_limited'
   | 'billing'
   | 'provider_error'
+export type ContextFilterStatus =
+  | 'applied'
+  | 'fallback'
+  | 'not_needed'
+  | 'disabled'
 
 export interface TimelineRange {
   startMs: number
@@ -46,6 +51,7 @@ export interface VideoScanResult extends VideoMetadata {
   status: 'analyzed' | 'transcript_unavailable'
   transcriptLanguage?: string
   unavailableReason?: TranscriptUnavailableReason
+  contextFilterStatus?: ContextFilterStatus
   detections: RuleDetection[]
 }
 
@@ -62,6 +68,8 @@ export interface ChannelCheckResponse {
   requestedVideos: number
   analyzedVideos: number
   failedVideos: number
+  analysisMode: 'regex_only' | 'regex_jev'
+  contextualFallbackVideos: number
   summary: RuleSummary[]
   videos: VideoScanResult[]
   limitations: string[]
