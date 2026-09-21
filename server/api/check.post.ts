@@ -1,19 +1,26 @@
 import { z } from 'zod'
-import type { ChannelCheckResponse, RuleId, VideoScanResult } from '../../shared/types/check'
+import type {
+  ChannelCheckResponse,
+  RuleId,
+  TranscriptUnavailableReason,
+  VideoScanResult,
+} from '../../shared/types/check'
 import { RULE_IDS } from '../../shared/types/check'
 import { analyzeTranscript, buildRuleSummary } from '../domain/analyze-transcript'
-import { SupadataTranscriptProvider } from '../services/transcript'
-import { YouTubeClient } from '../services/youtube'
+import {
+  TranscriptApiClient,
+  TranscriptApiError,
+} from '../services/transcript-api'
 import { mapWithConcurrency } from '../utils/concurrency'
 
 const checkRequestSchema = z.object({
   channelUrl: z.string().trim().min(1).max(500),
-  videoLimit: z.number().int().min(1).max(20).default(10),
+  videoLimit: z.number().int().min(1).max(15).default(10),
   ruleIds: z.array(z.enum(RULE_IDS)).min(1).default([...RULE_IDS]),
 })
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown error'
+function providerReason(error: unknown): TranscriptUnavailableReason {
+  return error instanceof TranscriptApiError ? error.reason : 'provider_error'
 }
 
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
@@ -28,62 +35,62 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   const config = useRuntimeConfig(event)
 
-  if (!config.youtubeApiKey || !config.supadataApiKey) {
+  if (!config.transcriptApiKey) {
     throw createError({
       statusCode: 503,
-      statusMessage: 'Server is missing NUXT_YOUTUBE_API_KEY or NUXT_SUPADATA_API_KEY.',
+      statusMessage: 'Server is missing NUXT_TRANSCRIPT_API_KEY.',
     })
   }
 
-  const youtube = new YouTubeClient(config.youtubeApiKey)
-  const transcriptProvider = new SupadataTranscriptProvider(
-    config.supadataApiKey,
-    config.supadataBaseUrl,
+  const provider = new TranscriptApiClient(
+    config.transcriptApiKey,
+    config.transcriptApiBaseUrl,
   )
 
-  let channel
-  let videos
+  let source
 
   try {
-    channel = await youtube.resolveChannel(parsed.data.channelUrl)
-    videos = await youtube.listRecentVideos(channel.uploadsPlaylistId, parsed.data.videoLimit)
-  } catch (error) {
+    source = await provider.getRecentVideos(parsed.data.channelUrl, parsed.data.videoLimit)
+  } catch {
+    // Do not return or log upstream response bodies: they may contain provider/raw content.
     throw createError({
       statusCode: 502,
-      statusMessage: errorMessage(error),
+      statusMessage: 'Could not load this YouTube channel.',
     })
   }
 
   const enabledRuleIds = parsed.data.ruleIds as RuleId[]
-  const videoResults = await mapWithConcurrency(videos, 3, async (video): Promise<VideoScanResult> => {
-    try {
-      const transcript = await transcriptProvider.getTranscript(video.id)
+  const videoResults = await mapWithConcurrency(
+    source.videos,
+    3,
+    async (video): Promise<VideoScanResult> => {
+      try {
+        // Raw transcript text exists only in this scope and is never returned.
+        const transcript = await provider.getTranscript(video.id)
+        const detections = analyzeTranscript(transcript.segments, enabledRuleIds)
 
-      return {
-        ...video,
-        status: 'analyzed',
-        transcriptLanguage: transcript.language,
-        violations: analyzeTranscript(transcript.segments, enabledRuleIds),
+        return {
+          ...video,
+          status: 'analyzed',
+          transcriptLanguage: transcript.language,
+          detections,
+        }
+      } catch (error) {
+        return {
+          ...video,
+          status: 'transcript_unavailable',
+          unavailableReason: providerReason(error),
+          detections: [],
+        }
       }
-    } catch (error) {
-      return {
-        ...video,
-        status: 'transcript_unavailable',
-        violations: [],
-        error: errorMessage(error),
-      }
-    }
-  })
+    },
+  )
 
   const analyzedVideos = videoResults.filter((video) => video.status === 'analyzed').length
 
   return {
-    channel: {
-      id: channel.id,
-      title: channel.title,
-      thumbnailUrl: channel.thumbnailUrl,
-    },
-    requestedVideos: videos.length,
+    channel: source.channel,
+    requestedVideos: source.videos.length,
     analyzedVideos,
     failedVideos: videoResults.length - analyzedVideos,
     summary: buildRuleSummary(videoResults, enabledRuleIds),
@@ -92,6 +99,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       'Current checks analyze speech transcripts, not visual content.',
       'Keyword rules can produce false positives because they do not understand context yet.',
       'Filler speech, shouting, editing pace, and speech quality are not scored in this MVP.',
+      'Raw transcript text is not included in results; use the YouTube timeline links to verify context.',
     ],
   }
 })

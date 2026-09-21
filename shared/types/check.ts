@@ -10,22 +10,23 @@ export const RULE_IDS = [
 
 export type RuleId = (typeof RULE_IDS)[number]
 export type RuleSeverity = 'low' | 'medium' | 'high'
+export type TranscriptUnavailableReason =
+  | 'not_available'
+  | 'rate_limited'
+  | 'billing'
+  | 'provider_error'
 
-export interface TranscriptSegment {
-  text: string
-  offsetMs: number
-  durationMs: number
-  lang?: string
+export interface TimelineRange {
+  startMs: number
+  endMs: number
 }
 
-export interface RuleViolation {
+export interface RuleDetection {
   ruleId: RuleId
   label: string
   severity: RuleSeverity
-  timestampMs: number
-  excerpt: string
-  matches: string[]
   count: number
+  ranges: TimelineRange[]
 }
 
 export interface VideoMetadata {
@@ -38,15 +39,14 @@ export interface VideoMetadata {
 export interface ChannelMetadata {
   id: string
   title: string
-  uploadsPlaylistId: string
   thumbnailUrl?: string
 }
 
 export interface VideoScanResult extends VideoMetadata {
   status: 'analyzed' | 'transcript_unavailable'
   transcriptLanguage?: string
-  violations: RuleViolation[]
-  error?: string
+  unavailableReason?: TranscriptUnavailableReason
+  detections: RuleDetection[]
 }
 
 export interface RuleSummary {
@@ -58,7 +58,7 @@ export interface RuleSummary {
 }
 
 export interface ChannelCheckResponse {
-  channel: Omit<ChannelMetadata, 'uploadsPlaylistId'>
+  channel: ChannelMetadata
   requestedVideos: number
   analyzedVideos: number
   failedVideos: number

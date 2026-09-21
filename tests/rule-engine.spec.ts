@@ -3,28 +3,61 @@ import { analyzeTranscript, buildRuleSummary } from '../server/domain/analyze-tr
 import type { VideoScanResult } from '../shared/types/check'
 
 describe('analyzeTranscript', () => {
-  it('returns timestamped evidence for profanity and insults', () => {
-    const violations = analyzeTranscript(
+  it('returns derived detections and timeline ranges without raw transcript text', () => {
+    const rawText = 'Да ты дебил вообще. Блять, хватит.'
+    const detections = analyzeTranscript(
       [
         {
-          text: 'Да ты дебил вообще. Блять, хватит.',
-          offsetMs: 12_400,
-          durationMs: 2_000,
-          lang: 'ru',
+          text: rawText,
+          startMs: 12_400,
+          endMs: 14_400,
         },
       ],
       ['profanity', 'insults'],
     )
 
-    expect(violations).toHaveLength(2)
-    expect(violations.map((item) => item.ruleId).sort()).toEqual(['insults', 'profanity'])
-    expect(violations.every((item) => item.timestampMs === 12_400)).toBe(true)
+    expect(detections).toEqual([
+      {
+        ruleId: 'profanity',
+        label: 'Мат и грубая лексика',
+        severity: 'high',
+        count: 1,
+        ranges: [{ startMs: 12_400, endMs: 14_400 }],
+      },
+      {
+        ruleId: 'insults',
+        label: 'Оскорбления',
+        severity: 'medium',
+        count: 1,
+        ranges: [{ startMs: 12_400, endMs: 14_400 }],
+      },
+    ])
+
+    const serialized = JSON.stringify(detections)
+    expect(serialized).not.toContain(rawText)
+    expect(serialized).not.toContain('дебил')
+    expect(serialized).not.toContain('Блять')
+    expect(serialized).not.toContain('excerpt')
+    expect(serialized).not.toContain('matches')
+  })
+
+  it('merges adjacent hit segments into one timeline range', () => {
+    const detections = analyzeTranscript(
+      [
+        { text: 'дебил', startMs: 1_000, endMs: 2_000 },
+        { text: 'идиот', startMs: 2_700, endMs: 3_500 },
+      ],
+      ['insults'],
+    )
+
+    expect(detections[0]?.count).toBe(2)
+    expect(detections[0]?.ranges).toEqual([{ startMs: 1_000, endMs: 3_500 }])
   })
 
   it('does not flag harmless speech', () => {
     expect(
       analyzeTranscript(
-        [{ text: 'Сегодня мы построим дом в Minecraft.', offsetMs: 0, durationMs: 1_000 }],
+        [{ text: 'Сегодня мы построим дом в Minecraft.', startMs: 0, endMs: 1_000 }],
         ['profanity', 'insults', 'toilet_humor'],
       ),
     ).toEqual([])
@@ -39,15 +72,13 @@ describe('buildRuleSummary', () => {
         title: 'One',
         publishedAt: '',
         status: 'analyzed',
-        violations: [
+        detections: [
           {
             ruleId: 'insults',
             label: 'Оскорбления',
             severity: 'medium',
-            timestampMs: 1_000,
-            excerpt: 'дебил',
-            matches: ['дебил'],
             count: 2,
+            ranges: [{ startMs: 1_000, endMs: 2_000 }],
           },
         ],
       },
@@ -56,7 +87,7 @@ describe('buildRuleSummary', () => {
         title: 'Two',
         publishedAt: '',
         status: 'analyzed',
-        violations: [],
+        detections: [],
       },
     ]
 
