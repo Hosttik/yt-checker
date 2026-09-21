@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ChannelCheckResponse, RuleId } from '../../shared/types/check'
+import type { ChannelCheckResponse, RuleId, TranscriptUnavailableReason } from '../../shared/types/check'
 
 const availableRules: Array<{ id: RuleId; label: string }> = [
   { id: 'profanity', label: 'Мат и грубая лексика' },
@@ -54,9 +54,20 @@ function formatTimestamp(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
+function formatRange(startMs: number, endMs: number): string {
+  return `${formatTimestamp(startMs)}–${formatTimestamp(endMs)}`
+}
+
 function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
   const seconds = Math.floor(timestampMs / 1000)
   return `https://www.youtube.com/watch?v=${videoId}&t=${seconds}s`
+}
+
+function unavailableText(reason?: TranscriptUnavailableReason): string {
+  if (reason === 'rate_limited') return 'Провайдер временно ограничил запросы.'
+  if (reason === 'billing') return 'Закончились credits у transcript-провайдера.'
+  if (reason === 'not_available') return 'У ролика нет доступного transcript.'
+  return 'Transcript временно недоступен.'
 }
 </script>
 
@@ -66,8 +77,8 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
       <p class="eyebrow">YT Checker · MVP</p>
       <h1>Проверь, что ребёнок реально услышит на YouTube-канале</h1>
       <p class="lead">
-        Вставь канал. Мы проверим последние ролики по выбранным правилам и покажем конкретные
-        фрагменты с таймкодами — без магического рейтинга «безопасности».
+        Вставь канал. Мы проверим последние ролики по выбранным правилам и покажем только
+        категории и диапазоны на таймлайне YouTube — без сохранения и публикации текста transcript.
       </p>
     </section>
 
@@ -85,7 +96,7 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
 
         <label class="field limit-field">
           <span>Последних видео</span>
-          <input v-model.number="videoLimit" type="number" min="1" max="20">
+          <input v-model.number="videoLimit" type="number" min="1" max="15">
         </label>
 
         <fieldset>
@@ -139,9 +150,9 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
             <div>
               <h3>{{ video.title }}</h3>
               <p v-if="video.status === 'transcript_unavailable'" class="muted">
-                Не удалось получить transcript: {{ video.error }}
+                {{ unavailableText(video.unavailableReason) }}
               </p>
-              <p v-else-if="video.violations.length === 0" class="clean">
+              <p v-else-if="video.detections.length === 0" class="clean">
                 По выбранным правилам совпадений не найдено.
               </p>
             </div>
@@ -150,20 +161,24 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
             </a>
           </div>
 
-          <ul v-if="video.violations.length" class="violations">
-            <li v-for="(violation, index) in video.violations" :key="`${violation.ruleId}-${violation.timestampMs}-${index}`">
-              <a
-                class="timestamp"
-                :href="youtubeTimestampUrl(video.id, violation.timestampMs)"
-                target="_blank"
-                rel="noreferrer"
-              >
-                {{ formatTimestamp(violation.timestampMs) }}
-              </a>
+          <ul v-if="video.detections.length" class="violations">
+            <li v-for="detection in video.detections" :key="detection.ruleId">
               <div>
-                <strong>{{ violation.label }}</strong>
-                <p>«{{ violation.excerpt }}»</p>
-                <small>Совпадения: {{ violation.matches.join(', ') }}</small>
+                <strong>{{ detection.label }}</strong>
+                <small>Обнаружено: {{ detection.count }}</small>
+              </div>
+
+              <div class="range-list">
+                <a
+                  v-for="range in detection.ranges"
+                  :key="`${detection.ruleId}-${range.startMs}-${range.endMs}`"
+                  class="timestamp"
+                  :href="youtubeTimestampUrl(video.id, range.startMs)"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  ▶ {{ formatRange(range.startMs, range.endMs) }}
+                </a>
               </div>
             </li>
           </ul>

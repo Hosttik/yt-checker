@@ -3,9 +3,8 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   css: ['~/assets/css/main.css'],
   runtimeConfig: {
-    youtubeApiKey: '',
-    supadataApiKey: '',
-    supadataBaseUrl: 'https://api.supadata.ai/v1',
+    transcriptApiKey: '',
+    transcriptApiBaseUrl: 'https://transcriptapi.com/api/v2',
     public: {
       appName: 'YT Checker',
     },

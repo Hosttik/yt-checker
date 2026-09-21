@@ -1,17 +1,18 @@
 # YT Checker
 
-A parent-oriented YouTube channel checker. The service scans recent videos, obtains timestamped transcripts, and reports concrete rule violations instead of producing an opaque "safe / unsafe" score.
+A parent-oriented YouTube channel checker. The service scans recent videos and reports derived content detections with YouTube timeline ranges instead of publishing transcript text or producing an opaque "safe / unsafe" score.
 
 ## MVP scope
 
-- Resolve a public YouTube channel by handle, channel ID, or legacy username.
-- Fetch recent uploads through the official YouTube Data API.
-- Fetch timestamped transcripts through a replaceable provider adapter (Supadata first).
-- Apply deterministic speech rules with timestamped evidence.
+- Fetch the latest public channel uploads through TranscriptAPI's `/youtube/channel/latest` endpoint.
+- Fetch timestamped transcripts through a replaceable provider adapter.
+- Apply deterministic speech rules in server memory.
+- Return only derived categories, counts, severity, and YouTube timeline ranges.
 - Return per-video failures without failing the entire channel scan.
-- Do **not** store video/audio/full transcripts.
+- Do **not** persist, cache, log, or return raw transcript text.
+- Do **not** require a YouTube Data API key.
 
-The current rule engine is deliberately conservative and keyword-based. It is evidence collection, not a claim that a channel is safe for children. Contextual AI classification and family-specific policies are the next layer.
+The current rule engine is deliberately conservative and keyword-based. It is evidence location, not a claim that a channel is safe for children. Contextual classification and family-specific policies are the next layer.
 
 ## Local setup
 
@@ -25,8 +26,7 @@ npm run dev
 
 Set:
 
-- `NUXT_YOUTUBE_API_KEY` — YouTube Data API v3 key.
-- `NUXT_SUPADATA_API_KEY` — Supadata API key.
+- `NUXT_TRANSCRIPT_API_KEY` — TranscriptAPI server-side API key.
 
 Then open `http://localhost:3000`.
 
@@ -43,15 +43,38 @@ Runs strict Nuxt type checking, Vitest, and a production build.
 ```text
 Channel URL
    |
-   +--> YouTube Data API --> channel + recent video metadata
+   v
+TranscriptAPI /channel/latest
    |
-   +--> Supadata adapter --> timestamped transcript
-                               |
-                               v
-                         deterministic rules
-                               |
-                               v
-                    violations + timestamps
+   v
+recent video metadata
+   |
+   v
+TranscriptAPI /youtube/transcript
+   |
+   | raw transcript: memory only
+   v
+rule engine
+   |
+   | transcript discarded
+   v
+derived detections only:
+category + count + severity + timeline ranges
 ```
 
-The transcript integration lives behind `TranscriptProvider`, so the provider can be replaced without changing the analysis layer.
+## Raw content policy
+
+Raw transcript content is transient processing input.
+
+It must never be:
+
+- written to the database;
+- written to application logs;
+- cached;
+- sent to analytics/error tracking;
+- included in API responses;
+- displayed in the UI.
+
+Persistent/output data is limited to video/channel identifiers and metadata plus our own derived classification: category, count, severity, time ranges, and classifier/rule version when versioning is added.
+
+The provider is isolated behind `VideoSource` and `TranscriptProvider` interfaces so the upstream source can be replaced without changing the analysis layer.
