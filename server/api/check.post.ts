@@ -11,7 +11,7 @@ import type {
 import { ANALYSIS_PROFILES, RULE_IDS, SCAN_STORAGE_MODES, SELECTABLE_RULE_IDS } from '../../shared/types/check'
 import type { AnalysisProfile, ContentEvent, RejectedContentCandidate } from '../../shared/types/content'
 import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../domain/analyze-transcript'
-import { normalizeRequestedCategories } from '../domain/content-categories'
+import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
 import {
   buildChannelCategoryReports,
@@ -302,7 +302,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         enabledCategories,
         diagnosticAnalysis,
       )
-      const policyEvents = analysis.classifiedEvents.map((classifiedEvent, eventIndex) => {
+      const policyEvents = analysis.classifiedEvents
+        .filter((classifiedEvent) =>
+          enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
+        )
+        .map((classifiedEvent, eventIndex) => {
         const candidateId = classifiedEvent.sourceCandidateId
           ? `${video.id}:${classifiedEvent.sourceCandidateId}`
           : undefined
