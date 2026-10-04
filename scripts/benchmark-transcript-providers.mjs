@@ -1,48 +1,55 @@
+import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 import process from 'node:process'
 
-const VIDEO_COUNT = 50
 const COM_BASE = 'https://transcriptapi.com/api/v2'
 const IO_BASE = 'https://api.transcriptapi.io'
+const NO_CAPTION_ERRORS = new Set(['TranscriptsDisabled', 'NoTranscriptFound'])
+const SENSITIVE_HEADERS = new Set(['authorization', 'proxy-authorization'])
 
 function requiredEnv(name, fallback) {
   const value = process.env[name] || fallback
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`)
+  if (!value) throw new Error('Missing required environment variable: ' + name)
+  return value
+}
+
+function numberEnv(name, fallback, min, max) {
+  const value = Number(process.env[name] || fallback)
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw new Error(name + ' must be between ' + min + ' and ' + max)
   }
   return value
 }
 
-function numberEnv(name, fallback) {
-  const parsed = Number(process.env[name] || fallback)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive number.`)
-  }
-  return parsed
+function boolEnv(name, fallback) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return fallback
+  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase())
 }
 
-function percentile(values, percentileValue) {
-  if (values.length === 0) return null
-  const sorted = [...values].sort((a, b) => a - b)
-  const index = Math.min(
-    sorted.length - 1,
-    Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1),
-  )
-  return Math.round(sorted[index] * 100) / 100
+function round(value, places = 2) {
+  const n = 10 ** places
+  return Math.round(value * n) / n
 }
 
 function average(values) {
-  if (values.length === 0) return null
-  return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100
+  return values.length ? round(values.reduce((sum, value) => sum + value, 0) / values.length) : null
+}
+
+function percentile(values, p) {
+  if (!values.length) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))
+  return round(sorted[index])
 }
 
 function normalizeText(value) {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function tokenSet(value) {
@@ -52,11 +59,9 @@ function tokenSet(value) {
 function jaccard(a, b) {
   if (a.size === 0 && b.size === 0) return 1
   let intersection = 0
-  for (const token of a) {
-    if (b.has(token)) intersection += 1
-  }
+  for (const token of a) if (b.has(token)) intersection += 1
   const union = a.size + b.size - intersection
-  return union === 0 ? 1 : intersection / union
+  return union ? intersection / union : 1
 }
 
 function safeRatio(a, b) {
@@ -65,20 +70,120 @@ function safeRatio(a, b) {
   return Math.min(a, b) / Math.max(a, b)
 }
 
-function transcriptStats(payload) {
-  if (!payload || !Array.isArray(payload.transcript)) {
-    throw new Error('Provider returned no timestamped transcript array.')
+function headersObject(headers) {
+  return Object.fromEntries([...headers.entries()].map(([name, value]) => [
+    name,
+    SENSITIVE_HEADERS.has(name.toLowerCase()) ? '<redacted>' : value,
+  ]))
+}
+
+function parseJson(text) {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
   }
+}
+
+async function httpGetJson({ provider, operation, url, apiKey, videoId = null }) {
+  const startedAt = new Date().toISOString()
+  const started = performance.now()
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        authorization: 'Bearer ' + apiKey,
+        accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(30_000),
+    })
+
+    const bodyText = await response.text()
+    return {
+      provider,
+      operation,
+      videoId,
+      request: {
+        method: 'GET',
+        url: url.toString(),
+        headers: { accept: 'application/json', authorization: 'Bearer <redacted>' },
+        startedAt,
+        timeoutMs: 30_000,
+      },
+      response: {
+        receivedAt: new Date().toISOString(),
+        latencyMs: round(performance.now() - started),
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        headers: headersObject(response.headers),
+        bodyText,
+        bodyJson: parseJson(bodyText),
+      },
+      networkError: null,
+    }
+  } catch (error) {
+    return {
+      provider,
+      operation,
+      videoId,
+      request: {
+        method: 'GET',
+        url: url.toString(),
+        headers: { accept: 'application/json', authorization: 'Bearer <redacted>' },
+        startedAt,
+        timeoutMs: 30_000,
+      },
+      response: null,
+      networkError: {
+        name: error instanceof Error ? error.name : 'UnknownError',
+        message: error instanceof Error ? error.message : String(error),
+        latencyMs: round(performance.now() - started),
+        occurredAt: new Date().toISOString(),
+      },
+    }
+  }
+}
+
+function comTranscriptUrl(videoId, language) {
+  const url = new URL(COM_BASE + '/youtube/transcript')
+  url.searchParams.set('video_url', videoId)
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('include_timestamp', 'true')
+  url.searchParams.set('send_metadata', 'true')
+  if (language) url.searchParams.set('language', language)
+  return url
+}
+
+function comInfoUrl(videoId) {
+  const url = new URL(COM_BASE + '/youtube/info')
+  url.searchParams.set('video_url', videoId)
+  return url
+}
+
+function ioTranscriptUrl(videoId, language) {
+  const url = new URL(IO_BASE + '/transcript')
+  url.searchParams.set('video_id', videoId)
+  if (language) url.searchParams.set('language', language)
+  return url
+}
+
+function ioChannelVideosUrl(channel, limit) {
+  const url = new URL(IO_BASE + '/channel/videos')
+  url.searchParams.set('channel_id', channel)
+  url.searchParams.set('limit', String(limit))
+  return url
+}
+
+function transcriptStats(call) {
+  const payload = call.response?.bodyJson
+  if (!call.response?.ok || !payload || !Array.isArray(payload.transcript)) return null
 
   const segments = payload.transcript.flatMap((segment) => {
-    if (
-      typeof segment?.text !== 'string'
-      || typeof segment?.start !== 'number'
-      || typeof segment?.duration !== 'number'
-    ) {
+    if (typeof segment?.text !== 'string' || typeof segment?.start !== 'number' || typeof segment?.duration !== 'number') {
       return []
     }
-
     return [{
       text: segment.text,
       start: Math.max(0, segment.start),
@@ -86,155 +191,167 @@ function transcriptStats(payload) {
     }]
   })
 
-  if (segments.length === 0) {
-    throw new Error('Provider returned an empty timestamped transcript.')
-  }
+  if (!segments.length) return null
 
-  const normalized = normalizeText(segments.map((segment) => segment.text).join(' '))
-  const tokens = tokenSet(normalized)
-  const firstStart = segments[0].start
+  const joined = segments.map((segment) => segment.text).join(' ')
+  const normalized = normalizeText(joined)
   const last = segments[segments.length - 1]
-  const lastEnd = last.start + last.duration
-  const summedDuration = segments.reduce((sum, segment) => sum + segment.duration, 0)
 
   return {
-    privateText: normalized,
-    privateTokens: tokens,
-    metrics: {
-      segmentCount: segments.length,
-      charCount: normalized.length,
-      tokenCount: normalized ? normalized.split(/\s+/u).length : 0,
-      firstStartSec: Math.round(firstStart * 100) / 100,
-      lastEndSec: Math.round(lastEnd * 100) / 100,
-      summedDurationSec: Math.round(summedDuration * 100) / 100,
-    },
+    segmentCount: segments.length,
+    rawCharCount: joined.length,
+    normalizedCharCount: normalized.length,
+    tokenCount: normalized ? normalized.split(/\s+/u).length : 0,
+    normalizedSha256: sha256(normalized),
+    firstStartSec: round(segments[0].start),
+    lastEndSec: round(last.start + last.duration),
+    summedSegmentDurationSec: round(segments.reduce((sum, segment) => sum + segment.duration, 0)),
+    declaredVideoLengthSec: typeof payload.length_seconds === 'number' ? payload.length_seconds : null,
+    language: typeof payload.language === 'string' ? payload.language : null,
+    source: typeof payload.source === 'string' ? payload.source : null,
+    translatedTo: typeof payload.translated_to === 'string' ? payload.translated_to : null,
+    metadata: payload.metadata ?? null,
+    preview: segments.slice(0, 5),
+    _normalizedText: normalized,
+    _tokens: tokenSet(normalized),
   }
 }
 
-function sanitizedFailure(provider, videoId, status, latencyMs, kind) {
-  return {
-    provider,
-    videoId,
-    ok: false,
-    status,
-    latencyMs: Math.round(latencyMs * 100) / 100,
-    errorKind: kind,
-  }
+function publicStats(stats) {
+  if (!stats) return null
+  const { _normalizedText, _tokens, ...safe } = stats
+  return safe
 }
 
-async function callProvider({ provider, url, apiKey, videoId }) {
-  const startedAt = performance.now()
+function errorText(call) {
+  const json = call.response?.bodyJson
+  return [
+    typeof json?.detail === 'string' ? json.detail : '',
+    typeof json?.message === 'string' ? json.message : '',
+    typeof json?.error === 'string' ? json.error : '',
+    typeof json?.code === 'string' ? json.code : '',
+    call.response?.bodyText ?? '',
+  ].join(' ').toLowerCase()
+}
 
-  let response
-  try {
-    response = await fetch(url, {
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        accept: 'application/json',
-      },
-      signal: AbortSignal.timeout(30_000),
+function captionAssessment(comInfo, comTranscript, ioTranscript, ioStats) {
+  const signals = []
+  const languages = comInfo.response?.bodyJson?.available_languages
+
+  if (comInfo.response?.ok && Array.isArray(languages) && languages.length) {
+    signals.push({
+      source: 'transcriptapi.com/info',
+      type: 'captions_available',
+      detail: languages,
     })
-  } catch (error) {
-    return sanitizedFailure(
-      provider,
-      videoId,
-      null,
-      performance.now() - startedAt,
-      error?.name === 'TimeoutError' ? 'timeout' : 'network_error',
-    )
   }
 
-  const latencyMs = performance.now() - startedAt
-
-  if (!response.ok) {
-    // Deliberately do not read or persist provider error bodies.
-    return sanitizedFailure(provider, videoId, response.status, latencyMs, 'http_error')
+  if (comInfo.response?.status === 404) {
+    signals.push({
+      source: 'transcriptapi.com/info',
+      type: 'no_captions_candidate',
+      detail: comInfo.response.bodyJson ?? comInfo.response.bodyText,
+    })
   }
 
-  let payload
-  try {
-    payload = await response.json()
-  } catch {
-    return sanitizedFailure(provider, videoId, response.status, latencyMs, 'invalid_json')
+  if (comTranscript.response?.status === 404 && /(no transcript|caption)/i.test(errorText(comTranscript))) {
+    signals.push({
+      source: 'transcriptapi.com/transcript',
+      type: 'no_captions_candidate',
+      detail: comTranscript.response.bodyJson ?? comTranscript.response.bodyText,
+    })
   }
 
-  try {
-    const stats = transcriptStats(payload)
+  const ioError = ioTranscript.response?.bodyJson?.error
+  if (typeof ioError === 'string' && NO_CAPTION_ERRORS.has(ioError)) {
+    signals.push({
+      source: 'transcriptapi.io/transcript',
+      type: 'no_captions_candidate',
+      detail: ioTranscript.response.bodyJson,
+    })
+  } else if (!ioTranscript.response?.ok && /(no transcript|caption)/i.test(errorText(ioTranscript))) {
+    signals.push({
+      source: 'transcriptapi.io/transcript',
+      type: 'no_captions_candidate',
+      detail: ioTranscript.response?.bodyJson ?? ioTranscript.response?.bodyText,
+    })
+  }
+
+  const noCaptions = signals.some((signal) => signal.type === 'no_captions_candidate')
+  const captionsAvailable = signals.some((signal) => signal.type === 'captions_available')
+  const ioRecovered = noCaptions && Boolean(ioStats)
+  const ioSource = ioStats?.source ?? null
+
+  let classification = 'unknown'
+  if (noCaptions && ioRecovered && ioSource === 'asr') classification = 'no_captions_recovered_by_io_asr'
+  else if (noCaptions && ioRecovered) classification = 'no_captions_but_io_succeeded'
+  else if (noCaptions) classification = 'no_captions_not_recovered'
+  else if (captionsAvailable) classification = 'captions_available'
+
+  return { classification, noCaptions, captionsAvailable, ioRecovered, ioSource, signals }
+}
+
+function compareStats(comStats, ioStats) {
+  if (!comStats || !ioStats) {
     return {
-      provider,
-      videoId,
-      ok: true,
-      status: response.status,
-      latencyMs: Math.round(latencyMs * 100) / 100,
-      ...stats,
+      bothSucceeded: false,
+      comSucceeded: Boolean(comStats),
+      ioSucceeded: Boolean(ioStats),
     }
-  } catch {
-    return sanitizedFailure(provider, videoId, response.status, latencyMs, 'invalid_transcript')
+  }
+
+  return {
+    bothSucceeded: true,
+    exactNormalizedText: comStats.normalizedSha256 === ioStats.normalizedSha256,
+    tokenJaccard: round(jaccard(comStats._tokens, ioStats._tokens), 4),
+    normalizedCharCountRatio: round(safeRatio(comStats.normalizedCharCount, ioStats.normalizedCharCount), 4),
+    segmentCountRatio: round(safeRatio(comStats.segmentCount, ioStats.segmentCount), 4),
+    lastEndDeltaSec: round(Math.abs(comStats.lastEndSec - ioStats.lastEndSec)),
   }
 }
 
-function comUrl(videoId, language) {
-  const url = new URL(`${COM_BASE}/youtube/transcript`)
-  url.searchParams.set('video_url', videoId)
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('include_timestamp', 'true')
-  url.searchParams.set('send_metadata', 'false')
-  if (language) url.searchParams.set('language', language)
-  return url
-}
+function providerSummary(entries, key) {
+  const rows = entries.map((entry) => entry[key])
+  const successful = rows.filter((row) => row.stats)
+  const latencies = rows
+    .map((row) => row.call.response?.latencyMs ?? row.call.networkError?.latencyMs)
+    .filter((value) => typeof value === 'number')
+  const failures = {}
 
-function ioUrl(videoId, language) {
-  const url = new URL(`${IO_BASE}/transcript`)
-  url.searchParams.set('video_id', videoId)
-  if (language) url.searchParams.set('language', language)
-  return url
-}
+  for (const row of rows.filter((item) => !item.stats)) {
+    const status = row.call.response?.status
+    const code = row.call.response?.bodyJson?.error
+      ?? row.call.response?.bodyJson?.code
+      ?? row.call.networkError?.name
+      ?? 'unknown'
+    const failureKey = status ? String(status) + ':' + String(code) : String(code)
+    failures[failureKey] = (failures[failureKey] ?? 0) + 1
+  }
 
-async function discoverVideoIds(ioKey, channel) {
-  const url = new URL(`${IO_BASE}/channel/videos`)
-  url.searchParams.set('channel_id', channel)
-  url.searchParams.set('limit', String(VIDEO_COUNT))
-
-  const response = await fetch(url, {
-    headers: {
-      authorization: `Bearer ${ioKey}`,
-      accept: 'application/json',
+  return {
+    attempted: rows.length,
+    succeeded: successful.length,
+    failed: rows.length - successful.length,
+    successRatePct: round((successful.length / Math.max(rows.length, 1)) * 100),
+    latencyMsAllCalls: {
+      average: average(latencies),
+      p50: percentile(latencies, 50),
+      p95: percentile(latencies, 95),
+      max: latencies.length ? Math.max(...latencies) : null,
     },
-    signal: AbortSignal.timeout(30_000),
-  })
-
-  if (!response.ok) {
-    throw new Error(`Could not discover benchmark videos: HTTP ${response.status}`)
+    successfulTranscriptAverage: {
+      segments: average(successful.map((row) => row.stats.segmentCount)),
+      normalizedChars: average(successful.map((row) => row.stats.normalizedCharCount)),
+      tokens: average(successful.map((row) => row.stats.tokenCount)),
+      finalTimestampSec: average(successful.map((row) => row.stats.lastEndSec)),
+    },
+    failures,
   }
-
-  const payload = await response.json()
-  const ids = (payload?.videos ?? [])
-    .map((video) => video?.id)
-    .filter((id) => typeof id === 'string' && id.length === 11)
-    .slice(0, VIDEO_COUNT)
-
-  if (ids.length < VIDEO_COUNT) {
-    throw new Error(`Channel returned only ${ids.length} usable videos; need ${VIDEO_COUNT}.`)
-  }
-
-  return ids
 }
 
-function parseVideoIds(value) {
-  if (!value) return null
-
-  const ids = [...new Set(
-    value
-      .split(',')
-      .map((item) => item.trim())
-      .filter((item) => /^[A-Za-z0-9_-]{11}$/.test(item)),
-  )]
-
-  if (ids.length !== VIDEO_COUNT) {
-    throw new Error(`BENCHMARK_VIDEO_IDS must contain exactly ${VIDEO_COUNT} unique valid video IDs.`)
-  }
-
-  return ids
+function parseIds(value) {
+  if (!value) return []
+  return [...new Set(value.split(',').map((item) => item.trim()).filter((item) => /^[A-Za-z0-9_-]{11}$/.test(item)))]
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -243,109 +360,198 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
   async function worker() {
     while (true) {
-      const index = next
-      next += 1
+      const index = next++
       if (index >= items.length) return
       results[index] = await mapper(items[index], index)
     }
   }
 
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
-  )
-
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()))
   return results
 }
 
-function providerSummary(results) {
-  const successful = results.filter((item) => item.ok)
-  const failed = results.filter((item) => !item.ok)
-  const latencies = successful.map((item) => item.latencyMs)
-
-  const failuresByStatus = {}
-  for (const item of failed) {
-    const key = item.status === null ? item.errorKind : String(item.status)
-    failuresByStatus[key] = (failuresByStatus[key] ?? 0) + 1
-  }
-
-  return {
-    attempted: results.length,
-    succeeded: successful.length,
-    failed: failed.length,
-    successRatePct: Math.round((successful.length / results.length) * 10_000) / 100,
-    latencyMs: {
-      average: average(latencies),
-      p50: percentile(latencies, 50),
-      p95: percentile(latencies, 95),
-      max: latencies.length ? Math.max(...latencies) : null,
-    },
-    transcript: {
-      averageSegments: average(successful.map((item) => item.metrics.segmentCount)),
-      averageChars: average(successful.map((item) => item.metrics.charCount)),
-      averageLastEndSec: average(successful.map((item) => item.metrics.lastEndSec)),
-    },
-    failuresByStatus,
-  }
+async function writeJson(path, value) {
+  await writeFile(path, JSON.stringify(value, null, 2) + '\\n', 'utf8')
 }
 
-function comparePair(com, io) {
-  if (!com.ok || !io.ok) {
+function isNoCaptionPreflight(call) {
+  return call.response?.status === 404
+}
+
+async function selectDataset({ comKey, ioKey, channel, videoCount, discoveryPool, noCaptionsTarget, concurrency, explicitIds, outputDir }) {
+  if (explicitIds.length) {
+    if (explicitIds.length !== videoCount) {
+      throw new Error('BENCHMARK_VIDEO_IDS must contain exactly ' + videoCount + ' unique valid IDs')
+    }
+    const preflights = await mapWithConcurrency(explicitIds, concurrency, (videoId) =>
+      httpGetJson({
+        provider: 'transcriptapi.com',
+        operation: 'youtube/info',
+        url: comInfoUrl(videoId),
+        apiKey: comKey,
+        videoId,
+      }),
+    )
     return {
-      videoId: com.videoId,
-      bothSucceeded: false,
-      comOk: com.ok,
-      ioOk: io.ok,
+      videoIds: explicitIds,
+      preflightById: new Map(explicitIds.map((id, index) => [id, preflights[index]])),
+      mode: 'explicit_ids',
+      discoveredNoCaptionsCandidates: preflights.filter(isNoCaptionPreflight).length,
     }
   }
 
+  const listing = await httpGetJson({
+    provider: 'transcriptapi.io',
+    operation: 'channel/videos',
+    url: ioChannelVideosUrl(channel, discoveryPool),
+    apiKey: ioKey,
+  })
+  await writeJson(outputDir + '/discovery/io-channel-videos.json', listing)
+
+  if (!listing.response?.ok) {
+    throw new Error('Could not discover channel videos: HTTP ' + (listing.response?.status ?? 'network error'))
+  }
+
+  const candidates = (listing.response.bodyJson?.videos ?? [])
+    .filter((video) => typeof video?.id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(video.id))
+    .slice(0, discoveryPool)
+
+  if (candidates.length < videoCount) {
+    throw new Error('Channel returned only ' + candidates.length + ' usable videos; need ' + videoCount)
+  }
+
+  const preflightRows = await mapWithConcurrency(candidates, concurrency, async (video, index) => {
+    const info = await httpGetJson({
+      provider: 'transcriptapi.com',
+      operation: 'youtube/info',
+      url: comInfoUrl(video.id),
+      apiKey: comKey,
+      videoId: video.id,
+    })
+    await writeJson(
+      outputDir + '/discovery/preflight-' + String(index + 1).padStart(3, '0') + '-' + video.id + '.json',
+      { channelVideo: video, comInfo: info },
+    )
+    return { video, info, noCaptionsCandidate: isNoCaptionPreflight(info) }
+  })
+
+  const noCaptionRows = preflightRows.filter((row) => row.noCaptionsCandidate).slice(0, noCaptionsTarget)
+  const selected = [...noCaptionRows]
+  const selectedIds = new Set(selected.map((row) => row.video.id))
+
+  for (const row of preflightRows) {
+    if (selected.length >= videoCount) break
+    if (selectedIds.has(row.video.id)) continue
+    selected.push(row)
+    selectedIds.add(row.video.id)
+  }
+
   return {
-    videoId: com.videoId,
-    bothSucceeded: true,
-    exactNormalizedText: com.privateText === io.privateText,
-    tokenJaccard: Math.round(jaccard(com.privateTokens, io.privateTokens) * 10_000) / 10_000,
-    charCountRatio: Math.round(safeRatio(com.metrics.charCount, io.metrics.charCount) * 10_000) / 10_000,
-    segmentCountRatio: Math.round(safeRatio(com.metrics.segmentCount, io.metrics.segmentCount) * 10_000) / 10_000,
-    lastEndDeltaSec: Math.round(Math.abs(com.metrics.lastEndSec - io.metrics.lastEndSec) * 100) / 100,
+    videoIds: selected.map((row) => row.video.id),
+    preflightById: new Map(selected.map((row) => [row.video.id, row.info])),
+    mode: 'channel_scan',
+    discoveredNoCaptionsCandidates: noCaptionRows.length,
   }
 }
 
-function publicResult(result) {
-  const { privateText: _text, privateTokens: _tokens, ...safe } = result
-  return safe
+function previewLines(stats) {
+  if (!stats?.preview?.length) return ['_No transcript preview._']
+  return stats.preview.map((segment) =>
+    '- ' + segment.start.toFixed(2) + 's (+' + segment.duration.toFixed(2) + 's): ' + segment.text.replace(/\\n/g, ' '),
+  )
 }
 
-function markdownReport(report) {
-  const providerRows = [
-    ['transcriptapi.com', report.providers.com],
-    ['transcriptapi.io', report.providers.io],
+function summaryMarkdown(report) {
+  const com = report.providers.com
+  const io = report.providers.io
+  return [
+    '# Transcript provider benchmark',
+    '',
+    'Generated: ' + report.generatedAt,
+    'Main dataset: ' + report.dataset.videoCount + ' identical YouTube video IDs',
+    'Selection: ' + report.dataset.mode,
+    'Channel: ' + report.dataset.channel,
+    'No-captions cases detected: ' + report.noCaptionsCaseCount,
+    '',
+    '| Provider | Success | Success rate | p50 ms | p95 ms | avg ms |',
+    '| --- | ---: | ---: | ---: | ---: | ---: |',
+    '| transcriptapi.com | ' + com.succeeded + '/' + com.attempted + ' | ' + com.successRatePct + '% | ' + (com.latencyMsAllCalls.p50 ?? '—') + ' | ' + (com.latencyMsAllCalls.p95 ?? '—') + ' | ' + (com.latencyMsAllCalls.average ?? '—') + ' |',
+    '| transcriptapi.io | ' + io.succeeded + '/' + io.attempted + ' | ' + io.successRatePct + '% | ' + (io.latencyMsAllCalls.p50 ?? '—') + ' | ' + (io.latencyMsAllCalls.p95 ?? '—') + ' | ' + (io.latencyMsAllCalls.average ?? '—') + ' |',
+    '',
+    '## Cross-provider comparison',
+    '',
+    '- Both succeeded: ' + report.comparison.bothSucceeded,
+    '- Exact normalized-text matches: ' + report.comparison.exactTextMatches,
+    '- Average token Jaccard: ' + (report.comparison.averageTokenJaccard ?? '—'),
+    '- Average character-count ratio: ' + (report.comparison.averageNormalizedCharCountRatio ?? '—'),
+    '- Average segment-count ratio: ' + (report.comparison.averageSegmentCountRatio ?? '—'),
+    '- Average final timestamp delta: ' + (report.comparison.averageLastEndDeltaSec ?? '—') + ' sec',
+    '',
+    'Raw HTTP bodies and full transcript arrays are saved under videos/<video-id>/ when BENCHMARK_CAPTURE_RAW=true.',
+    'Those files are diagnostic-only and must not be committed.',
+    '',
+  ].join('\\n')
+}
+
+function detailsMarkdown(entries, generatedAt) {
+  const lines = ['# Detailed per-video benchmark', '', 'Generated: ' + generatedAt, '']
+
+  for (const entry of entries) {
+    lines.push(
+      '## ' + entry.videoId,
+      '',
+      'Caption classification: **' + entry.captionAssessment.classification + '**',
+      'Signals: ' + (entry.captionAssessment.signals.map((signal) => signal.source + ':' + signal.type).join('; ') || 'none'),
+      '',
+      '### transcriptapi.com',
+      '',
+      'HTTP: ' + (entry.com.call.response?.status ?? 'network error') + '; latency: ' + (entry.com.call.response?.latencyMs ?? entry.com.call.networkError?.latencyMs ?? '—') + ' ms',
+      'Language: ' + (entry.com.stats?.language ?? '—') + '; source: ' + (entry.com.stats?.source ?? '—') + '; segments: ' + (entry.com.stats?.segmentCount ?? '—'),
+      ...previewLines(entry.com.stats),
+      '',
+      '### transcriptapi.io',
+      '',
+      'HTTP: ' + (entry.io.call.response?.status ?? 'network error') + '; latency: ' + (entry.io.call.response?.latencyMs ?? entry.io.call.networkError?.latencyMs ?? '—') + ' ms',
+      'Language: ' + (entry.io.stats?.language ?? '—') + '; source: ' + (entry.io.stats?.source ?? '—') + '; segments: ' + (entry.io.stats?.segmentCount ?? '—'),
+      ...previewLines(entry.io.stats),
+      '',
+      'Comparison: ' + JSON.stringify(entry.comparison),
+      'Raw directory: videos/' + entry.videoId + '/',
+      '',
+    )
+  }
+
+  return lines.join('\\n')
+}
+
+function noCaptionsMarkdown(cases) {
+  const lines = [
+    '# No-captions benchmark',
+    '',
+    'Cases detected: ' + cases.length,
+    '',
+    '| Video | Classification | .com status | .io status | .io source | .io recovered |',
+    '| --- | --- | ---: | ---: | --- | --- |',
   ]
 
-  const rows = providerRows.map(([name, value]) =>
-    `| ${name} | ${value.succeeded}/${value.attempted} | ${value.successRatePct}% | ${value.latencyMs.p50 ?? '—'} | ${value.latencyMs.p95 ?? '—'} | ${value.latencyMs.average ?? '—'} |`,
-  ).join('\n')
+  if (!cases.length) {
+    lines.push('| — | no cases in dataset | — | — | — | — |')
+  } else {
+    for (const item of cases) {
+      lines.push(
+        '| ' + item.videoId + ' | ' + item.classification + ' | ' + (item.comStatus ?? '—') + ' | ' + (item.ioStatus ?? '—') + ' | ' + (item.ioSource ?? '—') + ' | ' + (item.ioRecovered ? 'yes' : 'no') + ' |',
+      )
+    }
+  }
 
-  return `# Transcript provider benchmark
+  lines.push(
+    '',
+    'Exact provider error bodies and full successful responses are preserved in each videos/<video-id>/ directory.',
+    'If .io succeeds with source="asr" for a case where caption preflight failed, that directly confirms ASR fallback for that tested case.',
+    '',
+  )
 
-Dataset: ${report.dataset.videoCount} identical YouTube video IDs
-Channel source: ${report.dataset.channel}
-Language override: ${report.dataset.language || 'none'}
-Concurrency: ${report.dataset.concurrency}
-
-| Provider | Success | Success rate | p50 ms | p95 ms | avg ms |
-| --- | ---: | ---: | ---: | ---: | ---: |
-${rows}
-
-## Cross-provider output comparison
-
-- Both succeeded: ${report.comparison.bothSucceeded}
-- Exact normalized text matches: ${report.comparison.exactTextMatches}
-- Average token Jaccard: ${report.comparison.averageTokenJaccard ?? '—'}
-- Average character-count ratio: ${report.comparison.averageCharCountRatio ?? '—'}
-- Average segment-count ratio: ${report.comparison.averageSegmentCountRatio ?? '—'}
-- Average final timestamp delta: ${report.comparison.averageLastEndDeltaSec ?? '—'} sec
-
-No transcript text is written to this report or JSON output.
-`
+  return lines.join('\\n')
 }
 
 async function main() {
@@ -353,87 +559,190 @@ async function main() {
   const ioKey = requiredEnv('BENCHMARK_TRANSCRIPT_IO_KEY')
   const channel = process.env.BENCHMARK_CHANNEL || '@TED'
   const language = process.env.BENCHMARK_LANGUAGE?.trim() || ''
-  const concurrency = Math.min(5, Math.floor(numberEnv('BENCHMARK_CONCURRENCY', 2)))
+  const videoCount = Math.floor(numberEnv('BENCHMARK_VIDEO_COUNT', 50, 1, 200))
+  const discoveryPool = Math.floor(numberEnv('BENCHMARK_DISCOVERY_POOL', 100, videoCount, 200))
+  const noCaptionsTarget = Math.floor(numberEnv('BENCHMARK_NO_CAPTIONS_TARGET', 10, 0, videoCount))
+  const concurrency = Math.floor(numberEnv('BENCHMARK_CONCURRENCY', 2, 1, 5))
+  const captureRaw = boolEnv('BENCHMARK_CAPTURE_RAW', true)
   const outputDir = process.env.BENCHMARK_OUTPUT_DIR || './benchmark-results'
+  const explicitIds = parseIds(process.env.BENCHMARK_VIDEO_IDS)
+  const extraNoCaptionIds = parseIds(process.env.BENCHMARK_NO_CAPTIONS_VIDEO_IDS)
 
-  const explicitIds = parseVideoIds(process.env.BENCHMARK_VIDEO_IDS)
-  const videoIds = explicitIds ?? await discoverVideoIds(ioKey, channel)
+  await mkdir(outputDir + '/videos', { recursive: true })
+  await mkdir(outputDir + '/discovery', { recursive: true })
 
-  console.log(`Benchmarking ${videoIds.length} identical videos through both providers...`)
-  console.log(`Channel: ${channel}; concurrency: ${concurrency}; language: ${language || 'provider default'}`)
+  const selected = await selectDataset({
+    comKey,
+    ioKey,
+    channel,
+    videoCount,
+    discoveryPool,
+    noCaptionsTarget,
+    concurrency,
+    explicitIds,
+    outputDir,
+  })
 
-  const pairs = await mapWithConcurrency(videoIds, concurrency, async (videoId, index) => {
-    const [com, io] = await Promise.all([
-      callProvider({
+  const allIds = [...selected.videoIds]
+  for (const id of extraNoCaptionIds) if (!allIds.includes(id)) allIds.push(id)
+
+  const entries = await mapWithConcurrency(allIds, concurrency, async (videoId, index) => {
+    const dir = outputDir + '/videos/' + videoId
+    await mkdir(dir, { recursive: true })
+
+    const comInfo = selected.preflightById.get(videoId) ?? await httpGetJson({
+      provider: 'transcriptapi.com',
+      operation: 'youtube/info',
+      url: comInfoUrl(videoId),
+      apiKey: comKey,
+      videoId,
+    })
+
+    const [comCall, ioCall] = await Promise.all([
+      httpGetJson({
         provider: 'transcriptapi.com',
-        url: comUrl(videoId, language),
+        operation: 'youtube/transcript',
+        url: comTranscriptUrl(videoId, language),
         apiKey: comKey,
         videoId,
       }),
-      callProvider({
+      httpGetJson({
         provider: 'transcriptapi.io',
-        url: ioUrl(videoId, language),
+        operation: 'transcript',
+        url: ioTranscriptUrl(videoId, language),
         apiKey: ioKey,
         videoId,
       }),
     ])
 
+    const comStats = transcriptStats(comCall)
+    const ioStats = transcriptStats(ioCall)
+    const assessment = captionAssessment(comInfo, comCall, ioCall, ioStats)
+    const comparison = compareStats(comStats, ioStats)
+
+    if (captureRaw) {
+      await Promise.all([
+        writeJson(dir + '/com-info.json', comInfo),
+        writeJson(dir + '/com-transcript.json', comCall),
+        writeJson(dir + '/io-transcript.json', ioCall),
+      ])
+    }
+
+    await writeJson(dir + '/analysis.json', {
+      videoId,
+      includedInMainDataset: selected.videoIds.includes(videoId),
+      explicitNoCaptionsCase: extraNoCaptionIds.includes(videoId),
+      com: { stats: publicStats(comStats) },
+      io: { stats: publicStats(ioStats) },
+      captionAssessment: assessment,
+      comparison,
+    })
+
     console.log(
-      `[${String(index + 1).padStart(2, '0')}/${videoIds.length}] ${videoId}  .com=${com.ok ? Math.round(com.latencyMs) + 'ms' : 'FAIL'}  .io=${io.ok ? Math.round(io.latencyMs) + 'ms' : 'FAIL'}`,
+      '[' + String(index + 1).padStart(2, '0') + '/' + allIds.length + '] '
+      + videoId + ' .com=' + (comCall.response?.status ?? 'ERR')
+      + ' .io=' + (ioCall.response?.status ?? 'ERR')
+      + ' ' + assessment.classification,
     )
 
-    return { com, io }
+    return {
+      videoId,
+      includedInMainDataset: selected.videoIds.includes(videoId),
+      explicitNoCaptionsCase: extraNoCaptionIds.includes(videoId),
+      comInfo,
+      com: { call: comCall, stats: comStats },
+      io: { call: ioCall, stats: ioStats },
+      captionAssessment: assessment,
+      comparison,
+    }
   })
 
-  const comResults = pairs.map((pair) => pair.com)
-  const ioResults = pairs.map((pair) => pair.io)
-  const comparisons = pairs.map((pair) => comparePair(pair.com, pair.io))
-  const comparable = comparisons.filter((item) => item.bothSucceeded)
+  const mainEntries = entries.filter((entry) => entry.includedInMainDataset)
+  const comparable = mainEntries.filter((entry) => entry.comparison.bothSucceeded)
+  const noCaptionEntries = entries.filter((entry) => entry.captionAssessment.noCaptions)
 
   const report = {
     generatedAt: new Date().toISOString(),
+    runtime: { node: process.version, platform: process.platform, arch: process.arch },
     dataset: {
-      videoCount: videoIds.length,
-      channel: explicitIds ? 'explicit BENCHMARK_VIDEO_IDS' : channel,
+      videoCount: mainEntries.length,
+      totalExecutedVideoCount: entries.length,
+      videoIds: selected.videoIds,
+      explicitNoCaptionsVideoIds: extraNoCaptionIds,
+      channel: explicitIds.length ? 'explicit BENCHMARK_VIDEO_IDS' : channel,
+      mode: selected.mode,
+      discoveryPool,
+      noCaptionsTarget,
+      discoveredNoCaptionsCandidates: selected.discoveredNoCaptionsCandidates,
       language,
       concurrency,
+      captureRaw,
     },
     providers: {
-      com: providerSummary(comResults),
-      io: providerSummary(ioResults),
+      com: providerSummary(mainEntries, 'com'),
+      io: providerSummary(mainEntries, 'io'),
     },
     comparison: {
       bothSucceeded: comparable.length,
-      exactTextMatches: comparable.filter((item) => item.exactNormalizedText).length,
-      averageTokenJaccard: average(comparable.map((item) => item.tokenJaccard)),
-      averageCharCountRatio: average(comparable.map((item) => item.charCountRatio)),
-      averageSegmentCountRatio: average(comparable.map((item) => item.segmentCountRatio)),
-      averageLastEndDeltaSec: average(comparable.map((item) => item.lastEndDeltaSec)),
+      exactTextMatches: comparable.filter((entry) => entry.comparison.exactNormalizedText).length,
+      averageTokenJaccard: average(comparable.map((entry) => entry.comparison.tokenJaccard)),
+      averageNormalizedCharCountRatio: average(comparable.map((entry) => entry.comparison.normalizedCharCountRatio)),
+      averageSegmentCountRatio: average(comparable.map((entry) => entry.comparison.segmentCountRatio)),
+      averageLastEndDeltaSec: average(comparable.map((entry) => entry.comparison.lastEndDeltaSec)),
     },
-    videos: pairs.map((pair, index) => ({
-      videoId: videoIds[index],
-      com: publicResult(pair.com),
-      io: publicResult(pair.io),
-      comparison: comparisons[index],
+    noCaptionsCaseCount: noCaptionEntries.length,
+    videos: mainEntries.map((entry) => ({
+      videoId: entry.videoId,
+      com: {
+        status: entry.com.call.response?.status ?? null,
+        headers: entry.com.call.response?.headers ?? null,
+        stats: publicStats(entry.com.stats),
+      },
+      io: {
+        status: entry.io.call.response?.status ?? null,
+        headers: entry.io.call.response?.headers ?? null,
+        stats: publicStats(entry.io.stats),
+      },
+      captionAssessment: entry.captionAssessment,
+      comparison: entry.comparison,
     })),
-    privacy: {
-      rawTranscriptPersisted: false,
-      rawTranscriptPrinted: false,
-      note: 'Raw transcript text is used only in memory to calculate comparison metrics.',
-    },
   }
 
-  await mkdir(outputDir, { recursive: true })
+  const noCaptions = {
+    generatedAt: report.generatedAt,
+    cases: noCaptionEntries.map((entry) => ({
+      videoId: entry.videoId,
+      includedInMainDataset: entry.includedInMainDataset,
+      explicitNoCaptionsCase: entry.explicitNoCaptionsCase,
+      classification: entry.captionAssessment.classification,
+      signals: entry.captionAssessment.signals,
+      comStatus: entry.com.call.response?.status ?? null,
+      comError: entry.com.call.response?.ok ? null : (entry.com.call.response?.bodyJson ?? entry.com.call.response?.bodyText ?? entry.com.call.networkError),
+      ioStatus: entry.io.call.response?.status ?? null,
+      ioError: entry.io.call.response?.ok ? null : (entry.io.call.response?.bodyJson ?? entry.io.call.response?.bodyText ?? entry.io.call.networkError),
+      ioRecovered: entry.captionAssessment.ioRecovered,
+      ioSource: entry.captionAssessment.ioSource,
+      comStats: publicStats(entry.com.stats),
+      ioStats: publicStats(entry.io.stats),
+      rawDirectory: 'videos/' + entry.videoId,
+    })),
+  }
+
   await Promise.all([
-    writeFile(`${outputDir}/latest.json`, JSON.stringify(report, null, 2) + '\n', 'utf8'),
-    writeFile(`${outputDir}/latest.md`, markdownReport(report), 'utf8'),
+    writeJson(outputDir + '/dataset.json', { ...report.dataset, allExecutedVideoIds: allIds }),
+    writeJson(outputDir + '/summary.json', report),
+    writeFile(outputDir + '/summary.md', summaryMarkdown(report), 'utf8'),
+    writeFile(outputDir + '/details.md', detailsMarkdown(mainEntries, report.generatedAt), 'utf8'),
+    writeJson(outputDir + '/no-captions.json', noCaptions),
+    writeFile(outputDir + '/no-captions.md', noCaptionsMarkdown(noCaptions.cases), 'utf8'),
   ])
 
-  console.log('\n' + markdownReport(report))
-  console.log(`Detailed derived-only results: ${outputDir}/latest.json`)
+  console.log('\\n' + summaryMarkdown(report))
+  console.log('Detailed artifacts: ' + outputDir)
+  if (captureRaw) console.log('Raw provider bodies captured locally; do not commit benchmark-results/')
 }
 
 main().catch((error) => {
-  console.error(`Benchmark failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+  console.error('Benchmark failed: ' + (error instanceof Error ? error.message : 'unknown error'))
   process.exitCode = 1
 })
