@@ -68,8 +68,27 @@ const result: ChannelCheckResponse = {
   contentEvents: [event],
   videoReports: [{
     videoId: 'video-one11',
-    categoryReports: [],
-    scenes: [],
+    categoryReports: [{
+      category: 'violence',
+      label: 'Насилие',
+      level: 'none',
+      rawEventCount: 1,
+      displayedEventCount: 0,
+      subtypes: ['weapon_presence'],
+      summary: 'Для выбранного профиля значимых элементов не показано.',
+      highlights: [event],
+      details: [event],
+    }],
+    scenes: [{
+      sceneId: 'video-one11:scene_0',
+      startMs: 0,
+      endMs: 2_000,
+      level: 'low',
+      categories: ['violence'],
+      label: 'Насилие',
+      summary: 'Сцена с мечом.',
+      events: [event],
+    }],
   }],
   channelReport: [],
   summary: [],
@@ -79,7 +98,32 @@ const result: ChannelCheckResponse = {
     publishedAt: '',
     url: 'https://www.youtube.com/watch?v=video-one11',
     status: 'analyzed',
-    violations: [],
+    speechQuality: {
+      method: 'heuristic_ru_v1',
+      language: 'ru',
+      totalWords: 4,
+      fillerWordCount: 1,
+      fillersPer1000Words: 250,
+      repeatedWordCount: 0,
+      repeatedWordsPer1000Words: 0,
+      fillerBreakdown: [{ marker: 'эээ', count: 1 }],
+      examples: [{
+        marker: 'эээ',
+        startMs: 0,
+        endMs: 2_000,
+        text: 'Ну эээ текстовый фрагмент.',
+      }],
+    },
+    violations: [{
+      category: 'violence',
+      severity: 'low',
+      context: 'game',
+      type: 'not_applicable',
+      startMs: 0,
+      endMs: 2_000,
+      text: 'Мне подарили меч.',
+      reason: 'Персонажу подарили меч.',
+    }],
     detections: [],
   }],
   limitations: [],
@@ -95,6 +139,8 @@ describe('ScanStorage', () => {
     expect(stored).toContain('contentEvents')
     expect(stored).toContain('parentRelevance')
     expect(stored).not.toContain('Нормализованный transcript')
+    expect(stored).not.toContain('Мне подарили меч.')
+    expect(stored).not.toContain('Ну эээ текстовый фрагмент.')
   })
 
   it('does not persist diagnostic candidate trace when storage mode is minimal', async () => {
