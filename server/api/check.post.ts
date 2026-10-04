@@ -571,6 +571,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         ? error
         : new OpenAIAnalysisError('provider', 'OpenAI request failed.')
       addUsage(openaiUsage, analysisError.usage)
+      addUsage(openaiStages.detection, analysisError.usage)
       storage.recordOpenAIError(video.id, analysisError, {
         model: openaiModel,
         reasoningEffort: 'low',
@@ -619,10 +620,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     .filter((video) => video.status === 'analyzed')
     .map((video) => {
       const events = contentEventsByVideo.get(video.id) ?? []
+      const scenes = buildPresentationScenes(events)
       const report = {
         videoId: video.id,
         categoryReports: buildVideoCategoryReports(events, enabledCategories),
-        scenes: buildPresentationScenes(events),
+        scenes,
+        contentSummary: buildVideoContentSummary(scenes),
+        mainSceneCount: scenes.filter((scene) => scene.attention === 'main').length,
+        detailSceneCount: scenes.filter((scene) => scene.attention === 'details').length,
         ...(profile === 'diagnostic'
           ? {
               candidates: events.map((event) => ({
@@ -644,6 +649,21 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       })
       return report
     })
+  const analyzedReviewStatuses = videoResults
+    .filter((video) => video.status === 'analyzed')
+    .map((video) => video.contentReview)
+    .filter((review): review is VideoContentReview => Boolean(review))
+  const contentReview: ContentReviewSummary = {
+    model: openaiReviewModel,
+    promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+    schemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+    completedVideos: analyzedReviewStatuses.filter((review) => review.status === 'completed').length,
+    partialVideos: analyzedReviewStatuses.filter((review) => review.status === 'partial').length,
+    failedVideos: analyzedReviewStatuses.filter((review) => review.status === 'failed').length,
+    skippedVideos: analyzedReviewStatuses.filter((review) => review.status === 'skipped_after_failure').length,
+    notNeededVideos: analyzedReviewStatuses.filter((review) => review.status === 'not_needed').length,
+  }
+
   const channelReport = buildChannelCategoryReports(
     videoResults
       .filter((video) => video.status === 'analyzed')
@@ -676,6 +696,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     analysisMode: 'openai',
     creditUsage: transcriptProvider.getCreditUsage(),
     openaiUsage,
+    openaiStages,
+    contentReview,
     speechQuality: summarizeSpeechQuality(
       videoResults.flatMap((video) => video.speechQuality ? [video.speechQuality] : []),
     ),
@@ -695,7 +717,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: buildRuleSummary(videoResults, enabledRuleIds),
     videos: videoResults,
     limitations: [
-      'Each transcript is normalized and analyzed by one OpenAI Responses API request that classifies factual content events; deterministic backend policies decide parental relevance and display.',
+      'Each transcript is first analyzed for factual content events. Videos with detected candidates then receive one batched contextual review request over the original full transcript before deterministic backend display policy is applied.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
@@ -705,9 +727,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         ? 'The scan stopped after a systemic or ambiguous TranscriptAPI failure to avoid further paid requests.'
         : 'TranscriptAPI did not produce a scan-stopping provider failure.',
       stoppedForOpenAIProviderError
-        ? 'The scan stopped after an OpenAI analysis error to avoid consuming more TranscriptAPI credits.'
-        : 'OpenAI analysis completed without a scan-stopping provider error.',
+        ? 'The scan stopped after a first-pass OpenAI detection error to avoid consuming more TranscriptAPI credits.'
+        : 'First-pass OpenAI detection completed without a scan-stopping provider error.',
+      contentReview.failedVideos + contentReview.skippedVideos > 0
+        ? `Contextual review was unavailable for ${contentReview.failedVideos + contentReview.skippedVideos} analyzed video(s); their first-pass findings were retained and must not be interpreted as independently verified.`
+        : contentReview.partialVideos > 0
+          ? `Contextual review was partial for ${contentReview.partialVideos} analyzed video(s); uncertain or incomplete findings were retained conservatively.`
+          : 'Contextual review completed for videos that contained first-pass candidates.',
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions. Absence of transcript evidence is not a claim about unseen visuals.',
+      `Channel-level wording covers only the ${analyzedVideos} analyzed video transcript(s), not the entire channel.`,
       'Speech-quality metrics are local heuristics, not safety violations or an overall quality score.',
       storageMode === 'diagnostic'
         ? 'Diagnostic storage stores normalized transcripts and provider diagnostics on the server without changing classifier behavior.'
