@@ -16,12 +16,24 @@ jobs:
       - name: Verify inside Docker
         run: docker build --target verify --tag yt-checker:verify .
 
+      - name: Validate full-debug compose
+        run: |
+          cp .env.example .env
+          mkdir -p scan-results
+          docker compose -f compose.full-debug.yaml config >/dev/null
+
       - name: Build production image
         run: docker build --target runtime --tag yt-checker:runtime .
 
       - name: Smoke-test hardened runtime
         run: |
-          docker run -d             --name yt-checker-ci             --read-only             --cap-drop ALL             --security-opt no-new-privileges             --tmpfs /tmp:rw,noexec,nosuid,size=64m             yt-checker:runtime
+          docker run -d \
+            --name yt-checker-ci \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            yt-checker:runtime
 
           for attempt in $(seq 1 20); do
             status="$(docker inspect --format='{{.State.Health.Status}}' yt-checker-ci)"
