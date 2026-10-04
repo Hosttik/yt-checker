@@ -110,7 +110,7 @@ Minimal findings are shown as summary items. Moderate/high findings may be highl
 
 All accepted findings remain visible and rejected candidates are returned in the diagnostic trace.
 
-Storage mode and analysis profile are separate concepts.
+Storage mode and analysis profile are separate concepts. `storageMode=diagnostic` requests rejected-candidate trace from the classifier even when the presentation profile remains `normal`.
 
 ## Multi-label scenes
 
@@ -124,7 +124,7 @@ scene_55
  └─ scary_and_disturbing / threatening_character
 ```
 
-The UI first groups by `sceneId`, splits obviously distant reuse of one id, and then merges substantially overlapping compatible narrative scenes even if the model emitted different ids. Scene context and evidence are separate: the parent gets compact evidence timestamps rather than one oversized narrative interval.
+The UI first groups by `sceneId`, splits obviously distant reuse of one id using actual evidence gaps (not the model's broad scene envelope), and then merges substantially overlapping compatible narrative scenes emitted under different ids. Sparse model evidence is materialized as `evidenceRanges[]`: non-adjacent evidence segments remain separate timestamps instead of being expanded to one large interval.
 
 ## Old result vs new result
 
@@ -204,7 +204,9 @@ The deterministic policy tests cover the current real-world cases:
 | Scenario | LLM classification | Parent relevance | Normal display |
 |---|---|---|---|
 | Character receives a sword | `violence.weapon_presence` | minimal | hidden |
-| Police officer practices shooting at a target | `violence.weapon_use`, harm none | low | summary |
+| Police officer practices shooting at a target | `violence.weapon_use`, harm none, purpose sport | low | summary |
+| Harmless demonstration of a gifted weapon | `violence.weapon_use`, harm none, purpose demonstration | minimal | hidden |
+| Minor accidental injury | `violence.injury`, purpose accident, low severity | minimal | hidden |
 | Fantasy zombie combat | `violence.fantasy_combat` | moderate | summary |
 | Zombies force their way into a bunker | violence + scary, shared sceneId | moderate+ | one scene card |
 | Pitchfork threat against a character | `violence.violent_threat` | high | highlight |
@@ -256,6 +258,6 @@ Relevant structured log events:
 
 Speech quality remains a separate analysis dimension and is not mixed into ContentEvent taxonomy or safety aggregation.
 
-Raw counts/rates are retained for diagnostics, while the parent-facing report explains them as approximate frequencies (for example, «примерно 1 раз на 80 слов») and shows common markers. Frequency bands are product heuristics, not normative language-quality thresholds. Auto-generated captions are explicitly marked because ASR duplication can inflate repetition counts.
+Raw counts/rates are retained for diagnostics, while the parent-facing report explains them as approximate frequencies (for example, «примерно 1 раз на 80 слов») and shows common markers. Frequency bands are product heuristics, not normative language-quality thresholds. Auto-generated captions are explicitly marked because ASR duplication can inflate repetition counts. When all analyzed captions are ASR, the human-facing wording attributes repetitions to the automatic subtitles rather than asserting that they definitely reflect the creator's speech.
 
 The transcript heuristic can evolve independently toward a dedicated audio-based pipeline.
