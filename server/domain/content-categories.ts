@@ -30,7 +30,10 @@ export function normalizeRequestedCategories(ruleIds: RuleId[]): ContentCategory
   return [...normalized]
 }
 
-export function ruleMatchesEvent(ruleId: RuleId, event: ContentEvent): boolean {
+export function ruleMatchesClassification(
+  ruleId: RuleId,
+  event: Pick<ContentEvent, 'category' | 'subtype'>,
+): boolean {
   if (ruleId === 'alcohol_and_drugs') {
     return event.category === 'substances' && event.subtype !== 'nicotine'
   }
@@ -38,6 +41,10 @@ export function ruleMatchesEvent(ruleId: RuleId, event: ContentEvent): boolean {
     return event.category === 'substances' && event.subtype === 'nicotine'
   }
   return event.category === ruleId
+}
+
+export function ruleMatchesEvent(ruleId: RuleId, event: ContentEvent): boolean {
+  return ruleMatchesClassification(ruleId, event)
 }
 
 export function legacyRuleLabel(ruleId: RuleId): string {
