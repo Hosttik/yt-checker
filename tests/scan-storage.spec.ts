@@ -25,6 +25,7 @@ const result: ChannelCheckResponse = {
     captionEligibleVideos: 1,
     transcriptAttempts: 1,
     usedChannelVideosFallback: false,
+    requestedLanguage: 'ru',
   },
   summary: [],
   videos: [],
@@ -69,12 +70,25 @@ describe('ScanStorage', () => {
       chargedCredits: 1,
     })
 
+    storage.recordAnalysisTrace({
+      event: 'candidate.final_violation',
+      phrase: 'raw violation phrase',
+    })
+
     await storage.save({ ...result, storageMode: 'diagnostic', scanId: storage.scanId })
     const files = (await readdir(join(root, storage.scanId))).sort()
-    expect(files).toEqual(['jev-exchanges.json', 'result.json', 'transcriptapi-exchanges.json'])
+    expect(files).toEqual([
+      'analysis-trace.json',
+      'jev-exchanges.json',
+      'result.json',
+      'transcriptapi-exchanges.json',
+    ])
 
     const raw = await readFile(join(root, storage.scanId, 'transcriptapi-exchanges.json'), 'utf8')
     expect(raw).toContain('raw transcript')
     expect(raw).toContain('Bearer <redacted>')
+
+    const trace = await readFile(join(root, storage.scanId, 'analysis-trace.json'), 'utf8')
+    expect(trace).toContain('raw violation phrase')
   })
 })
