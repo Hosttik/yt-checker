@@ -163,7 +163,7 @@ Diagnostic требует `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`. API-ключ Ope
 
 Отдельно от safety-категорий локально и без дополнительного AI-вызова считается `speechQuality`: для русского — частота маркеров «ну», «короче», «типа», «как бы», «значит», «э/ээ», «эм», а для всех языков — непосредственные повторы слов. Это диагностическая метрика, а не оценка «хороший/плохой канал».
 
-Для каждого видео сохраняются `expectedCaptionLanguage` (что выбрал бесплатный `/youtube/info`) и фактический `transcriptLanguage`, а также `captionSource` и `captionSourceMismatch`. Это позволяет видеть случаи, когда провайдер рекламирует manual captions, но возвращает ASR track.
+Для каждого видео сохраняются `preflightCaptionLanguage` (language hint из бесплатного `/youtube/info`) и фактический `transcriptLanguage`, а также `captionSource` и `captionLanguageResolution`. Важно: по подтверждению TranscriptAPI, plain code вроде `ru` в `available_languages` сейчас НЕ гарантирует human-made track; если human track отсутствует, `language=ru` может штатно вернуть `asr-ru`. Поэтому source определяется только по фактическому `language` ответа `/youtube/transcript`.
 
 ## Проверка
 
