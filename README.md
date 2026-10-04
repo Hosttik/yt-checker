@@ -13,7 +13,7 @@ TranscriptAPI → normalizeTranscript → один OpenAI Responses API request
 
 Regex/JEV prefilter, отдельные запросы по категориям, второй AI-pass и fallback на другой AI-провайдер не используются. Автоповторы SDK отключены: максимум один HTTP request на transcript, включая временные ошибки.
 
-Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка, и анализирует до 10 подходящих видео. Существующая логика TranscriptAPI и платный fallback `/youtube/channel/videos` сохранены.
+Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка, и стремится получить до 10 успешно проанализированных видео. Если transcript у выбранного видео неожиданно недоступен, берётся следующий caption-eligible кандидат; платный fallback `/youtube/channel/videos` загружается только когда он реально нужен. При системной ошибке OpenAI scan останавливается, чтобы не расходовать лишние TranscriptAPI credits.
 
 ## Настройка
 
