@@ -43,8 +43,34 @@ function policyFor(category: ContentCategory): CategoryPolicy {
   return categoryPolicies[category] as CategoryPolicy
 }
 
+function reasonWords(reason: string): Set<string> {
+  return new Set(reason.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+}
+
+function reasonsOverlap(a: string, b: string): boolean {
+  const left = reasonWords(a)
+  const right = reasonWords(b)
+  if (left.size === 0 || right.size === 0) return false
+  let common = 0
+  for (const word of left) if (right.has(word)) common += 1
+  return common / Math.min(left.size, right.size) >= 0.6
+}
+
 function sceneSummary(events: ContentEvent[]): string {
-  const reasons = unique(events.map((event) => event.reason.trim()).filter(Boolean))
+  const severityRank = { low: 1, medium: 2, high: 3 } as const
+  const ordered = [...events].sort((a, b) => {
+    const relevanceDelta = PARENT_RELEVANCE_RANK[b.parentRelevance] - PARENT_RELEVANCE_RANK[a.parentRelevance]
+    if (relevanceDelta !== 0) return relevanceDelta
+    return severityRank[b.severity] - severityRank[a.severity]
+  })
+
+  const reasons: string[] = []
+  for (const event of ordered) {
+    const reason = event.reason.trim()
+    if (!reason || reasons.some((existing) => existing === reason || reasonsOverlap(existing, reason))) continue
+    reasons.push(reason)
+    if (reasons.length >= 2) break
+  }
   return reasons.join(' ')
 }
 
@@ -76,9 +102,24 @@ function eventSceneEnd(event: ContentEvent): number {
   return event.sceneEndMs ?? event.endMs
 }
 
+function eventEvidenceRanges(event: ContentEvent): Array<{ startMs: number; endMs: number }> {
+  return event.evidenceRanges && event.evidenceRanges.length > 0
+    ? event.evidenceRanges
+    : [{ startMs: event.startMs, endMs: event.endMs }]
+}
+
+function eventEvidenceStart(event: ContentEvent): number {
+  return Math.min(...eventEvidenceRanges(event).map((range) => range.startMs))
+}
+
+function eventEvidenceEnd(event: ContentEvent): number {
+  return Math.max(...eventEvidenceRanges(event).map((range) => range.endMs))
+}
+
 function evidenceRanges(events: ContentEvent[]): Array<{ startMs: number; endMs: number }> {
   const ranges = events
-    .map((event) => ({ startMs: event.startMs, endMs: event.endMs }))
+    .flatMap(eventEvidenceRanges)
+    .map((range) => ({ ...range }))
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
 
   const merged: Array<{ startMs: number; endMs: number }> = []
@@ -95,14 +136,16 @@ function evidenceRanges(events: ContentEvent[]): Array<{ startMs: number; endMs:
 
 interface DraftScene {
   sceneId: string
+  originSceneIds: string[]
   events: ContentEvent[]
   contextStartMs: number
   contextEndMs: number
 }
 
-function draftScene(sceneId: string, events: ContentEvent[]): DraftScene {
+function draftScene(sceneId: string, events: ContentEvent[], originSceneId: string): DraftScene {
   return {
     sceneId,
+    originSceneIds: [originSceneId],
     events,
     contextStartMs: Math.min(...events.map(eventSceneStart)),
     contextEndMs: Math.max(...events.map(eventSceneEnd)),
@@ -138,7 +181,9 @@ function mergeOverlappingScenes(scenes: DraftScene[]): DraftScene[] {
 
   for (const scene of [...scenes].sort((a, b) => a.contextStartMs - b.contextStartMs)) {
     const match = merged.find((candidate) =>
-      scenesAreCompatible(candidate, scene) && overlapRatio(candidate, scene) >= 0.4,
+      !candidate.originSceneIds.some((origin) => scene.originSceneIds.includes(origin))
+      && scenesAreCompatible(candidate, scene)
+      && overlapRatio(candidate, scene) >= 0.4,
     )
 
     if (!match) {
@@ -147,6 +192,7 @@ function mergeOverlappingScenes(scenes: DraftScene[]): DraftScene[] {
     }
 
     match.events.push(...scene.events)
+    match.originSceneIds = unique([...match.originSceneIds, ...scene.originSceneIds])
     match.contextStartMs = Math.min(match.contextStartMs, scene.contextStartMs)
     match.contextEndMs = Math.max(match.contextEndMs, scene.contextEndMs)
     match.sceneId = `${match.sceneId}+${scene.sceneId}`
@@ -164,12 +210,12 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
     groups.set(key, group)
   }
 
-  const MAX_SCENE_GAP_MS = 45_000
+  const MAX_SCENE_GAP_MS = 75_000
   const drafts: DraftScene[] = []
 
   for (const [baseSceneId, groupedEvents] of groups.entries()) {
     const sorted = [...groupedEvents].sort((a, b) =>
-      eventSceneStart(a) - eventSceneStart(b) || eventSceneEnd(a) - eventSceneEnd(b),
+      eventEvidenceStart(a) - eventEvidenceStart(b) || eventEvidenceEnd(a) - eventEvidenceEnd(b),
     )
     const clusters: ContentEvent[][] = []
 
@@ -179,8 +225,8 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
         clusters.push([event])
         continue
       }
-      const currentEnd = Math.max(...current.map(eventSceneEnd))
-      if (eventSceneStart(event) <= currentEnd + MAX_SCENE_GAP_MS) current.push(event)
+      const currentEnd = Math.max(...current.map(eventEvidenceEnd))
+      if (eventEvidenceStart(event) <= currentEnd + MAX_SCENE_GAP_MS) current.push(event)
       else clusters.push([event])
     }
 
@@ -188,6 +234,7 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
       drafts.push(draftScene(
         clusters.length === 1 ? baseSceneId : `${baseSceneId}:${index + 1}`,
         sceneEvents,
+        baseSceneId,
       ))
     })
   }
