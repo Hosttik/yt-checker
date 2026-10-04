@@ -32,6 +32,10 @@ function providerReason(error: unknown): TranscriptUnavailableReason {
   return error instanceof TranscriptApiError ? error.reason : 'provider_error'
 }
 
+function runtimeBoolean(value: unknown): boolean {
+  return value === true || value === 'true' || value === '1'
+}
+
 function mergeMetadata(video: VideoMetadata, info: {
   metadata?: { title?: string; thumbnailUrl?: string }
 }): VideoMetadata {
@@ -66,7 +70,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     storage = new ScanStorage(
       storageMode,
       config.scanStorageDir,
-      Boolean(config.allowDiagnosticStorage),
+      runtimeBoolean(config.allowDiagnosticStorage),
     )
   } catch (error) {
     throw createError({
