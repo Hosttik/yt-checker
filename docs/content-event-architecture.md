@@ -110,7 +110,7 @@ Minimal findings are shown as summary items. Moderate/high findings may be highl
 
 All accepted findings remain visible and rejected candidates are returned in the diagnostic trace.
 
-Storage mode and analysis profile are separate concepts. `storageMode=diagnostic` requests rejected-candidate trace from the classifier even when the presentation profile remains `normal`.
+Storage mode and analysis profile are separate concepts. `storageMode=diagnostic` only controls persistence; it never changes the classifier request. Rejected-candidate output is requested only by the diagnostic analysis profile.
 
 ## Multi-label scenes
 

@@ -325,3 +325,24 @@ describe('multi-label presentation and aggregation', () => {
     expect(channel[0]?.level).toBe('none')
   })
 })
+
+
+it('hides routine demolition without suppressing dangerous destruction', () => {
+  const routine = violence('destruction', {
+    harmLevel: 'actual', targetType: 'object', weaponRole: 'none', actionPurpose: 'utility',
+  }, { text: 'Снести каменный дом и построить новый дом.', severity: 'low' })
+  expect(applyContentPolicy(routine, 'demolition', 'normal').displayLevel).toBe('hidden')
+  expect(applyContentPolicy({ ...routine, severity: 'high' }, 'danger', 'normal').displayLevel).not.toBe('hidden')
+  expect(applyContentPolicy({ ...routine, details: { ...routine.details, actionPurpose: 'destruction' } }, 'attack', 'normal').parentRelevance).toBe('moderate')
+})
+
+
+it('shows an established mild funeral theme without turning it into a high warning', () => {
+  const theme = scary('death_related_theme', {
+    severity: 'low',
+    details: { themePresent: true, fearIntensity: 'mild', threatPresent: false, supernatural: false },
+  })
+  const event = applyContentPolicy(theme, 'funeral', 'normal')
+  expect([event.parentRelevance, event.displayLevel]).toEqual(['low', 'summary'])
+  expect(applyContentPolicy({ ...theme, details: { ...theme.details, themePresent: false } }, 'word', 'normal').displayLevel).toBe('hidden')
+})

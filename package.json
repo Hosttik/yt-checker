@@ -12,7 +12,8 @@
     "typecheck": "nuxi typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run test && npm run build"
+    "check": "npm run typecheck && npm run test && npm run build",
+    "eval:classifier": "RUN_CLASSIFIER_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/classifier.spec.ts"
   },
   "dependencies": {
     "nuxt": "^4.0.0",

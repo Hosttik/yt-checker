@@ -62,11 +62,31 @@ function normalizeEvent(
 }
 
 function validationReason(event: ClassifiedContentEvent): string | undefined {
-  if (event.assertionStatus === 'negated') {
+  if (event.category === 'insults' && event.details.targetType === 'self') {
+    return 'self-directed criticism is not an insult against another target'
+  }
+
+  if (event.category === 'profanity_and_rude_language' && event.details.expression) {
+    const expression = event.details.expression.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    const evidence = event.text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    if (!expression || !(` ${evidence} `).includes(` ${expression} `)) {
+      return 'offending expression is not present in transcript evidence'
+    }
+    if (/^(?:о )?(?:господи|боже(?: мой)?|господи боже мой)$/.test(expression)) {
+      return 'ordinary religious exclamation is not profanity or rude language'
+    }
+  }
+
+  // These subtypes describe themes in speech, not the truth of the feared event.
+  const theme = event.category === 'scary_and_disturbing'
+    && event.details.themePresent === true
+    && ['death_related_theme', 'horror_theme', 'disturbing_theme'].includes(event.subtype)
+
+  if (event.assertionStatus === 'negated' && !theme) {
     return 'event is explicitly negated by surrounding context'
   }
 
-  if (event.assertionStatus === 'hypothetical') {
+  if (event.assertionStatus === 'hypothetical' && !theme) {
     return 'event is only hypothetical and is not an actual or threatened event'
   }
 
@@ -100,7 +120,9 @@ function validationReason(event: ClassifiedContentEvent): string | undefined {
 
   if (event.subtype === 'violent_threat'
     && event.evidenceStrength !== 'explicit'
-    && (event.confidence < 0.85
+    && (event.evidenceStrength === 'weak_context'
+      || (event.confidence < 0.85
+        && !(event.assertionStatus === 'threatened' && details.actionPurpose === 'threat'))
       || (event.assertionStatus === 'actual' && details.actionPurpose !== 'threat'))) {
     return 'violent_threat requires stronger corroboration when transcript evidence is ambiguous'
   }

@@ -116,6 +116,10 @@ const toiletPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: '
 const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'violence' }>> = {
   getParentRelevance(event) {
     const details = event.details
+    if (event.subtype === 'destruction'
+      && details.actionPurpose === 'utility'
+      && event.severity === 'low'
+      && (details.targetType === 'object' || details.targetType === 'environment')) return 'minimal'
     if (event.subtype === 'graphic_violence') return 'high'
     if (event.subtype === 'life_threatening_situation') {
       return event.assertionStatus === 'reported' && event.severity !== 'high' ? 'moderate' : 'high'
@@ -163,7 +167,10 @@ const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 's
       return event.details.threatPresent ? 'moderate' : 'low'
     }
     if (event.details.fearIntensity === 'moderate' || event.details.threatPresent) return 'moderate'
-    if (event.subtype === 'death_related_theme' && event.severity !== 'low') return 'moderate'
+    if (event.subtype === 'death_related_theme') {
+      if (event.severity !== 'low') return 'moderate'
+      if (event.details.themePresent) return 'low'
+    }
     return 'minimal'
   },
   getDisplayLevel: defaultDisplayLevel,

@@ -90,6 +90,14 @@ describe('OpenAI content-event classifier', () => {
     expect(schema).toContain('rejectedCandidates')
   })
 
+  it('rejects evidence outside its declared scene', async () => {
+    const { provider } = providerWith({ events: [{
+      ...violenceEvent, evidenceSegments: [1], sceneStartSegment: 0, sceneEndSegment: 0,
+    }] })
+    await expect(provider.analyze(transcript(['Привет', 'Мне подарили меч']), 'ru', ['violence'], false))
+      .rejects.toMatchObject({ type: 'schema' })
+  })
+
   it('keeps UX decisions out of the LLM structured schema', async () => {
     const { provider, parse } = providerWith({ events: [] })
     await provider.analyze(transcript(['Мне подарили меч.']), 'ru', ['violence'], false)

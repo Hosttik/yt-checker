@@ -177,3 +177,75 @@ describe('content semantic validation', () => {
   })
 
 })
+
+
+describe('language and theme regressions', () => {
+  const base = { ...violence(), assertionStatus: 'actual' as const }
+
+  it.each(['О, господи', 'Боже мой', 'О боже'])('rejects ordinary exclamation %s despite high confidence', (expression) => {
+    const result = validateClassifiedEvents([{
+      ...base, category: 'profanity_and_rude_language', subtype: 'profanity',
+      text: `${expression}. Так, всё, жители, давайте`,
+      details: { targeted: false, expression },
+    }])
+    expect(result.accepted).toHaveLength(0)
+    expect(result.rejected[0]?.reason).toContain('ordinary religious exclamation')
+  })
+
+  it('does not suppress a separate rude expression in a sentence with an exclamation', () => {
+    const result = validateClassifiedEvents([{
+      ...base, category: 'profanity_and_rude_language', subtype: 'rude_language',
+      text: 'О, господи, заткнись!', details: { targeted: true, expression: 'заткнись' },
+    }])
+    expect(result.accepted).toHaveLength(1)
+  })
+
+  it('rejects invented lexical evidence', () => {
+    const result = validateClassifiedEvents([{
+      ...base, category: 'profanity_and_rude_language', subtype: 'rude_language',
+      text: 'Я не очень учёный', details: { targeted: false, expression: 'нуб' },
+    }])
+    expect(result.rejected[0]?.reason).toContain('not present')
+  })
+
+  it('rejects self-criticism but preserves a directed insult', () => {
+    const event = {
+      ...base, category: 'insults' as const, subtype: 'degrading_statement' as const,
+      text: 'Я не очень учёный', details: { targetType: 'self' as const },
+    }
+    expect(validateClassifiedEvents([event]).accepted).toHaveLength(0)
+    expect(validateClassifiedEvents([{
+      ...event, text: 'Как же вы глупые и наивные', details: { targetType: 'group' },
+    }]).accepted).toHaveLength(1)
+  })
+
+  it.each(['hypothetical', 'negated'] as const)('retains an evidenced death theme when death is %s', (assertionStatus) => {
+    const result = validateClassifiedEvents([{
+      ...base, assertionStatus, category: 'scary_and_disturbing', subtype: 'death_related_theme',
+      text: 'Нам остаётся попрощаться с ним. Пойдёмте выкопаем яму. Но он просто спал.',
+      details: { fearIntensity: 'moderate', themePresent: true, threatPresent: false, supernatural: false },
+    }])
+    expect(result.accepted).toHaveLength(1)
+  })
+})
+
+
+it('does not turn a bare denial into a frightening theme', () => {
+  expect(validateClassifiedEvents([{
+    ...violence(), category: 'scary_and_disturbing', subtype: 'death_related_theme',
+    text: 'Никто не умер.', assertionStatus: 'negated',
+    details: { themePresent: false, fearIntensity: 'mild', threatPresent: false, supernatural: false },
+  }]).accepted).toHaveLength(0)
+})
+
+
+it('retains a contextual coercive threat without treating self-rated confidence as a calibrated cutoff', () => {
+  const event = violence({
+    subtype: 'violent_threat', assertionStatus: 'threatened', confidence: 0.79,
+    evidenceStrength: 'strong_context',
+    text: 'Если мне поможешь, тогда ты спасёшь жителей. Если я откажусь, то жителям конец.',
+    details: { harmLevel: 'threatened', targetType: 'person', weaponRole: 'none', actionPurpose: 'threat' },
+  })
+  expect(validateClassifiedEvents([event]).accepted).toHaveLength(1)
+  expect(validateClassifiedEvents([{ ...event, evidenceStrength: 'weak_context' }]).accepted).toHaveLength(0)
+})

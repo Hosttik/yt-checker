@@ -82,6 +82,8 @@ export type SelfHarmSubtype =
   | 'joke_or_casual_reference'
 
 export interface ProfanityDetails {
+  /** Exact lexical evidence; optional for previously stored events. */
+  expression?: string
   targeted: boolean
 }
 
@@ -108,6 +110,8 @@ export interface ViolenceDetails {
 }
 
 export interface ScaryDetails {
+  /** Whether the evidence establishes a theme, independent of literal harm. */
+  themePresent?: boolean
   fearIntensity: 'mild' | 'moderate' | 'strong'
   threatPresent: boolean
   supernatural: boolean
