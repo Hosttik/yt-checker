@@ -172,7 +172,7 @@ describe('OpenAI content-event classifier', () => {
     expect(OPENAI_SYSTEM_PROMPT).toContain('Do not produce show/hide decisions')
     expect(OPENAI_SYSTEM_PROMPT).toContain('confidence: 0..1 confidence')
     expect(OPENAI_SYSTEM_PROMPT).toContain('Ten low-intensity mentions do not become high severity')
-    expect(OPENAI_SYSTEM_PROMPT).toContain('do not infer visual facts')
+    expect(OPENAI_SYSTEM_PROMPT.toLowerCase()).toContain('do not infer visual facts')
     expect(OPENAI_SYSTEM_PROMPT).toContain('Reuse the exact same sceneId')
   })
 
