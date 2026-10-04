@@ -158,7 +158,7 @@ export class OpenAIAnalysisProvider {
 
   constructor(
     apiKey: string,
-    private readonly model = 'gpt-5.6-luna',
+    private readonly model = 'gpt-6-luna',
     private readonly observer?: OpenAIAnalysisObserver,
     client?: OpenAI,
   ) {
@@ -197,7 +197,7 @@ export class OpenAIAnalysisProvider {
         text: { format: zodTextFormat(schema, diagnostic ? 'video_analysis_diagnostic' : 'video_analysis') },
         tools: [],
         store: false,
-        max_output_tokens: 8192,
+        max_output_tokens: 4096,
       })
       rawResponse = response
       const outputText = response.output_text || response.output?.flatMap((item) =>
