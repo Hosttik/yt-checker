@@ -157,6 +157,8 @@ export interface BaseContentEvent {
   confidence: number
   startMs: number
   endMs: number
+  sceneStartMs?: number
+  sceneEndMs?: number
   text: string
   reason: string
   evidenceStrength: EvidenceStrength
