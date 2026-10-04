@@ -237,8 +237,9 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <strong>{{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
           <small v-if="result.profile === 'diagnostic'">
-            {{ item.affectedVideos }}/{{ item.analyzedVideos }} видео ·
-            {{ item.displayedEventCount }} показано из {{ item.rawEventCount }} raw signals
+            shown in {{ item.affectedVideos }}/{{ item.analyzedVideos }} videos ·
+            raw affected {{ item.rawAffectedVideos }}/{{ item.analyzedVideos }} ·
+            {{ item.displayedEventCount }} shown from {{ item.rawEventCount }} raw signals
           </small>
           <small v-else-if="item.level === 'none'">
             Значимых элементов для выбранного профиля не показано
