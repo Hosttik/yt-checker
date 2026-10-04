@@ -19,7 +19,9 @@ import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
   TranscriptApiError,
+  type TranscriptApiExchange,
 } from '../services/transcript-api'
+import { createScanLogger } from '../utils/logger'
 
 const checkRequestSchema = z.object({
   channelUrl: z.string().trim().min(1).max(500),
@@ -43,6 +45,17 @@ function mergeMetadata(video: VideoMetadata, info: {
     ...video,
     title: info.metadata?.title ?? video.title,
     thumbnailUrl: info.metadata?.thumbnailUrl ?? video.thumbnailUrl,
+  }
+}
+
+function providerLogFields(exchange: TranscriptApiExchange): Record<string, unknown> {
+  return {
+    operation: exchange.operation,
+    status: exchange.response?.status ?? null,
+    statusText: exchange.response?.statusText ?? null,
+    latencyMs: exchange.response?.latencyMs ?? null,
+    chargedCredits: exchange.chargedCredits,
+    networkError: exchange.networkError?.name ?? null,
   }
 }
 
@@ -79,10 +92,21 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     })
   }
 
+  const logger = createScanLogger(storage.scanId, config.logLevel)
+  logger.info('scan.started', {
+    storageMode,
+    targetVideos: parsed.data.videoLimit,
+    enabledRules: parsed.data.ruleIds,
+    jevEnabled: Boolean(config.typesafeApiKey),
+  })
+
   const provider = new TranscriptApiClient(
     config.transcriptApiKey,
     config.transcriptApiBaseUrl,
-    storage.recordProvider,
+    async (exchange) => {
+      storage.recordProvider(exchange)
+      logger.debug('transcriptapi.exchange', providerLogFields(exchange))
+    },
   )
 
   const contextFilter = config.typesafeApiKey
@@ -91,7 +115,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         config.typesafeBaseUrl,
         config.typesafeModel,
         Number(config.typesafeBenignDropProbability),
-        storage.recordJev,
+        async (exchange) => {
+          storage.recordJev(exchange)
+          logger.debug('jev.exchange', {
+            status: exchange.response.status,
+            statusText: exchange.response.statusText,
+            candidateCount: Object.keys(
+              (exchange.request.body as { questions?: Record<string, unknown> }).questions ?? {},
+            ).length,
+          })
+        },
       )
     : null
 
@@ -99,7 +132,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   let latest
   try {
     latest = await provider.getLatestVideos(parsed.data.channelUrl)
-  } catch {
+    logger.info('channel.latest.loaded', {
+      channelId: latest.channel.id,
+      channelTitle: latest.channel.title,
+      videoCount: latest.videos.length,
+    })
+  } catch (error) {
+    logger.error('channel.latest.failed', {
+      reason: providerReason(error),
+    })
     throw createError({
       statusCode: 502,
       statusMessage: 'Could not load this YouTube channel.',
@@ -109,32 +150,60 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const inspectedIds = new Set<string>()
   const eligibleVideos: VideoMetadata[] = []
 
-  async function inspectVideos(videos: VideoMetadata[]): Promise<void> {
+  async function inspectVideos(videos: VideoMetadata[], source: 'latest' | 'fallback'): Promise<void> {
     for (const video of videos) {
       if (inspectedIds.has(video.id)) continue
       inspectedIds.add(video.id)
 
       try {
         const info = await provider.getVideoInfo(video.id)
+        logger.debug('video.preflight.completed', {
+          videoId: video.id,
+          source,
+          captionAvailable: info.available,
+          languages: info.languages,
+        })
         if (info.available) eligibleVideos.push(mergeMetadata(video, info))
-      } catch {
-        // A failed free preflight is skipped; raw details are available in diagnostic mode.
+      } catch (error) {
+        logger.warn('video.preflight.failed', {
+          videoId: video.id,
+          source,
+          reason: providerReason(error),
+        })
       }
     }
   }
 
-  await inspectVideos(latest.videos)
+  await inspectVideos(latest.videos, 'latest')
 
   let usedChannelVideosFallback = false
   if (eligibleVideos.length < targetVideos) {
     usedChannelVideosFallback = true
+    logger.info('channel.fallback.started', {
+      eligibleVideos: eligibleVideos.length,
+      targetVideos,
+    })
+
     try {
       const page = await provider.getChannelVideos(parsed.data.channelUrl)
-      await inspectVideos(page.videos)
-    } catch {
-      // Keep whatever the free latest feed provided. Paid page errors cost no credits.
+      logger.info('channel.fallback.loaded', {
+        videoCount: page.videos.length,
+        hasMore: page.hasMore,
+      })
+      await inspectVideos(page.videos, 'fallback')
+    } catch (error) {
+      logger.warn('channel.fallback.failed', {
+        reason: providerReason(error),
+      })
     }
   }
+
+  logger.info('scan.selection.completed', {
+    inspectedVideos: inspectedIds.size,
+    captionEligibleVideos: eligibleVideos.length,
+    targetVideos,
+    usedChannelVideosFallback,
+  })
 
   const enabledRuleIds = parsed.data.ruleIds as RuleId[]
   const videoResults: VideoScanResult[] = []
@@ -144,10 +213,21 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   for (const video of eligibleVideos) {
     if (videoResults.filter((item) => item.status === 'analyzed').length >= targetVideos) break
     transcriptAttempts += 1
+    logger.debug('video.analysis.started', {
+      videoId: video.id,
+      transcriptAttempt: transcriptAttempts,
+    })
 
     try {
       const transcript = await provider.getTranscript(video.id)
       const candidates = findTranscriptCandidates(transcript.segments, enabledRuleIds)
+
+      logger.debug('video.regex.completed', {
+        videoId: video.id,
+        transcriptLanguage: transcript.language ?? null,
+        segmentCount: transcript.segments.length,
+        candidateCount: candidates.length,
+      })
 
       let filteredCandidates = candidates
       let contextFilterStatus: ContextFilterStatus = contextFilter ? 'not_needed' : 'disabled'
@@ -156,26 +236,49 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         try {
           filteredCandidates = await contextFilter.filter(candidates)
           contextFilterStatus = 'applied'
+          logger.debug('video.jev.completed', {
+            videoId: video.id,
+            inputCandidates: candidates.length,
+            keptCandidates: filteredCandidates.length,
+            removedCandidates: candidates.length - filteredCandidates.length,
+          })
         } catch {
           contextualFallbackVideos += 1
           contextFilterStatus = 'fallback'
+          logger.warn('video.jev.fallback', {
+            videoId: video.id,
+            candidateCount: candidates.length,
+          })
         }
       }
 
+      const detections = buildDetections(filteredCandidates, enabledRuleIds)
       videoResults.push({
         ...video,
         status: 'analyzed',
         transcriptLanguage: transcript.language,
         contextFilterStatus,
-        detections: buildDetections(filteredCandidates, enabledRuleIds),
+        detections,
+      })
+
+      logger.info('video.analysis.completed', {
+        videoId: video.id,
+        detectionCategories: detections.length,
+        detectionCount: detections.reduce((sum, detection) => sum + detection.count, 0),
+        contextFilterStatus,
       })
     } catch (error) {
+      const reason = providerReason(error)
       videoResults.push({
         ...video,
         status: 'transcript_unavailable',
-        unavailableReason: providerReason(error),
+        unavailableReason: reason,
         contextFilterStatus: contextFilter ? 'not_needed' : 'disabled',
         detections: [],
+      })
+      logger.warn('video.analysis.failed', {
+        videoId: video.id,
+        reason,
       })
     }
   }
@@ -217,12 +320,30 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   try {
     await storage.save(result)
+    logger.info('scan.storage.completed', {
+      storageMode,
+      persisted: storageMode !== 'none',
+    })
   } catch {
+    logger.error('scan.storage.failed', {
+      storageMode,
+    })
     throw createError({
       statusCode: 500,
       statusMessage: 'Scan completed but its requested result could not be stored.',
     })
   }
+
+  logger.info('scan.completed', {
+    analyzedVideos,
+    failedVideos: result.failedVideos,
+    transcriptAttempts,
+    contextualFallbackVideos,
+    totalCredits: result.creditUsage.totalCredits,
+    transcriptCredits: result.creditUsage.transcriptCredits,
+    channelVideosCredits: result.creditUsage.channelVideosCredits,
+    freeRequests: result.creditUsage.freeRequests,
+  })
 
   return result
 })
