@@ -9,3 +9,5 @@ coverage
 .env.*
 !.env.example
 npm-debug.log*
+benchmark-results
+scan-results
