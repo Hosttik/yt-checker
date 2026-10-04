@@ -12,7 +12,12 @@ import { RULE_IDS, SCAN_STORAGE_MODES } from '../../shared/types/check'
 import { buildDetections, buildRuleSummary } from '../domain/analyze-transcript'
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
-import { OpenAIAnalysisError, OpenAIAnalysisProvider } from '../services/openai-analysis'
+import {
+  OPENAI_PROMPT_VERSION,
+  OPENAI_SCHEMA_VERSION,
+  OpenAIAnalysisError,
+  OpenAIAnalysisProvider,
+} from '../services/openai-analysis'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
@@ -158,7 +163,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     reasoningEffort: 'low',
   })
 
-  let latest
+  let latest: Awaited<ReturnType<TranscriptApiClient['getLatestVideos']>>
   try {
     latest = await transcriptProvider.getLatestVideos(request.channelUrl)
   } catch (error) {
@@ -324,6 +329,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         transcriptLanguage: transcript.language ?? (languagePriority || 'unknown'),
         enabledCategories: enabledRuleIds,
         diagnostic: storageMode === 'diagnostic',
+        promptVersion: OPENAI_PROMPT_VERSION,
+        schemaVersion: OPENAI_SCHEMA_VERSION,
       }, normalized?.text ?? '')
       videoResults.push({
         ...video,
