@@ -110,18 +110,34 @@ export interface VideoMetadata {
   title: string
   publishedAt: string
   thumbnailUrl?: string
+
+  // TranscriptAPI /youtube/info currently returns a language hint only.
+  // A plain code such as "ru" does not prove that a human-made track exists.
+  preflightCaptionLanguage?: string
+
+  // Deprecated compatibility alias from the previous result contract.
   expectedCaptionLanguage?: string
 }
 
 export interface ChannelMetadata { id: string; title: string; thumbnailUrl?: string }
 
 export type CaptionSource = 'manual' | 'asr' | 'unknown'
+export type CaptionLanguageResolution =
+  | 'exact'
+  | 'same_language_asr'
+  | 'same_language_variant'
+  | 'different_language'
+  | 'unknown'
 
 export interface VideoScanResult extends VideoMetadata {
   status: 'analyzed' | 'transcript_unavailable' | 'provider_error'
   url: string
   transcriptLanguage?: string
   captionSource?: CaptionSource
+  captionLanguageResolution?: CaptionLanguageResolution
+
+  // Deprecated. Do not infer provider failure from a plain preflight language
+  // resolving to an ASR track; TranscriptAPI documents that behavior today.
   captionSourceMismatch?: boolean
   unavailableReason?: TranscriptUnavailableReason
   analysisError?: { type: AnalysisErrorType; status?: number; code?: string; message: string }
