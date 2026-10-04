@@ -20,18 +20,21 @@ const base = {
   engagementLevel: 'depiction',
   portrayal: 'neutral',
   explicitness: 'mild',
+  assertionStatus: 'actual',
 } as const
 
 function violence(
   subtype: Extract<ClassifiedContentEvent, { category: 'violence' }>['subtype'],
-  details: Extract<ClassifiedContentEvent, { category: 'violence' }>['details'],
+  details: Omit<Extract<ClassifiedContentEvent, { category: 'violence' }>['details'], 'actionPurpose'> & {
+    actionPurpose?: Extract<ClassifiedContentEvent, { category: 'violence' }>['details']['actionPurpose']
+  },
   overrides: Partial<Extract<ClassifiedContentEvent, { category: 'violence' }>> = {},
 ): Extract<ClassifiedContentEvent, { category: 'violence' }> {
   return {
     ...base,
     category: 'violence',
     subtype,
-    details,
+    details: { actionPurpose: 'unknown', ...details },
     ...overrides,
   }
 }
