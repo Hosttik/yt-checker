@@ -239,9 +239,13 @@ function scenesBelongToSameStoryArc(a: DraftScene, b: DraftScene): boolean {
 
   const sameActor = scenesShareReviewValue(a, b, 'actor')
   const sameTarget = scenesShareReviewValue(a, b, 'target')
-  const coerciveContinuation = sceneHasDirectedCoercion(a) && sceneHasDirectedCoercion(b)
+  const leftActors = reviewValues(a, 'actor')
+  const rightActors = reviewValues(b, 'actor')
+  const coerciveContinuation = sceneHasDirectedCoercion(a)
+    && sceneHasDirectedCoercion(b)
+    && (sameActor || leftActors.length === 0 || rightActors.length === 0)
 
-  return sameActor || sameTarget || coerciveContinuation
+  return (sameActor && sameTarget) || coerciveContinuation
 }
 
 function mergeStoryArcScenes(scenes: DraftScene[]): DraftScene[] {
