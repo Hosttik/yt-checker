@@ -523,7 +523,7 @@ export class TranscriptApiClient {
         request: {
           method: 'GET',
           url: url.toString(),
-          headers: { authorization: 'Bearer <redacted>'; accept: 'application/json' } as const,
+          headers: { authorization: 'Bearer <redacted>', accept: 'application/json' },
           startedAt,
         },
         response: null,
