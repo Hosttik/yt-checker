@@ -120,6 +120,8 @@ describe('content reporting', () => {
     expect(report.peakConcern).toBe('high')
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
+    expect(report.moderatePlusPrevalence).toBe('rare')
+    expect(report.moderatePlusAffectedVideos).toBe(1)
   })
   it('merges overlapping narrative scenes even when the model used different scene ids', () => {
     const first = violenceEvent({
@@ -226,6 +228,31 @@ describe('content reporting', () => {
 
     const scene = buildPresentationScenes([first, second, third])[0]!
     expect(scene.summary.split('.').filter(Boolean).length).toBeLessThanOrEqual(2)
+  })
+
+  it('separates low-signal prevalence from moderate-plus prevalence', () => {
+    const low = violenceEvent({ parentRelevance: 'low', displayLevel: 'summary' })
+    const moderate = violenceEvent({
+      id: 'moderate',
+      parentRelevance: 'moderate',
+      displayLevel: 'summary',
+      severity: 'medium',
+    })
+
+    const report = buildChannelCategoryReports([
+      { videoId: 'v1', events: [moderate] },
+      { videoId: 'v2', events: [low] },
+      { videoId: 'v3', events: [low] },
+      { videoId: 'v4', events: [low] },
+      { videoId: 'v5', events: [low] },
+      { videoId: 'v6', events: [low] },
+      ...Array.from({ length: 4 }, (_, index) => ({ videoId: `v${index + 7}`, events: [] })),
+    ], ['violence'], 10, 'normal')[0]!
+
+    expect(report.prevalence).toBe('common')
+    expect(report.affectedVideos).toBe(6)
+    expect(report.moderatePlusPrevalence).toBe('rare')
+    expect(report.moderatePlusAffectedVideos).toBe(1)
   })
 
 })
