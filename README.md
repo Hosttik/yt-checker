@@ -155,7 +155,7 @@ Unit tests с подставленными ответами проверяют �
 ## Storage и безопасность
 
 - `none`: ничего не записывает.
-- `minimal`: только `result.json` с evidence и usage.
+- `minimal`: только производный `result.json`; точный transcript/evidence text и diagnostic candidate trace не сохраняются.
 - `diagnostic`: дополнительно `transcriptapi-exchanges.json` и `openai-analysis.json` с нормализованным transcript, компактными provider metadata (`requestId`, latency, cache diagnostics/usage), parsed result или безопасной ошибкой. Дубли raw JSON/text, повторяющиеся prompt/schema и encrypted reasoning blobs не сохраняются.
 
 Diagnostic требует `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`. API-ключ OpenAI никогда не попадает в request metadata, логи или файлы.
