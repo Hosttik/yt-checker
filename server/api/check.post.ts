@@ -200,8 +200,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   let successfulAnalyses = 0
   let candidateIndex = 0
   let stoppedForOpenAIProviderError = false
+  let transcriptCreditBudgetExhausted = false
+  const transcriptCreditBudget = targetVideos
 
   while (successfulAnalyses < targetVideos) {
+    if (transcriptProvider.getCreditUsage().transcriptCredits >= transcriptCreditBudget) {
+      transcriptCreditBudgetExhausted = true
+      break
+    }
     if (candidateIndex >= eligibleVideos.length) {
       await loadFallbackVideos()
       if (candidateIndex >= eligibleVideos.length) break
@@ -291,13 +297,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         code: analysisError.code ?? null,
       })
 
-      // A provider/auth/rate-limit/server failure is likely systemic. Stop here instead of
-      // spending TranscriptAPI credits on more videos that cannot be analyzed anyway.
-      // Schema/evidence failures may be content-specific, so replacement videos are allowed.
-      if (analysisError.type !== 'schema') {
-        stoppedForOpenAIProviderError = true
-        break
-      }
+      // OpenAI is downstream of the paid transcript fetch. If analysis fails for any reason,
+      // stop the scan instead of spending more TranscriptAPI credits on videos we cannot
+      // confidently classify.
+      stoppedForOpenAIProviderError = true
+      break
     }
   }
 
@@ -327,9 +331,13 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     videos: videoResults,
     limitations: [
       'Each transcript is normalized and analyzed by one OpenAI Responses API request.',
-      'Transcript retrieval failures are replaced with the next caption-eligible video when available.',
+      `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
+      'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
+      transcriptCreditBudgetExhausted
+        ? 'The scan stopped because its paid TranscriptAPI transcript-credit budget was exhausted.'
+        : 'The paid TranscriptAPI transcript-credit budget was not exhausted.',
       stoppedForOpenAIProviderError
-        ? 'The scan stopped after a non-schema OpenAI provider error to avoid consuming extra TranscriptAPI credits.'
+        ? 'The scan stopped after an OpenAI analysis error to avoid consuming more TranscriptAPI credits.'
         : 'OpenAI analysis completed without a scan-stopping provider error.',
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions.',
       storageMode === 'diagnostic'
