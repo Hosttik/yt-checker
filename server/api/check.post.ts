@@ -8,8 +8,17 @@ import type {
   VideoMetadata,
   VideoScanResult,
 } from '../../shared/types/check'
-import { RULE_IDS, SCAN_STORAGE_MODES } from '../../shared/types/check'
-import { buildDetections, buildRuleSummary } from '../domain/analyze-transcript'
+import { ANALYSIS_PROFILES, RULE_IDS, SCAN_STORAGE_MODES, SELECTABLE_RULE_IDS } from '../../shared/types/check'
+import type { AnalysisProfile, ContentEvent, RejectedContentCandidate } from '../../shared/types/content'
+import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../domain/analyze-transcript'
+import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
+import { applyContentPolicy } from '../domain/content-policy'
+import { normalizeClassifiedEvents } from '../domain/content-normalization'
+import {
+  buildChannelCategoryReports,
+  buildPresentationScenes,
+  buildVideoCategoryReports,
+} from '../domain/content-reporting'
 import { captionLanguageMismatch, captionSource } from '../domain/caption-language'
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
@@ -39,8 +48,9 @@ const checkRequestSchema = z.object({
   channelUrl: z.string().trim().min(1).max(500),
   videoLimit: z.number().int().min(1).max(10).default(10),
   language: languageSchema,
-  ruleIds: z.array(z.enum(RULE_IDS)).min(1).default([...RULE_IDS]),
+  ruleIds: z.array(z.enum(RULE_IDS)).min(1).default([...SELECTABLE_RULE_IDS]),
   storageMode: z.enum(SCAN_STORAGE_MODES).default('minimal'),
+  profile: z.enum(ANALYSIS_PROFILES).default('normal'),
 })
 
 function transcriptReason(error: unknown): TranscriptUnavailableReason {
@@ -143,12 +153,17 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
+  const enabledCategories = normalizeRequestedCategories(enabledRuleIds)
+  const profile = request.profile as AnalysisProfile
+  const diagnosticAnalysis = profile === 'diagnostic' || storageMode === 'diagnostic'
 
   logger.info('scan.started', {
     storageMode,
     targetVideos,
     requestedLanguage: languagePriority || 'auto',
     enabledRules: enabledRuleIds,
+    enabledCategories,
+    profile,
     analysisProvider: 'openai',
     model: openaiModel,
     reasoningEffort: 'low',
@@ -220,6 +235,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const videoResults: VideoScanResult[] = []
+  const contentEventsByVideo = new Map<string, ContentEvent[]>()
+  const rejectedCandidatesByVideo = new Map<string, RejectedContentCandidate[]>()
   const openaiUsage: AggregateOpenAIUsage = {
     requests: 0,
     inputTokens: 0,
@@ -283,12 +300,77 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       const analysis = await analyzer.analyze(
         normalized,
         resolvedLanguage,
-        enabledRuleIds,
-        storageMode === 'diagnostic',
+        enabledCategories,
+        diagnosticAnalysis,
       )
-      storage.recordOpenAISuccess(video.id, analysis, normalized.text)
+      const policyEvents = normalizeClassifiedEvents(
+        analysis.classifiedEvents.filter((classifiedEvent) =>
+          enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
+        ),
+      ).map((classifiedEvent, eventIndex) => {
+        const candidateId = classifiedEvent.sourceCandidateId
+          ? `${video.id}:${classifiedEvent.sourceCandidateId}`
+          : undefined
+        const sceneId = classifiedEvent.sceneId
+          ? `${video.id}:${classifiedEvent.sceneId}`
+          : undefined
+        const normalizedEvent = {
+          ...classifiedEvent,
+          sourceCandidateId: candidateId,
+          sceneId,
+        }
+        logger.debug('content.candidate', {
+          videoId: video.id,
+          candidateId: candidateId ?? null,
+          sceneId: sceneId ?? null,
+          suspectedCategory: classifiedEvent.category,
+          startMs: classifiedEvent.startMs,
+          endMs: classifiedEvent.endMs,
+        })
+        const eventId = `${video.id}:${classifiedEvent.sourceCandidateId ?? `event_${eventIndex}`}:${classifiedEvent.category}:${classifiedEvent.subtype}`
+        const contentEvent = applyContentPolicy(normalizedEvent, eventId, profile)
+        logger.debug('content.classified', {
+          videoId: video.id,
+          eventId,
+          candidateId: candidateId ?? null,
+          sceneId: sceneId ?? null,
+          category: contentEvent.category,
+          subtype: contentEvent.subtype,
+          severity: contentEvent.severity,
+          confidence: contentEvent.confidence,
+        })
+        logger.debug('content.relevance', {
+          videoId: video.id,
+          eventId,
+          parentRelevance: contentEvent.parentRelevance,
+        })
+        logger.debug('content.display', {
+          videoId: video.id,
+          eventId,
+          displayLevel: contentEvent.displayLevel,
+        })
+        return contentEvent
+      })
+      const rejectedCandidates = (analysis.rejectedCandidates ?? []).map((candidate) => ({
+        ...candidate,
+        candidateId: `${video.id}:${candidate.candidateId}`,
+        sceneId: candidate.sceneId ? `${video.id}:${candidate.sceneId}` : undefined,
+      }))
+      for (const candidate of rejectedCandidates) {
+        logger.debug('content.rejected', {
+          videoId: video.id,
+          candidateId: candidate.candidateId,
+          sceneId: candidate.sceneId ?? null,
+          category: candidate.suspectedCategory,
+          reason: candidate.reason,
+        })
+      }
+      contentEventsByVideo.set(video.id, policyEvents)
+      rejectedCandidatesByVideo.set(video.id, rejectedCandidates)
+      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents)
       addUsage(openaiUsage, analysis.usage)
-      const detections = buildDetections(analysis.violations, enabledRuleIds)
+      const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
+      const detections = buildDetections(violations, enabledRuleIds)
       videoResults.push({
         ...video,
         url,
@@ -298,13 +380,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         captionSourceMismatch: captionLanguageMismatch(video.expectedCaptionLanguage, transcript.language),
         openaiUsage: analysis.usage,
         speechQuality,
-        violations: analysis.violations,
+        violations,
         detections,
       })
       successfulAnalyses += 1
       logger.info('video.analysis.completed', {
         videoId: video.id,
-        violationCount: analysis.violations.length,
+        classifiedEventCount: analysis.classifiedEvents.length,
+        normalizedEventCount: policyEvents.length,
         inputTokens: analysis.usage.inputTokens,
         outputTokens: analysis.usage.outputTokens,
         reasoningTokens: analysis.usage.reasoningTokens,
@@ -318,8 +401,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         model: openaiModel,
         reasoningEffort: 'low',
         transcriptLanguage: transcript.language ?? (languagePriority || 'unknown'),
-        enabledCategories: enabledRuleIds,
-        diagnostic: storageMode === 'diagnostic',
+        enabledCategories,
+        diagnostic: diagnosticAnalysis,
         promptVersion: OPENAI_PROMPT_VERSION,
         schemaVersion: OPENAI_SCHEMA_VERSION,
       }, normalized?.text ?? '')
@@ -357,9 +440,61 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const analyzedVideos = videoResults.filter((video) => video.status === 'analyzed').length
+  const contentEvents = videoResults.flatMap((video) => contentEventsByVideo.get(video.id) ?? [])
+  const videoReports = videoResults
+    .filter((video) => video.status === 'analyzed')
+    .map((video) => {
+      const events = contentEventsByVideo.get(video.id) ?? []
+      const report = {
+        videoId: video.id,
+        categoryReports: buildVideoCategoryReports(events, enabledCategories),
+        scenes: buildPresentationScenes(events),
+        ...(profile === 'diagnostic'
+          ? {
+              candidates: events.map((event) => ({
+                candidateId: event.sourceCandidateId ?? event.id,
+                sceneId: event.sceneId,
+                suspectedCategory: event.category,
+                startMs: event.startMs,
+                endMs: event.endMs,
+                text: event.text,
+              })),
+              rejectedCandidates: rejectedCandidatesByVideo.get(video.id) ?? [],
+            }
+          : {}),
+      }
+      logger.debug('content.aggregate', {
+        videoId: video.id,
+        sceneCount: report.scenes.length,
+        categoryCount: report.categoryReports.filter((item) => item.rawEventCount > 0).length,
+      })
+      return report
+    })
+  const channelReport = buildChannelCategoryReports(
+    videoResults
+      .filter((video) => video.status === 'analyzed')
+      .map((video) => ({ videoId: video.id, events: contentEventsByVideo.get(video.id) ?? [] })),
+    enabledCategories,
+    analyzedVideos,
+    profile,
+  )
+
+  logger.debug('content.aggregate', {
+    scope: 'channel',
+    categories: channelReport.map((item) => ({
+      category: item.category,
+      level: item.level,
+      rawAffectedVideos: item.rawAffectedVideos,
+      affectedVideos: item.affectedVideos,
+      rawEventCount: item.rawEventCount,
+      displayedEventCount: item.displayedEventCount,
+    })),
+  })
+
   const result: ChannelCheckResponse = {
     scanId: storageMode === 'none' ? undefined : storage.scanId,
     storageMode,
+    profile,
     channel: latest.channel,
     requestedVideos: targetVideos,
     analyzedVideos,
@@ -380,10 +515,13 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       usedChannelVideosFallback,
       requestedLanguage: languagePriority || 'auto',
     },
+    contentEvents,
+    videoReports,
+    channelReport,
     summary: buildRuleSummary(videoResults, enabledRuleIds),
     videos: videoResults,
     limitations: [
-      'Each transcript is normalized and analyzed by one OpenAI Responses API request.',
+      'Each transcript is normalized and analyzed by one OpenAI Responses API request that classifies factual content events; deterministic backend policies decide parental relevance and display.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
@@ -395,7 +533,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       stoppedForOpenAIProviderError
         ? 'The scan stopped after an OpenAI analysis error to avoid consuming more TranscriptAPI credits.'
         : 'OpenAI analysis completed without a scan-stopping provider error.',
-      'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions.',
+      'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions. Absence of transcript evidence is not a claim about unseen visuals.',
       'Speech-quality metrics are local heuristics, not safety violations or an overall quality score.',
       storageMode === 'diagnostic'
         ? 'Diagnostic mode stores normalized transcripts and redacted provider diagnostics on the server.'

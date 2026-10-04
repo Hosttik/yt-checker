@@ -1,9 +1,58 @@
 import type {
-  RuleDetection, RuleId, RuleSeverity, RuleSummary, VideoScanResult, ViolationEvidence,
+  RuleDetection,
+  RuleId,
+  RuleSeverity,
+  RuleSummary,
+  VideoScanResult,
+  ViolationEvidence,
 } from '../../shared/types/check'
+import type { ContentEvent } from '../../shared/types/content'
+import { ruleMatchesEvent } from './content-categories'
 import { RULE_LABELS } from './rules'
 
 const severityRank: Record<RuleSeverity, number> = { low: 0, medium: 1, high: 2 }
+
+function legacyContext(event: ContentEvent): ViolationEvidence['context'] {
+  if (event.context === 'real_world') return 'realistic'
+  if (event.context === 'fiction') return 'fantasy'
+  if (event.context === 'educational') return 'educational'
+  if (event.context === 'game') return 'game'
+  return 'other'
+}
+
+function legacyType(event: ContentEvent): ViolationEvidence['type'] {
+  if (event.category !== 'profanity_and_rude_language') return 'not_applicable'
+  return event.subtype === 'rude_language' ? 'rude_language' : 'profanity'
+}
+
+function preferredLegacyCategory(event: ContentEvent, requestedRuleIds: RuleId[]): RuleId {
+  if (event.category !== 'substances') return event.category
+  if (event.subtype === 'nicotine' && requestedRuleIds.includes('tobacco_and_nicotine')) {
+    return 'tobacco_and_nicotine'
+  }
+  if (event.subtype !== 'nicotine' && requestedRuleIds.includes('alcohol_and_drugs')) {
+    return 'alcohol_and_drugs'
+  }
+  return 'substances'
+}
+
+export function buildLegacyViolations(
+  events: ContentEvent[],
+  requestedRuleIds: RuleId[],
+): ViolationEvidence[] {
+  return events
+    .filter((event) => requestedRuleIds.some((ruleId) => ruleMatchesEvent(ruleId, event)))
+    .map((event) => ({
+      category: preferredLegacyCategory(event, requestedRuleIds),
+      severity: event.severity,
+      context: legacyContext(event),
+      type: legacyType(event),
+      startMs: event.startMs,
+      endMs: event.endMs,
+      text: event.text,
+      reason: event.reason,
+    }))
+}
 
 export function buildDetections(
   violations: ViolationEvidence[],
