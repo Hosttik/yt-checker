@@ -72,7 +72,8 @@ h1 {
   background: #fff;
 }
 
-.storage-field { grid-column: 1 / -1; }
+.storage-field,
+.language-field { grid-column: 1 / -1; }
 
 .warning {
   color: #8b5a00;
@@ -222,6 +223,7 @@ legend { margin-bottom: 10px; font-weight: 800; }
 
   .limit-field,
   .storage-field,
+  .language-field,
   .check-form button,
   fieldset {
     grid-column: auto;
