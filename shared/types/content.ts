@@ -237,6 +237,9 @@ export interface ChannelCategoryReport {
   peakConcern: ReportLevel
   prevalence: PrevalenceLevel
   affectedRatio: number
+  moderatePlusPrevalence: PrevalenceLevel
+  moderatePlusAffectedRatio: number
+  moderatePlusAffectedVideos: number
   analyzedVideos: number
   rawAffectedVideos: number
   affectedVideos: number
