@@ -28,7 +28,25 @@ const result: ChannelCheckResponse = {
     requestedLanguage: 'ru',
   },
   summary: [],
-  videos: [],
+  videos: [
+    {
+      id: 'video-one11',
+      title: 'Video one',
+      publishedAt: '',
+      status: 'analyzed',
+      transcriptLanguage: 'ru',
+      contextFilterStatus: 'applied',
+      detections: [
+        {
+          ruleId: 'insults',
+          label: 'Оскорбления',
+          severity: 'medium',
+          count: 1,
+          ranges: [{ startMs: 12_400, endMs: 14_400 }],
+        },
+      ],
+    },
+  ],
   limitations: [],
 }
 
@@ -71,8 +89,19 @@ describe('ScanStorage', () => {
     })
 
     storage.recordAnalysisTrace({
+      timestamp: '2026-10-04T00:00:01Z',
       event: 'candidate.final_violation',
-      phrase: 'raw violation phrase',
+      videoId: 'video-one11',
+      candidateId: 'c7',
+      ruleId: 'insults',
+      ruleLabel: 'Оскорбления',
+      hitCount: 1,
+      matchedTerms: ['дебил'],
+      phrase: 'да ты дебил вообще',
+      context: 'ну хватит [CANDIDATE] да ты дебил вообще пошли дальше',
+      startMs: 12_400,
+      endMs: 14_400,
+      resolution: 'kept_after_jev',
     })
 
     await storage.save({ ...result, storageMode: 'diagnostic', scanId: storage.scanId })
@@ -89,6 +118,26 @@ describe('ScanStorage', () => {
     expect(raw).toContain('Bearer <redacted>')
 
     const trace = await readFile(join(root, storage.scanId, 'analysis-trace.json'), 'utf8')
-    expect(trace).toContain('raw violation phrase')
+    expect(trace).toContain('да ты дебил вообще')
+
+    const diagnosticResult = JSON.parse(
+      await readFile(join(root, storage.scanId, 'result.json'), 'utf8'),
+    )
+    expect(diagnosticResult.videos[0].diagnosticViolations).toEqual([
+      {
+        candidateId: 'c7',
+        ruleId: 'insults',
+        ruleLabel: 'Оскорбления',
+        hitCount: 1,
+        matchedTerms: ['дебил'],
+        phrase: 'да ты дебил вообще',
+        context: 'ну хватит [CANDIDATE] да ты дебил вообще пошли дальше',
+        startMs: 12_400,
+        endMs: 14_400,
+        youtubeUrl: 'https://www.youtube.com/watch?v=video-one11&t=12s',
+        resolution: 'kept_after_jev',
+      },
+    ])
+    expect(diagnosticResult.diagnostic.finalViolationCount).toBe(1)
   })
 })
