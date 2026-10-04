@@ -43,6 +43,23 @@ describe('TranscriptApiClient', () => {
     expect(client.getCreditUsage().transcriptCredits).toBe(1)
     expect(client.getTranscriptHttpRequestCount()).toBe(1)
   })
+
+  it('uses X-Credits-Charged as the authoritative provider billing value', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      video_id: 'video-one11',
+      language: 'ru',
+      transcript: [{ text: 'тест', start: 0, duration: 1 }],
+    }), {
+      status: 200,
+      headers: { 'X-Credits-Charged': '2' },
+    })))
+    const client = new TranscriptApiClient('key')
+    await client.getTranscript('video-one11')
+    expect(client.getCreditUsage()).toMatchObject({
+      transcriptCredits: 2,
+      totalCredits: 2,
+    })
+  })
   it.each([200, 503])('records interrupted HTTP %s bodies and accounts for paid responses', async (status) => {
     const response = new Response('', { status })
     vi.spyOn(response, 'text').mockRejectedValue(new Error('socket closed'))
