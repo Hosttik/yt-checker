@@ -131,3 +131,81 @@ The production default should remain `minimal` or `none`.
 Raw transcript content must not be persisted, cached, logged, returned from our API or displayed in the UI. Only bounded candidate context may be sent to Jev. Persistent product data should remain derived analysis plus the minimum channel/video metadata needed to render the result.
 
 See [SECURITY.md](./SECURITY.md) for the container and diagnostic-storage threat model.
+
+
+## Production-like local run with full diagnostics
+
+For local integration testing there is a dedicated production-image configuration with maximum diagnostics:
+
+```bash
+mkdir -p scan-results
+docker compose -f compose.full-debug.yaml up --build
+```
+
+This mode forces:
+
+```text
+NODE_ENV=production (from the runtime image)
+NUXT_LOG_LEVEL=debug
+NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
+NUXT_PUBLIC_DEFAULT_STORAGE_MODE=diagnostic
+```
+
+The browser UI therefore opens with `Diagnostic` selected by default.
+
+Operational logs are structured JSON and are visible with:
+
+```bash
+docker compose -f compose.full-debug.yaml logs -f app
+```
+
+Typical events include:
+
+```text
+scan.started
+channel.latest.loaded
+transcriptapi.exchange
+video.preflight.completed
+scan.selection.completed
+video.analysis.started
+video.regex.completed
+jev.exchange
+video.jev.completed
+video.analysis.completed
+scan.storage.completed
+scan.completed
+```
+
+Stdout intentionally contains metadata only: status codes, latency, counts, video IDs, credit usage and state transitions. API keys and raw transcript/Jev context are not printed to stdout.
+
+Complete diagnostic payloads are instead written to:
+
+```text
+scan-results/<scan-id>/
+  result.json
+  transcriptapi-exchanges.json
+  jev-exchanges.json
+```
+
+`transcriptapi-exchanges.json` contains complete provider response bodies including transcript text. `jev-exchanges.json` contains the bounded candidate contexts sent to Jev. Authorization headers are redacted.
+
+Docker stdout uses the `json-file` driver with rotation:
+
+```text
+max-size: 20m
+max-file: 5
+```
+
+Stop the full-debug stack with:
+
+```bash
+docker compose -f compose.full-debug.yaml down
+```
+
+Delete diagnostic content when finished:
+
+```bash
+rm -rf scan-results/*
+```
+
+This configuration is intentionally for local/staging diagnosis. Do not expose it as the public production configuration because diagnostic artifacts contain raw third-party transcript text.

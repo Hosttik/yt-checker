@@ -11,8 +11,10 @@ export default defineNuxtConfig({
     typesafeBenignDropProbability: 0.8,
     scanStorageDir: '/data/scans',
     allowDiagnosticStorage: false,
+    logLevel: 'info',
     public: {
       appName: 'YT Checker',
+      defaultStorageMode: 'minimal',
     },
   },
   typescript: {

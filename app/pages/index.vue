@@ -16,9 +16,17 @@ const availableRules: Array<{ id: RuleId; label: string }> = [
   { id: 'alcohol_drugs', label: 'Алкоголь и наркотики' },
 ]
 
+const runtimeConfig = useRuntimeConfig()
+const configuredStorageMode = runtimeConfig.public.defaultStorageMode
+const defaultStorageMode: ScanStorageMode = configuredStorageMode === 'none'
+  || configuredStorageMode === 'minimal'
+  || configuredStorageMode === 'diagnostic'
+  ? configuredStorageMode
+  : 'minimal'
+
 const channelUrl = ref('')
 const videoLimit = ref(10)
-const storageMode = ref<ScanStorageMode>('minimal')
+const storageMode = ref<ScanStorageMode>(defaultStorageMode)
 const selectedRuleIds = ref<RuleId[]>(availableRules.map((rule) => rule.id))
 const loading = ref(false)
 const result = ref<ChannelCheckResponse | null>(null)
