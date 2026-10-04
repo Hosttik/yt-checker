@@ -138,6 +138,35 @@ describe('OpenAI content-event classifier', () => {
       .rejects.toMatchObject({ type: 'schema' })
   })
 
+  it('rejects inconsistent normalized substance subtype/details', async () => {
+    const { provider } = providerWith({
+      events: [{
+        candidateId: 'candidate_0_1',
+        sceneId: 'scene_0',
+        category: 'substances',
+        subtype: 'nicotine',
+        severity: 'low',
+        context: 'real_world',
+        confidence: 0.9,
+        evidenceStrength: 'explicit',
+        engagementLevel: 'mention',
+        portrayal: 'neutral',
+        explicitness: 'none',
+        startSegment: 0,
+        endSegment: 0,
+        reason: 'Упоминание сигареты.',
+        details: {
+          substance: 'alcohol',
+          action: 'mention',
+          userType: 'adult',
+        },
+      }],
+    })
+
+    await expect(provider.analyze(transcript(['Сигарета лежит на столе.']), 'ru', ['substances'], false))
+      .rejects.toMatchObject({ type: 'schema' })
+  })
+
   it('filters classifications outside enabled categories', async () => {
     const { provider } = providerWith({ events: [violenceEvent] })
     const result = await provider.analyze(transcript(['Мне подарили меч.']), 'ru', ['insults'], false)
