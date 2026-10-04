@@ -80,8 +80,8 @@ export interface TranscriptApiExchange {
     status: number
     statusText: string
     headers: Record<string, string>
-    bodyText: string
-    bodyJson: unknown
+    bodyText?: string
+    bodyJson?: unknown
   } | null
   networkError?: {
     name: string
@@ -181,8 +181,14 @@ function isRetryableTranscriptError(error: unknown): error is TranscriptApiError
     || [500, 502, 503, 504].includes(error.status)
 }
 
-function headersToObject(headers: Headers): Record<string, string> {
-  return Object.fromEntries(headers.entries())
+function diagnosticHeaders(headers: Headers): Record<string, string> {
+  const keys = ['content-type', 'retry-after', 'x-cache-status', 'x-credits-charged']
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const value = headers.get(key)
+      return value === null ? [] : [[key, value]]
+    }),
+  )
 }
 
 function chargedCreditsFromResponse(
@@ -576,9 +582,9 @@ export class TranscriptApiClient {
         latencyMs: Math.round((performance.now() - started) * 100) / 100,
         status: response.status,
         statusText: response.statusText,
-        headers: headersToObject(response.headers),
-        bodyText,
-        bodyJson,
+        headers: diagnosticHeaders(response.headers),
+        ...(bodyJson === null ? { bodyText } : {}),
+        ...(bodyJson === null ? {} : { bodyJson }),
       },
       chargedCredits,
       networkError: bodyReadError ? { name: 'BodyReadError', message: 'Response body interrupted.' } : undefined,
