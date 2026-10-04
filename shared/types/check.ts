@@ -2,9 +2,11 @@ import type {
   AnalysisProfile,
   ChannelCategoryReport,
   ContentCategory,
+  ContentCandidate,
   ContentEvent,
   LegacyRuleId,
   PresentationScene,
+  RejectedContentCandidate,
   RuleSeverity,
   VideoCategoryReport,
 } from './content'
@@ -161,6 +163,8 @@ export interface VideoContentReport {
   videoId: string
   categoryReports: VideoCategoryReport[]
   scenes: PresentationScene[]
+  candidates?: ContentCandidate[]
+  rejectedCandidates?: RejectedContentCandidate[]
 }
 
 export interface ChannelCheckResponse {
