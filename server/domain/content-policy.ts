@@ -140,7 +140,14 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
       && details.actionPurpose === 'accident'
       && event.severity === 'low') return 'minimal'
     if (event.subtype === 'fantasy_combat') return event.severity === 'high' ? 'high' : 'moderate'
-    if (event.subtype === 'dangerous_situation' || event.subtype === 'destruction') {
+    if (event.subtype === 'dangerous_situation') {
+      if (details.weaponRole === 'threatened_use'
+        || (details.actionPurpose === 'threat' && details.harmLevel === 'threatened')) {
+        return event.severity === 'low' ? 'moderate' : 'high'
+      }
+      return event.severity === 'low' && details.harmLevel === 'none' ? 'low' : 'moderate'
+    }
+    if (event.subtype === 'destruction') {
       return event.severity === 'low' && details.harmLevel === 'none' ? 'low' : 'moderate'
     }
     return severityFloor(event)
