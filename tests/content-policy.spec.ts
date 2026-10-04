@@ -189,6 +189,17 @@ describe('multi-label presentation and aggregation', () => {
     expect(scenes[0]?.events).toHaveLength(2)
   })
 
+  it('does not leak hidden minimal findings through the normal report summary', () => {
+    const hidden = applyContentPolicy(violence('weapon_presence', {
+      harmLevel: 'none', targetType: 'object', weaponRole: 'possessed',
+    }), 'hidden_weapon', 'normal')
+    const report = buildVideoCategoryReports([hidden], ['violence'])[0]
+
+    expect(report?.displayedEventCount).toBe(0)
+    expect(report?.level).toBe('none')
+    expect(report?.summary).toBe('Для выбранного профиля значимых элементов не показано.')
+  })
+
   it('does not escalate many hidden minimal weapon mentions into a worse normal report', () => {
     const events: ContentEvent[] = Array.from({ length: 10 }, (_, index) =>
       applyContentPolicy(violence('weapon_presence', {
