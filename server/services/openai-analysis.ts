@@ -910,21 +910,22 @@ export class OpenAIAnalysisProvider {
           format: zodTextFormat(OPENAI_REVIEW_SCHEMA, 'content_event_review'),
         },
       })
-      if (response.status !== 'completed' || !response.output_parsed) {
+      const parsed = response.output_parsed
+      if (response.status !== 'completed' || !parsed) {
         const error = new OpenAIAnalysisError('schema', 'OpenAI review response was incomplete, refused, or empty.')
         error.usage = usageOf(response)
         error.provider = providerMetadata(response, started)
         error.outputText = response.output_text
         throw error
       }
-      return response
+      return { response, parsed }
     }
 
     let firstResponse: Awaited<ReturnType<typeof requestBatch>> | undefined
     try {
       firstResponse = await requestBatch(items, false)
       const responses = [firstResponse]
-      const firstById = new Map(firstResponse.output_parsed.reviews.map((item) => [item.reviewItemId, item]))
+      const firstById = new Map(firstResponse.parsed.reviews.map((item) => [item.reviewItemId, item]))
       const missingItems = items.filter((item) => !firstById.has(item.reviewItemId))
       let retryError: OpenAIAnalysisError | undefined
 
@@ -944,7 +945,7 @@ export class OpenAIAnalysisProvider {
         }
       }
 
-      const parsed = responses.flatMap((response) => response.output_parsed.reviews)
+      const parsed = responses.flatMap(({ parsed: batch }) => batch.reviews)
       const byId = new Map(parsed.map((item) => [item.reviewItemId, item]))
       const knownIds = new Set(items.map((item) => item.reviewItemId))
       const duplicateIds = parsed.length !== byId.size
@@ -1055,9 +1056,9 @@ export class OpenAIAnalysisProvider {
       const reviewedCandidates = decisions.filter((item) => item.verdict !== 'not_reviewed').length
       const rejectedCandidates = decisions.filter((item) => item.verdict === 'rejected').length
       const uncertainCandidates = decisions.filter((item) => item.verdict === 'uncertain').length
-      const lastResponse = responses.at(-1) ?? firstResponse
+      const lastResponse = responses.at(-1)?.response ?? firstResponse.response
       const outputParts = responses
-        .map((response) => response.output_text)
+        .map(({ response }) => response.output_text)
         .filter((value): value is string => Boolean(value))
       if (retryError?.outputText) outputParts.push(retryError.outputText)
 
@@ -1077,7 +1078,7 @@ export class OpenAIAnalysisProvider {
           ? outputParts.join('\n--- targeted review retry ---\n')
           : undefined,
         usage: mergedUsage(
-          ...responses.map((response) => usageOf(response)),
+          ...responses.map(({ response }) => usageOf(response)),
           retryError?.usage,
         ),
         provider: providerMetadata(lastResponse, started),
@@ -1087,7 +1088,7 @@ export class OpenAIAnalysisProvider {
       const safeError = errorFrom(error)
       if (!safeError.provider) {
         safeError.provider = firstResponse
-          ? providerMetadata(firstResponse, started)
+          ? providerMetadata(firstResponse.response, started)
           : {
               requestId: error instanceof OpenAI.APIError
                 ? (error as unknown as { request_id?: string }).request_id
