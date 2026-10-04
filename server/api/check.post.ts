@@ -2,14 +2,18 @@ import { z } from 'zod'
 import type {
   AggregateOpenAIUsage,
   ChannelCheckResponse,
+  ContentReviewSummary,
+  OpenAIStageUsage,
+  OpenAIUsage,
   RuleId,
   ScanStorageMode,
   TranscriptUnavailableReason,
+  VideoContentReview,
   VideoMetadata,
   VideoScanResult,
 } from '../../shared/types/check'
 import { ANALYSIS_PROFILES, RULE_IDS, SCAN_STORAGE_MODES, SELECTABLE_RULE_IDS } from '../../shared/types/check'
-import type { AnalysisProfile, ContentEvent, RejectedContentCandidate } from '../../shared/types/content'
+import type { AnalysisProfile, ClassifiedContentEvent, ContentEvent, RejectedContentCandidate } from '../../shared/types/content'
 import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../domain/analyze-transcript'
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
@@ -19,15 +23,19 @@ import {
   buildChannelCategoryReports,
   buildPresentationScenes,
   buildVideoCategoryReports,
+  buildVideoContentSummary,
 } from '../domain/content-reporting'
 import { captionLanguageResolution, captionSource } from '../domain/caption-language'
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
 import {
   OPENAI_PROMPT_VERSION,
+  OPENAI_REVIEW_PROMPT_VERSION,
+  OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisError,
   OpenAIAnalysisProvider,
+  type OpenAIReviewResult,
 } from '../services/openai-analysis'
 import { ScanStorage } from '../services/scan-storage'
 import {
@@ -96,6 +104,29 @@ function addUsage(total: AggregateOpenAIUsage, usage: VideoScanResult['openaiUsa
   total.totalTokens += usage.totalTokens
 }
 
+function aggregateUsage(): AggregateOpenAIUsage {
+  return {
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cachedTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+  }
+}
+
+function combinedUsage(...items: Array<OpenAIUsage | undefined>): OpenAIUsage {
+  const total = aggregateUsage()
+  for (const item of items) addUsage(total, item)
+  const { requests: _requests, ...usage } = total
+  return usage
+}
+
+function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEvent[] {
+  return events.map((event) => ({ ...event, review: undefined }))
+}
+
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
   const parsed = checkRequestSchema.safeParse(await readBody(event))
   if (!parsed.success) {
@@ -109,6 +140,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const config = useRuntimeConfig(event)
   const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey
   const openaiModel = process.env.OPENAI_MODEL || config.openaiModel
+  const openaiReviewModel = process.env.OPENAI_REVIEW_MODEL || config.openaiReviewModel || openaiModel
   const openaiReasoningEffort = process.env.OPENAI_REASONING_EFFORT || config.openaiReasoningEffort
   if (!config.transcriptApiKey) {
     throw createError({ statusCode: 503, statusMessage: 'Server is missing NUXT_TRANSCRIPT_API_KEY.' })
@@ -152,6 +184,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
   )
   const analyzer = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
+  const reviewer = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
@@ -168,6 +201,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     profile,
     analysisProvider: 'openai',
     model: openaiModel,
+    reviewModel: openaiReviewModel,
     reasoningEffort: 'low',
   })
 
@@ -239,15 +273,12 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const videoResults: VideoScanResult[] = []
   const contentEventsByVideo = new Map<string, ContentEvent[]>()
   const rejectedCandidatesByVideo = new Map<string, RejectedContentCandidate[]>()
-  const openaiUsage: AggregateOpenAIUsage = {
-    requests: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    cachedTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: 0,
+  const openaiUsage = aggregateUsage()
+  const openaiStages: OpenAIStageUsage = {
+    detection: aggregateUsage(),
+    review: aggregateUsage(),
   }
+  let reviewDisabledAfterFailure = false
   let transcriptAttempts = 0
   let successfulAnalyses = 0
   let candidateIndex = 0
@@ -297,6 +328,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       normalized = normalizeTranscript(transcript.segments)
       if (!normalized.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
       openaiUsage.requests += 1
+      openaiStages.detection.requests += 1
       const resolvedLanguage = transcript.language ?? languagePriority
       const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
       const analysis = await analyzer.analyze(
@@ -305,11 +337,110 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         enabledCategories,
         diagnosticAnalysis,
       )
-      const semanticValidation = validateClassifiedEvents(
-        analysis.classifiedEvents.filter((classifiedEvent) =>
-          enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
-        ),
+      addUsage(openaiUsage, analysis.usage)
+      addUsage(openaiStages.detection, analysis.usage)
+
+      const firstPassEvents = analysis.classifiedEvents.filter((classifiedEvent) =>
+        enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
       )
+      let reviewedEvents = firstPassEvents
+      let reviewResult: OpenAIReviewResult | undefined
+      let reviewError: OpenAIAnalysisError | undefined
+      let contentReview: VideoContentReview
+
+      if (firstPassEvents.length === 0) {
+        contentReview = {
+          status: 'not_needed',
+          candidateCount: 0,
+          reviewedCount: 0,
+          rejectedCount: 0,
+          uncertainCount: 0,
+        }
+      } else if (reviewDisabledAfterFailure) {
+        reviewedEvents = unreviewedEvents(firstPassEvents)
+        contentReview = {
+          status: 'skipped_after_failure',
+          candidateCount: firstPassEvents.length,
+          reviewedCount: 0,
+          rejectedCount: 0,
+          uncertainCount: 0,
+          model: openaiReviewModel,
+          promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+          schemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+          error: {
+            type: 'provider',
+            message: 'Contextual review was skipped after an earlier reviewer failure in this scan.',
+          },
+        }
+      } else {
+        try {
+          openaiUsage.requests += 1
+          openaiStages.review.requests += 1
+          reviewResult = await reviewer.review(
+            normalized,
+            resolvedLanguage,
+            enabledCategories,
+            firstPassEvents,
+          )
+          addUsage(openaiUsage, reviewResult.usage)
+          addUsage(openaiStages.review, reviewResult.usage)
+          reviewedEvents = reviewResult.reviewedEvents.filter((classifiedEvent) =>
+            enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
+          )
+          const reviewIsPartial = !reviewResult.complete || reviewResult.uncertainCandidates > 0
+          contentReview = {
+            status: reviewIsPartial ? 'partial' : 'completed',
+            candidateCount: reviewResult.totalCandidates,
+            reviewedCount: reviewResult.reviewedCandidates,
+            rejectedCount: reviewResult.rejectedCandidates,
+            uncertainCount: reviewResult.uncertainCandidates,
+            model: reviewResult.requestMetadata.model,
+            promptVersion: reviewResult.requestMetadata.promptVersion,
+            schemaVersion: reviewResult.requestMetadata.schemaVersion,
+            latencyMs: reviewResult.provider.latencyMs,
+          }
+          logger.debug('content.review_completed', {
+            videoId: video.id,
+            status: contentReview.status,
+            candidates: contentReview.candidateCount,
+            reviewed: contentReview.reviewedCount,
+            rejected: contentReview.rejectedCount,
+            uncertain: contentReview.uncertainCount,
+            latencyMs: contentReview.latencyMs,
+          })
+        } catch (error) {
+          reviewError = error instanceof OpenAIAnalysisError
+            ? error
+            : new OpenAIAnalysisError('provider', 'OpenAI contextual review failed.')
+          addUsage(openaiUsage, reviewError.usage)
+          addUsage(openaiStages.review, reviewError.usage)
+          reviewDisabledAfterFailure = true
+          reviewedEvents = unreviewedEvents(firstPassEvents)
+          contentReview = {
+            status: 'failed',
+            candidateCount: firstPassEvents.length,
+            reviewedCount: 0,
+            rejectedCount: 0,
+            uncertainCount: 0,
+            model: openaiReviewModel,
+            promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+            schemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+            latencyMs: reviewError.provider?.latencyMs,
+            error: {
+              type: reviewError.type,
+              message: 'Contextual review failed; first-pass findings were retained.',
+            },
+          }
+          logger.warn('content.review_failed', {
+            videoId: video.id,
+            type: reviewError.type,
+            status: reviewError.status ?? null,
+            code: reviewError.code ?? null,
+          })
+        }
+      }
+
+      const semanticValidation = validateClassifiedEvents(reviewedEvents)
       for (const adjusted of semanticValidation.adjustments) {
         logger.debug('content.validation_adjusted', {
           videoId: video.id,
@@ -353,6 +484,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           suspectedCategory: classifiedEvent.category,
           startMs: classifiedEvent.startMs,
           endMs: classifiedEvent.endMs,
+          reviewStatus: classifiedEvent.review?.status ?? 'not_reviewed',
         })
         const eventId = `${video.id}:${classifiedEvent.sourceCandidateId ?? `event_${eventIndex}`}:${classifiedEvent.category}:${classifiedEvent.subtype}`
         const contentEvent = applyContentPolicy(normalizedEvent, eventId, profile)
@@ -370,6 +502,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           videoId: video.id,
           eventId,
           parentRelevance: contentEvent.parentRelevance,
+          reviewerRecommendation: contentEvent.review?.recommendedParentRelevance ?? null,
         })
         logger.debug('content.display', {
           videoId: video.id,
@@ -394,8 +527,18 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       }
       contentEventsByVideo.set(video.id, policyEvents)
       rejectedCandidatesByVideo.set(video.id, rejectedCandidates)
-      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents, semanticValidation.rejected, semanticValidation.adjustments)
-      addUsage(openaiUsage, analysis.usage)
+      storage.recordOpenAISuccess(
+        video.id,
+        analysis,
+        normalized.text,
+        policyEvents,
+        semanticValidation.rejected,
+        semanticValidation.adjustments,
+        contentReview,
+        reviewResult,
+        reviewError,
+      )
+      const videoUsage = combinedUsage(analysis.usage, reviewResult?.usage ?? reviewError?.usage)
       const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
       videoResults.push({
@@ -405,7 +548,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         transcriptLanguage: transcript.language,
         captionSource: captionSource(transcript.language),
         captionLanguageResolution: captionLanguageResolution(video.preflightCaptionLanguage, transcript.language),
-        openaiUsage: analysis.usage,
+        openaiUsage: videoUsage,
+        contentReview,
         speechQuality,
         violations,
         detections,
@@ -414,18 +558,20 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       logger.info('video.analysis.completed', {
         videoId: video.id,
         classifiedEventCount: analysis.classifiedEvents.length,
+        reviewedEventCount: reviewedEvents.length,
         normalizedEventCount: policyEvents.length,
         validationRejectedCount: semanticValidation.rejected.length,
         validationAdjustedCount: semanticValidation.adjustments.length,
-        inputTokens: analysis.usage.inputTokens,
-        outputTokens: analysis.usage.outputTokens,
-        reasoningTokens: analysis.usage.reasoningTokens,
+        reviewStatus: contentReview.status,
+        detectorTokens: analysis.usage.totalTokens,
+        reviewTokens: reviewResult?.usage.totalTokens ?? reviewError?.usage?.totalTokens ?? 0,
       })
     } catch (error) {
       const analysisError = error instanceof OpenAIAnalysisError
         ? error
         : new OpenAIAnalysisError('provider', 'OpenAI request failed.')
       addUsage(openaiUsage, analysisError.usage)
+      addUsage(openaiStages.detection, analysisError.usage)
       storage.recordOpenAIError(video.id, analysisError, {
         model: openaiModel,
         reasoningEffort: 'low',
@@ -474,10 +620,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     .filter((video) => video.status === 'analyzed')
     .map((video) => {
       const events = contentEventsByVideo.get(video.id) ?? []
+      const scenes = buildPresentationScenes(events)
       const report = {
         videoId: video.id,
         categoryReports: buildVideoCategoryReports(events, enabledCategories),
-        scenes: buildPresentationScenes(events),
+        scenes,
+        contentSummary: buildVideoContentSummary(scenes),
+        mainSceneCount: scenes.filter((scene) => scene.attention === 'main').length,
+        detailSceneCount: scenes.filter((scene) => scene.attention === 'details').length,
         ...(profile === 'diagnostic'
           ? {
               candidates: events.map((event) => ({
@@ -499,6 +649,21 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       })
       return report
     })
+  const analyzedReviewStatuses = videoResults
+    .filter((video) => video.status === 'analyzed')
+    .map((video) => video.contentReview)
+    .filter((review): review is VideoContentReview => Boolean(review))
+  const contentReview: ContentReviewSummary = {
+    model: openaiReviewModel,
+    promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+    schemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+    completedVideos: analyzedReviewStatuses.filter((review) => review.status === 'completed').length,
+    partialVideos: analyzedReviewStatuses.filter((review) => review.status === 'partial').length,
+    failedVideos: analyzedReviewStatuses.filter((review) => review.status === 'failed').length,
+    skippedVideos: analyzedReviewStatuses.filter((review) => review.status === 'skipped_after_failure').length,
+    notNeededVideos: analyzedReviewStatuses.filter((review) => review.status === 'not_needed').length,
+  }
+
   const channelReport = buildChannelCategoryReports(
     videoResults
       .filter((video) => video.status === 'analyzed')
@@ -531,6 +696,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     analysisMode: 'openai',
     creditUsage: transcriptProvider.getCreditUsage(),
     openaiUsage,
+    openaiStages,
+    contentReview,
     speechQuality: summarizeSpeechQuality(
       videoResults.flatMap((video) => video.speechQuality ? [video.speechQuality] : []),
     ),
@@ -550,7 +717,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: buildRuleSummary(videoResults, enabledRuleIds),
     videos: videoResults,
     limitations: [
-      'Each transcript is normalized and analyzed by one OpenAI Responses API request that classifies factual content events; deterministic backend policies decide parental relevance and display.',
+      'Each transcript is first analyzed for factual content events. Videos with detected candidates then receive one batched contextual review request over the original full transcript before deterministic backend display policy is applied.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
@@ -560,9 +727,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         ? 'The scan stopped after a systemic or ambiguous TranscriptAPI failure to avoid further paid requests.'
         : 'TranscriptAPI did not produce a scan-stopping provider failure.',
       stoppedForOpenAIProviderError
-        ? 'The scan stopped after an OpenAI analysis error to avoid consuming more TranscriptAPI credits.'
-        : 'OpenAI analysis completed without a scan-stopping provider error.',
+        ? 'The scan stopped after a first-pass OpenAI detection error to avoid consuming more TranscriptAPI credits.'
+        : 'First-pass OpenAI detection completed without a scan-stopping provider error.',
+      contentReview.failedVideos + contentReview.skippedVideos > 0
+        ? `Contextual review was unavailable for ${contentReview.failedVideos + contentReview.skippedVideos} analyzed video(s); their first-pass findings were retained and must not be interpreted as independently verified.`
+        : contentReview.partialVideos > 0
+          ? `Contextual review was partial for ${contentReview.partialVideos} analyzed video(s); uncertain or incomplete findings were retained conservatively.`
+          : 'Contextual review completed for videos that contained first-pass candidates.',
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions. Absence of transcript evidence is not a claim about unseen visuals.',
+      `Channel-level wording covers only the ${analyzedVideos} analyzed video transcript(s), not the entire channel.`,
       'Speech-quality metrics are local heuristics, not safety violations or an overall quality score.',
       storageMode === 'diagnostic'
         ? 'Diagnostic storage stores normalized transcripts and provider diagnostics on the server without changing classifier behavior.'

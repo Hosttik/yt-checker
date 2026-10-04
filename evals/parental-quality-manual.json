@@ -1,0 +1,242 @@
+[
+  {
+    "id": "one-off-mild-insult",
+    "annotationSource": "manual",
+    "split": "tuning",
+    "sourceVideo": "RmGCg3FRdb8",
+    "anchor": "Как же вы глупые и наивные",
+    "categories": [
+      "insults"
+    ],
+    "showToParent": true,
+    "priority": "details",
+    "why": "Это реальная направленная насмешка, но одна короткая мягкая реплика сама по себе не является серьёзным предупреждением.",
+    "requiredEvidence": [
+      "сама уничижительная реплика",
+      "понятно, что слова адресованы другим персонажам"
+    ],
+    "forbiddenInterpretations": [
+      "систематическая травля без повторов",
+      "страдание адресата без подтверждения",
+      "высокая опасность только из-за уверенности модели"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "routine-building-demolition",
+    "annotationSource": "manual",
+    "split": "tuning",
+    "sourceVideo": "RmGCg3FRdb8",
+    "anchor": "снести каменный дом и построить мне новый дом",
+    "categories": [
+      "violence"
+    ],
+    "showToParent": false,
+    "priority": "hidden",
+    "why": "Это строительная/утилитарная перестройка объекта без подтверждённой физической опасности для персонажей.",
+    "requiredEvidence": [
+      "снос относится к дому/объекту",
+      "контекст строительства нового дома"
+    ],
+    "forbiddenInterpretations": [
+      "физическое нападение",
+      "травма персонажа",
+      "опасное разрушение только по слову «снести»"
+    ],
+    "forbiddenFindings": [
+      "violence.physical_attack",
+      "violence.life_threatening_situation",
+      "violence.injury"
+    ]
+  },
+  {
+    "id": "coercive-confinement",
+    "annotationSource": "manual",
+    "split": "tuning",
+    "sourceVideo": "RmGCg3FRdb8",
+    "anchor": "выход из деревни вам запрещён",
+    "categories": [
+      "scary_and_disturbing",
+      "violence"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "why": "Персонаж ограничивает свободу группы и требует подчинения; это важнее соседней одиночной насмешки.",
+    "requiredEvidence": [
+      "запрет покидать деревню",
+      "требование делать только то, что прикажет персонаж"
+    ],
+    "forbiddenInterpretations": [
+      "физическая травма без доказательств",
+      "визуальное заточение, если оно не следует из речи"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "railway-hostage-coercion",
+    "annotationSource": "manual",
+    "split": "tuning",
+    "sourceVideo": "kQCshtG4DOw",
+    "anchor": "Ты должен выполнить мои задания для того, чтобы я их отпустил",
+    "categories": [
+      "violence",
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "why": "Связанные персонажи находятся под угрозой приближающегося поезда, а опасность используется для принуждения.",
+    "requiredEvidence": [
+      "персонажи привязаны к рельсам",
+      "поезд приближается",
+      "освобождение поставлено в зависимость от выполнения задания"
+    ],
+    "forbiddenInterpretations": [
+      "сцена несущественна только потому, что действие происходит в Minecraft",
+      "последующее спасение отменяет предшествующую угрозу"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "conditional-hostage-threat",
+    "annotationSource": "manual",
+    "split": "tuning",
+    "sourceVideo": "kQCshtG4DOw",
+    "anchor": "Не волнуйся, я вас не трону, если ты мне поможешь",
+    "categories": [
+      "violence"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "why": "Условное обещание безопасности в контексте заложников является принуждением, а не безусловным успокоением.",
+    "requiredEvidence": [
+      "условие «если»",
+      "угроза жителям при отказе",
+      "требование выполнить действие"
+    ],
+    "forbiddenInterpretations": [
+      "безусловное успокоение",
+      "отрицание угрозы из-за слов «не трону»"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "ordinary-religious-exclamation",
+    "annotationSource": "manual",
+    "split": "tuning",
+    "sourceVideo": "wiuuBaYC8B8",
+    "anchor": "О, господи",
+    "categories": [
+      "profanity_and_rude_language"
+    ],
+    "showToParent": false,
+    "priority": "hidden",
+    "why": "Обычное восклицание не является само по себе матом или грубой лексикой.",
+    "requiredEvidence": [
+      "точная фраза"
+    ],
+    "forbiddenInterpretations": [
+      "обсценная лексика без обсценного выражения"
+    ],
+    "forbiddenFindings": [
+      "profanity_and_rude_language.*"
+    ]
+  },
+  {
+    "id": "self-criticism-not-insult",
+    "annotationSource": "manual",
+    "split": "holdout",
+    "sourceVideo": "wiuuBaYC8B8",
+    "anchor": "я всё-таки не очень",
+    "categories": [
+      "insults"
+    ],
+    "showToParent": false,
+    "priority": "hidden",
+    "why": "Самокритика не является оскорблением другого человека.",
+    "requiredEvidence": [
+      "говорящий относится к себе"
+    ],
+    "forbiddenInterpretations": [
+      "направленное оскорбление другого персонажа"
+    ],
+    "forbiddenFindings": [
+      "insults.*"
+    ]
+  },
+  {
+    "id": "funeral-theme-without-death",
+    "annotationSource": "manual",
+    "split": "holdout",
+    "sourceVideo": "_xR7fZ24O4g",
+    "anchor": "нам лишь остаётся попрощаться с ним",
+    "categories": [
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "why": "Продолжительная сцена прощания, предполагаемой смерти и подготовки могилы может быть заметной тревожной темой, даже если персонаж позже просыпается.",
+    "requiredEvidence": [
+      "прощание как с умершим",
+      "печальная реакция персонажей",
+      "подготовка могилы или эквивалентный устойчивый контекст"
+    ],
+    "forbiddenInterpretations": [
+      "утверждение, что персонаж действительно умер",
+      "отмена темы только из-за счастливой развязки"
+    ],
+    "forbiddenFindings": [
+      "violence.death"
+    ]
+  },
+  {
+    "id": "weapon-target-practice",
+    "annotationSource": "manual",
+    "split": "holdout",
+    "sourceVideo": "CmABITGAsNs",
+    "anchor": "тренируется стрелять",
+    "categories": [
+      "violence"
+    ],
+    "showToParent": true,
+    "priority": "details",
+    "why": "Использование оружия присутствует, но тренировка без угрозы или пострадавших — лёгкая вторичная находка, а не серьёзная сцена насилия.",
+    "requiredEvidence": [
+      "использование оружия в тренировочном контексте",
+      "нет подтверждённой цели-персонажа или вреда"
+    ],
+    "forbiddenInterpretations": [
+      "нападение",
+      "ранение",
+      "угроза оружием"
+    ],
+    "forbiddenFindings": [
+      "violence.physical_attack",
+      "violence.violent_threat",
+      "violence.injury"
+    ]
+  },
+  {
+    "id": "railway-immediate-peril",
+    "annotationSource": "manual",
+    "split": "holdout",
+    "sourceVideo": "kQCshtG4DOw",
+    "anchor": "Мы привязаны",
+    "categories": [
+      "violence",
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "why": "Персонажи не могут двигаться, просят о помощи и сообщают о приближающемся поезде; игровая рамка не делает такую непосредственную угрозу малозначимой.",
+    "requiredEvidence": [
+      "связанность/невозможность двигаться",
+      "рельсы",
+      "приближающийся поезд или явная просьба о спасении"
+    ],
+    "forbiddenInterpretations": [
+      "обычная игровая опасность без жертвы",
+      "снижение до details только из-за fictional/game context"
+    ],
+    "forbiddenFindings": []
+  }
+]

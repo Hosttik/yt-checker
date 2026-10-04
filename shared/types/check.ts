@@ -62,6 +62,37 @@ export interface AggregateOpenAIUsage extends OpenAIUsage {
   requests: number
 }
 
+export type ContentReviewRunStatus = 'not_needed' | 'completed' | 'partial' | 'failed' | 'skipped_after_failure'
+
+export interface VideoContentReview {
+  status: ContentReviewRunStatus
+  candidateCount: number
+  reviewedCount: number
+  rejectedCount: number
+  uncertainCount: number
+  model?: string
+  promptVersion?: string
+  schemaVersion?: string
+  latencyMs?: number
+  error?: { type: AnalysisErrorType; message: string }
+}
+
+export interface OpenAIStageUsage {
+  detection: AggregateOpenAIUsage
+  review: AggregateOpenAIUsage
+}
+
+export interface ContentReviewSummary {
+  model: string
+  promptVersion: string
+  schemaVersion: string
+  completedVideos: number
+  partialVideos: number
+  failedVideos: number
+  skippedVideos: number
+  notNeededVideos: number
+}
+
 export interface TimelineRange { startMs: number; endMs: number }
 
 export interface RuleDetection {
@@ -156,6 +187,7 @@ export interface VideoScanResult extends VideoMetadata {
   unavailableReason?: TranscriptUnavailableReason
   analysisError?: { type: AnalysisErrorType; status?: number; code?: string; message: string }
   openaiUsage?: OpenAIUsage
+  contentReview?: VideoContentReview
   speechQuality?: SpeechQualityMetrics
 
   // Legacy compatibility. New consumers should use contentEvents/videoReports.
@@ -193,6 +225,9 @@ export interface VideoContentReport {
   videoId: string
   categoryReports: VideoCategoryReport[]
   scenes: PresentationScene[]
+  contentSummary?: string
+  mainSceneCount?: number
+  detailSceneCount?: number
   candidates?: ContentCandidate[]
   rejectedCandidates?: RejectedContentCandidate[]
 }
@@ -208,6 +243,8 @@ export interface ChannelCheckResponse {
   analysisMode: 'openai'
   creditUsage: ScanCreditUsage
   openaiUsage: AggregateOpenAIUsage
+  openaiStages?: OpenAIStageUsage
+  contentReview?: ContentReviewSummary
 
   // Separate secondary analysis dimension; never part of content-safety categories.
   speechQuality: ChannelSpeechQualitySummary

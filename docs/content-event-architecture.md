@@ -9,11 +9,15 @@ The content-safety pipeline is:
 ```text
 Transcript
   ↓
-LLM candidate detection + contextual classification
+LLM detector: factual candidate detection on full transcript
   ↓
-ClassifiedContentEvent
+ClassifiedContentEvent hypotheses
   ↓
-Deterministic category policy
+LLM reviewer: verify/correct/reject against the same full transcript
+  ↓
+Semantic validation
+  ↓
+Deterministic parent policy
   ↓
 ContentEvent
   ↓
@@ -24,13 +28,13 @@ Channel aggregation
 Presentation
 ```
 
-One OpenAI request is still used per transcript. Candidate discovery and contextual classification are represented inside the same structured response so the architecture does not introduce a second paid AI pass.
+The detector always receives the full normalized transcript. A second OpenAI request is made only when detector candidates exist; all candidates for that video are reviewed in one batch against the original full transcript. The reviewer is not invoked once per event. If review fails or is incomplete, first-pass findings are retained and explicitly marked as unreviewed/partial instead of being converted into an empty result.
 
 ## Responsibility boundaries
 
-### LLM
+### Detector
 
-The model describes facts only:
+The first-pass model describes facts only:
 
 - category / subtype;
 - context;
@@ -43,7 +47,7 @@ The model describes facts only:
 - broader scene range and candidate / scene ids;
 - assertion status (`actual`, `threatened`, `hypothetical`, `negated`, `reported`).
 
-The LLM does **not** decide:
+The detector does **not** decide:
 
 - parent relevance;
 - whether an event is hidden;
@@ -51,11 +55,28 @@ The LLM does **not** decide:
 - channel-level severity;
 - UX labels.
 
+### Contextual reviewer
+
+The second pass treats first-pass candidates as untrusted hypotheses and re-reads the full original transcript. For each candidate it returns:
+
+- `confirmed`, `corrected`, `rejected`, or `uncertain`;
+- a corrected factual event when one can be supported;
+- fresh direct evidence segments;
+- separate explanatory `contextRanges`;
+- actor/target direction when established;
+- intent/coercion, distress, consequence, duration, repetition and narrative framing;
+- evidence sufficiency;
+- a recommended parent relevance that is explicitly separate from severity and confidence.
+
+Direct evidence supports the factual user-facing `reason`. Context ranges may explain or mitigate a scene but are not treated as proof. The reviewer may correct taxonomy/roles/assertion semantics or remove a false positive; it cannot add unrelated scenes. A happy resolution does not retroactively erase an earlier supported peril scene.
+
 ### Backend policy
 
 `categoryPolicies` deterministically calculates:
 
-- `parentRelevance`;
+- baseline `parentRelevance` from category semantics;
+- reviewed relevance integration (confirmed/corrected review may demote or promote; uncertain review cannot demote a more serious baseline);
+- optional future sensitivity preferences per category without changing factual classification;
 - `displayLevel`;
 - dynamic category labels / summaries.
 
@@ -124,7 +145,7 @@ scene_55
  └─ scary_and_disturbing / threatening_character
 ```
 
-The UI first groups by `sceneId`, splits obviously distant reuse of one id using actual evidence gaps (not the model's broad scene envelope), and then merges substantially overlapping compatible narrative scenes emitted under different ids. Sparse model evidence is materialized as `evidenceRanges[]`: non-adjacent evidence segments remain separate timestamps instead of being expanded to one large interval.
+The UI first groups by `sceneId`, splits obviously distant reuse of one id using actual evidence gaps (not the model's broad scene envelope), and then merges substantially overlapping compatible narrative scenes emitted under different ids. A scene becomes `main` when its final reviewed relevance is moderate/high; low findings go to expandable `details`. Thus a one-off mild insult can remain factual context inside the same serious coercion scene without generating its own alarming card. Sparse model evidence is materialized as `evidenceRanges[]`: non-adjacent evidence segments remain separate timestamps instead of being expanded to one large interval.
 
 ## Old result vs new result
 
@@ -217,6 +238,14 @@ The deterministic policy tests cover the current real-world cases:
 | Accidental fall | not self-harm | rejected candidate / no event | hidden |
 | “Я сейчас умру” without self-directed intent | not self-harm | rejected candidate / no event | hidden |
 
+## Evaluation contract
+
+Production continues to analyze full transcripts; chunking is not introduced while the saved videos fit the model context because unnecessary chunking creates scene-boundary and deduplication risks. If future transcripts require chunking, it must be benchmarked against full-transcript analysis before becoming the default.
+
+`evals/parental-quality-manual.json` is the human gold set and separates tuning from holdout examples. Automatically proposed cases live separately and do not count toward metrics until manually reviewed. The paid full-transcript eval reads saved scan artifacts, never calls TranscriptAPI, never overwrites source scans, and reports baseline vs current one-pass vs two-pass plus detector completeness, warnings precision on labelled cases, main-scene misses, low-value cards, forbidden interpretations, request/token cost, latency and optional repeated-run stability.
+
+This is an engineering validation sample, not a general accuracy claim.
+
 ## Transcript-only limits
 
 The classifier must not make claims that require video frames or audio that it did not analyze.
@@ -237,7 +266,9 @@ Diagnostic data preserves enough information to follow:
 
 ```text
 candidate
-→ contextual classification
+→ first-pass factual classification
+→ contextual review decision / review failure
+→ semantic validation
 → normalized ContentEvent
 → parentRelevance
 → displayLevel
@@ -248,6 +279,8 @@ candidate
 Relevant structured log events:
 
 - `content.candidate`
+- `content.review_completed`
+- `content.review_failed`
 - `content.classified`
 - `content.rejected`
 - `content.relevance`

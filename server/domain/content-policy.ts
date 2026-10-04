@@ -4,6 +4,7 @@ import type {
   ContentCategory,
   ContentEvent,
   DisplayLevel,
+  ParentPolicyPreferences,
   ParentRelevance,
 } from '../../shared/types/content'
 import { CONTENT_CATEGORY_LABELS } from './content-categories'
@@ -139,7 +140,14 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
       && details.actionPurpose === 'accident'
       && event.severity === 'low') return 'minimal'
     if (event.subtype === 'fantasy_combat') return event.severity === 'high' ? 'high' : 'moderate'
-    if (event.subtype === 'dangerous_situation' || event.subtype === 'destruction') {
+    if (event.subtype === 'dangerous_situation') {
+      if (details.weaponRole === 'threatened_use'
+        || (details.actionPurpose === 'threat' && details.harmLevel === 'threatened')) {
+        return event.severity === 'low' ? 'moderate' : 'high'
+      }
+      return event.severity === 'low' && details.harmLevel === 'none' ? 'low' : 'moderate'
+    }
+    if (event.subtype === 'destruction') {
       return event.severity === 'low' && details.harmLevel === 'none' ? 'low' : 'moderate'
     }
     return severityFloor(event)
@@ -276,13 +284,43 @@ export const categoryPolicies: {
   self_harm: selfHarmPolicy,
 }
 
+function reviewAdjustedRelevance(
+  event: ClassifiedContentEvent,
+  baseline: ParentRelevance,
+): ParentRelevance {
+  const review = event.review
+  if (!review || review.status === 'not_reviewed') return baseline
+  if (review.status === 'uncertain') {
+    return relevanceRank[review.recommendedParentRelevance] > relevanceRank[baseline]
+      ? review.recommendedParentRelevance
+      : baseline
+  }
+  return review.recommendedParentRelevance
+}
+
+function preferenceAdjustedRelevance(
+  category: ContentCategory,
+  relevance: ParentRelevance,
+  preferences?: ParentPolicyPreferences,
+): ParentRelevance {
+  const sensitivity = preferences?.sensitivities?.[category]
+  if (!sensitivity || sensitivity === 'default') return relevance
+  const levels: ParentRelevance[] = ['minimal', 'low', 'moderate', 'high']
+  const current = levels.indexOf(relevance)
+  if (sensitivity === 'sensitive') return levels[Math.min(levels.length - 1, current + 1)]!
+  return levels[Math.max(0, current - 1)]!
+}
+
 export function applyContentPolicy(
   event: ClassifiedContentEvent,
   id: string,
   profile: AnalysisProfile,
+  preferences?: ParentPolicyPreferences,
 ): ContentEvent {
   const policy = categoryPolicies[event.category] as CategoryPolicy
-  const parentRelevance = policy.getParentRelevance(event)
+  const baselineRelevance = policy.getParentRelevance(event)
+  const reviewedRelevance = reviewAdjustedRelevance(event, baselineRelevance)
+  const parentRelevance = preferenceAdjustedRelevance(event.category, reviewedRelevance, preferences)
   const displayLevel = policy.getDisplayLevel(event, parentRelevance, profile)
   return {
     ...event,

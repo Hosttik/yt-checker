@@ -1,0 +1,5 @@
+{
+  "annotationSource": "automatic_proposal",
+  "note": "Automatically proposed cases must be reviewed and moved into parental-quality-manual.json before they count toward quality metrics.",
+  "cases": []
+}

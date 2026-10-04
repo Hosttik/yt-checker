@@ -30,6 +30,44 @@ export type AssertionStatus = 'actual' | 'threatened' | 'hypothetical' | 'negate
 export type ViolenceActionPurpose = 'attack' | 'threat' | 'defense' | 'rescue' | 'utility' | 'sport' | 'demonstration' | 'accident' | 'destruction' | 'unknown'
 export type PrevalenceLevel = 'none' | 'rare' | 'occasional' | 'common' | 'pervasive'
 
+export type ContentReviewStatus = 'confirmed' | 'corrected' | 'uncertain' | 'not_reviewed'
+export type ReviewEvidenceSufficiency = 'insufficient' | 'partial' | 'sufficient'
+export type AggressionDirection = 'none' | 'actor_to_target' | 'mutual' | 'self_directed' | 'unclear'
+export type SceneIntent = 'benign' | 'rescue' | 'protective' | 'utility' | 'accidental' | 'aggressive' | 'coercive' | 'unclear'
+export type DistressLevel = 'none' | 'mild' | 'clear' | 'strong' | 'unclear'
+export type ConsequenceLevel =
+  | 'none'
+  | 'property_only'
+  | 'threatened_harm'
+  | 'injury_or_severe_harm'
+  | 'death'
+  | 'unclear'
+export type SceneDuration = 'momentary' | 'brief' | 'sustained' | 'unclear'
+export type RepetitionLevel = 'single' | 'repeated' | 'pattern' | 'unclear'
+export type NarrativeFraming = 'discouraged' | 'neutral' | 'humorous' | 'endorsed' | 'unclear'
+
+export interface ContentEventReview {
+  status: ContentReviewStatus
+  recommendedParentRelevance: ParentRelevance
+  evidenceSufficiency: ReviewEvidenceSufficiency
+  contextRanges: Array<{ startMs: number; endMs: number }>
+  actor?: string
+  target?: string
+  aggressionDirection: AggressionDirection
+  intent: SceneIntent
+  distress: DistressLevel
+  consequence: ConsequenceLevel
+  duration: SceneDuration
+  repetition: RepetitionLevel
+  narrativeFraming: NarrativeFraming
+  rationale: string
+}
+
+export interface ParentPolicyPreferences {
+  childAge?: number
+  sensitivities?: Partial<Record<ContentCategory, 'default' | 'sensitive' | 'less_sensitive'>>
+}
+
 export type ProfanitySubtype = 'profanity' | 'rude_language' | 'slur' | 'obscene_expression'
 export type InsultSubtype = 'direct_insult' | 'mockery' | 'humiliating_name' | 'degrading_statement'
 export type ToiletHumorSubtype = 'toilet_reference' | 'toilet_joke' | 'bodily_function' | 'gross_out_humor'
@@ -172,6 +210,7 @@ export interface BaseContentEvent {
   portrayal?: Portrayal
   explicitness?: Explicitness
   assertionStatus: AssertionStatus
+  review?: ContentEventReview
   parentRelevance: ParentRelevance
   displayLevel: DisplayLevel
 }
@@ -259,6 +298,8 @@ export interface PresentationScene {
   startMs: number
   endMs: number
   level: ReportLevel
+  attention: 'main' | 'details'
+  reviewStatus: 'reviewed' | 'mixed' | 'unreviewed'
   categories: ContentCategory[]
   evidenceRanges: Array<{ startMs: number; endMs: number }>
   label: string
