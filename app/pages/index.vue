@@ -220,7 +220,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <p v-if="video.status === 'analyzed' && video.transcriptLanguage" class="muted">
                 Transcript track: {{ video.transcriptLanguage }}.
               </p>
-              <p v-else-if="video.detections.length === 0" class="clean">
+              <p v-if="video.status === 'analyzed' && video.detections.length === 0" class="clean">
                 По выбранным правилам совпадений не найдено.
               </p>
               <p v-if="video.contextFilterStatus === 'fallback'" class="muted">
