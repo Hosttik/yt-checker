@@ -302,7 +302,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               </div>
               <div class="evidence">
                 <p>{{ scene.summary }}</p>
-                <small>
+                <small v-if="result.profile === 'diagnostic'">
                   {{ scene.events.map(event => event.subtype).join(' · ') }}
                 </small>
               </div>
