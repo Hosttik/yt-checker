@@ -273,15 +273,12 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const videoResults: VideoScanResult[] = []
   const contentEventsByVideo = new Map<string, ContentEvent[]>()
   const rejectedCandidatesByVideo = new Map<string, RejectedContentCandidate[]>()
-  const openaiUsage: AggregateOpenAIUsage = {
-    requests: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    cachedTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: 0,
+  const openaiUsage = aggregateUsage()
+  const openaiStages: OpenAIStageUsage = {
+    detection: aggregateUsage(),
+    review: aggregateUsage(),
   }
+  let reviewDisabledAfterFailure = false
   let transcriptAttempts = 0
   let successfulAnalyses = 0
   let candidateIndex = 0
