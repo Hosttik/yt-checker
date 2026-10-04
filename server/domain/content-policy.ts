@@ -65,13 +65,13 @@ function defaultSummary(category: ContentCategory): (events: ContentEvent[], dis
     if (events.length === 0) {
       return 'В проанализированных субтитрах релевантных элементов не обнаружено.'
     }
-    const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
-      ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
-      : ''
     if (displayed.length === 0) {
       return 'Для выбранного профиля значимых элементов не показано.'
     }
-    return `Обнаружены элементы ${CONTENT_CATEGORY_LABELS[category]}: ${unique(events.map(contentSubtypeLabel)).join(', ')}.${contextText}`
+    const contextText = displayed.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? ' Большинство показанных элементов относятся к игровому или вымышленному контексту.'
+      : ''
+    return `Обнаружены элементы ${CONTENT_CATEGORY_LABELS[category]}: ${unique(displayed.map(contentSubtypeLabel)).join(', ')}.${contextText}`
   }
 }
 
@@ -134,10 +134,10 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
   },
   summarize(events, displayed) {
     if (events.length === 0 || displayed.length === 0) return defaultSummary('violence')(events, displayed)
-    const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
-      ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
+    const contextText = displayed.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? ' Большинство показанных элементов относятся к игровому или вымышленному контексту.'
       : ''
-    return `Обнаружены: ${unique(events.map(contentSubtypeLabel)).join(', ')}.${contextText}`
+    return `Обнаружены: ${unique(displayed.map(contentSubtypeLabel)).join(', ')}.${contextText}`
   },
 }
 
@@ -154,10 +154,10 @@ const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 's
     if (events.length === 0 || displayed.length === 0) {
       return defaultSummary('scary_and_disturbing')(events, displayed)
     }
-    const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
-      ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
+    const contextText = displayed.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? ' Большинство показанных элементов относятся к игровому или вымышленному контексту.'
       : ''
-    return `Обнаружены пугающие или тревожные элементы: ${unique(events.map(contentSubtypeLabel)).join(', ')}.${contextText}`
+    return `Обнаружены пугающие или тревожные элементы: ${unique(displayed.map(contentSubtypeLabel)).join(', ')}.${contextText}`
   },
 }
 
@@ -215,7 +215,7 @@ const substancesPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { categor
     if (events.length === 0 || displayed.length === 0) {
       return defaultSummary('substances')(events, displayed)
     }
-    return `Обнаружены упоминания или действия, связанные с веществами: ${unique(events.map(contentSubtypeLabel)).join(', ')}.`
+    return `Обнаружены упоминания или действия, связанные с веществами: ${unique(displayed.map(contentSubtypeLabel)).join(', ')}.`
   },
 }
 
