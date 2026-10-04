@@ -127,6 +127,7 @@ describe('OpenAIAnalysisProvider', () => {
       instructions: OPENAI_SYSTEM_PROMPT,
       tools: [],
       store: false,
+      max_output_tokens: 4096,
       input: expect.stringContaining('[00:00:00.000] Мне выпала награда.'),
     }))
     expect(result.usage).toEqual({
