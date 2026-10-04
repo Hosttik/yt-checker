@@ -7,6 +7,7 @@ import type {
   ParentRelevance,
 } from '../../shared/types/content'
 import { CONTENT_CATEGORY_LABELS } from './content-categories'
+import { contentSubtypeLabel } from './content-labels'
 
 const relevanceRank: Record<ParentRelevance, number> = {
   minimal: 0,
@@ -70,7 +71,7 @@ function defaultSummary(category: ContentCategory): (events: ContentEvent[], dis
     if (displayed.length === 0) {
       return 'Для выбранного профиля значимых элементов не показано.'
     }
-    return `Обнаружены элементы ${CONTENT_CATEGORY_LABELS[category]}: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+    return `Обнаружены элементы ${CONTENT_CATEGORY_LABELS[category]}: ${unique(events.map(contentSubtypeLabel)).join(', ')}.${contextText}`
   }
 }
 
@@ -136,7 +137,7 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
     const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
       ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
       : ''
-    return `Обнаружены: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+    return `Обнаружены: ${unique(events.map(contentSubtypeLabel)).join(', ')}.${contextText}`
   },
 }
 
@@ -156,7 +157,7 @@ const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 's
     const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
       ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
       : ''
-    return `Обнаружены пугающие или тревожные элементы: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+    return `Обнаружены пугающие или тревожные элементы: ${unique(events.map(contentSubtypeLabel)).join(', ')}.${contextText}`
   },
 }
 
@@ -214,7 +215,7 @@ const substancesPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { categor
     if (events.length === 0 || displayed.length === 0) {
       return defaultSummary('substances')(events, displayed)
     }
-    return `Обнаружены упоминания или действия, связанные с веществами: ${unique(events.map((event) => event.subtype)).join(', ')}.`
+    return `Обнаружены упоминания или действия, связанные с веществами: ${unique(events.map(contentSubtypeLabel)).join(', ')}.`
   },
 }
 
