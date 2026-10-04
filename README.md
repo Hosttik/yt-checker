@@ -17,7 +17,7 @@ Regex/JEV prefilter, отдельные запросы по категориям
 
 ## Настройка
 
-Требуется Node.js 22+.
+Требуется Node.js 22.12+.
 
 ```bash
 cp .env.example .env
