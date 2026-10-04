@@ -287,7 +287,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <div>
                 <strong>{{ scene.label }}</strong>
                 <small>
-                  {{ levelText(scene.level) }} · {{ scene.categories.join(', ') }}
+                  {{ levelText(scene.level) }}
+                  <template v-if="result.profile === 'diagnostic'"> · {{ scene.categories.join(', ') }}</template>
                 </small>
               </div>
               <div class="range-list">
