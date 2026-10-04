@@ -56,9 +56,9 @@ function interpretation(
 
   const fillerSummary = options.fillersSupported
     ? fillerWordCount > 0
-      ? `Слова-паразиты встречаются ${frequencyText(fillerFrequency)} — примерно 1 раз на ${fillerEveryWords} слов.`
-      : 'Слова-паразиты из поддерживаемого списка не обнаружены.'
-    : 'Для этого языка слова-паразиты пока не оцениваются.'
+      ? `Речевые маркеры вроде «ну», «короче», «э/ээ» встречаются ${frequencyText(fillerFrequency)} — примерно 1 раз на ${fillerEveryWords} слов.`
+      : 'Речевые маркеры из поддерживаемого списка не обнаружены.'
+    : 'Для этого языка речевые маркеры пока не оцениваются.'
 
   const repetitionSummary = repeatedWordCount > 0
     ? `Повторы слов подряд встречаются ${frequencyText(repetitionFrequency)} — примерно 1 раз на ${repetitionEveryWords} слов.`
