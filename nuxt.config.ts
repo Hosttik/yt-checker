@@ -9,6 +9,8 @@ export default defineNuxtConfig({
     typesafeBaseUrl: 'https://api.typesafe.ai/v1',
     typesafeModel: 'jev-latest',
     typesafeBenignDropProbability: 0.8,
+    scanStorageDir: '/data/scans',
+    allowDiagnosticStorage: false,
     public: {
       appName: 'YT Checker',
     },

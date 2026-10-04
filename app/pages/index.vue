@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import type { ChannelCheckResponse, RuleId, TranscriptUnavailableReason } from '../../shared/types/check'
+import type {
+  ChannelCheckResponse,
+  RuleId,
+  ScanStorageMode,
+  TranscriptUnavailableReason,
+} from '../../shared/types/check'
 
 const availableRules: Array<{ id: RuleId; label: string }> = [
   { id: 'profanity', label: 'Мат и грубая лексика' },
@@ -13,6 +18,7 @@ const availableRules: Array<{ id: RuleId; label: string }> = [
 
 const channelUrl = ref('')
 const videoLimit = ref(10)
+const storageMode = ref<ScanStorageMode>('minimal')
 const selectedRuleIds = ref<RuleId[]>(availableRules.map((rule) => rule.id))
 const loading = ref(false)
 const result = ref<ChannelCheckResponse | null>(null)
@@ -30,6 +36,7 @@ async function submit() {
         channelUrl: channelUrl.value,
         videoLimit: videoLimit.value,
         ruleIds: selectedRuleIds.value,
+        storageMode: storageMode.value,
       },
     })
   } catch (requestError: unknown) {
@@ -37,7 +44,6 @@ async function submit() {
       data?: { statusMessage?: string; message?: string }
       message?: string
     }
-
     error.value = candidate.data?.statusMessage
       ?? candidate.data?.message
       ?? candidate.message
@@ -65,8 +71,8 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
 
 function unavailableText(reason?: TranscriptUnavailableReason): string {
   if (reason === 'rate_limited') return 'Провайдер временно ограничил запросы.'
-  if (reason === 'billing') return 'Закончились credits у transcript-провайдера.'
-  if (reason === 'not_available') return 'У ролика нет доступного transcript.'
+  if (reason === 'billing') return 'Закончились credits у TranscriptAPI.'
+  if (reason === 'not_available') return 'Transcript неожиданно оказался недоступен.'
   return 'Transcript временно недоступен.'
 }
 </script>
@@ -77,8 +83,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
       <p class="eyebrow">YT Checker · MVP</p>
       <h1>Проверь, что ребёнок реально услышит на YouTube-канале</h1>
       <p class="lead">
-        Вставь канал. Мы проверим последние ролики по выбранным правилам и покажем только
-        категории и диапазоны на таймлайне YouTube — без сохранения и публикации текста transcript.
+        Проверяем до 10 последних роликов с доступными субтитрами через TranscriptAPI.com.
+        В обычном режиме сохраняем только derived-результат.
       </p>
     </section>
 
@@ -95,8 +101,20 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
         </label>
 
         <label class="field limit-field">
-          <span>Последних видео</span>
-          <input v-model.number="videoLimit" type="number" min="1" max="15">
+          <span>Видео для анализа</span>
+          <input v-model.number="videoLimit" type="number" min="1" max="10">
+        </label>
+
+        <label class="field storage-field">
+          <span>Режим хранения</span>
+          <select v-model="storageMode">
+            <option value="none">Не сохранять</option>
+            <option value="minimal">Minimal — только результат</option>
+            <option value="diagnostic">Diagnostic — полный raw debug</option>
+          </select>
+          <small v-if="storageMode === 'diagnostic'" class="warning">
+            Diagnostic сохраняет raw transcripts и Jev payloads на сервере. Требует разрешения через env.
+          </small>
         </label>
 
         <fieldset>
@@ -114,24 +132,27 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
         </button>
       </form>
 
-      <p v-if="error" class="error">
-        {{ error }}
-      </p>
+      <p v-if="error" class="error">{{ error }}</p>
     </section>
 
     <section v-if="result" class="results">
       <div class="channel-card">
-        <img
-          v-if="result.channel.thumbnailUrl"
-          :src="result.channel.thumbnailUrl"
-          :alt="result.channel.title"
-        >
         <div>
           <p class="eyebrow">Результат проверки</p>
           <h2>{{ result.channel.title }}</h2>
           <p>
-            Проанализировано {{ result.analyzedVideos }} из {{ result.requestedVideos }} видео.
-            <span v-if="result.failedVideos">Без transcript: {{ result.failedVideos }}.</span>
+            Проанализировано {{ result.analyzedVideos }} из {{ result.requestedVideos }} целевых видео.
+          </p>
+          <p class="muted">
+            TranscriptAPI credits: {{ result.creditUsage.totalCredits }}
+            (transcripts {{ result.creditUsage.transcriptCredits }},
+            fallback pages {{ result.creditUsage.channelVideosCredits }}).
+          </p>
+          <p class="muted">
+            Проверено кандидатов: {{ result.selection.inspectedVideos }}.
+            Caption-eligible: {{ result.selection.captionEligibleVideos }}.
+            Storage: {{ result.storageMode }}.
+            <span v-if="result.scanId">Scan ID: {{ result.scanId }}.</span>
           </p>
           <p class="muted">
             Контекстный фильтр:
@@ -177,7 +198,6 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                 <strong>{{ detection.label }}</strong>
                 <small>Обнаружено: {{ detection.count }}</small>
               </div>
-
               <div class="range-list">
                 <a
                   v-for="range in detection.ranges"
@@ -196,11 +216,9 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
       </div>
 
       <div class="limitations">
-        <strong>Что результат пока не означает</strong>
+        <strong>Как был выполнен scan</strong>
         <ul>
-          <li v-for="limitation in result.limitations" :key="limitation">
-            {{ limitation }}
-          </li>
+          <li v-for="limitation in result.limitations" :key="limitation">{{ limitation }}</li>
         </ul>
       </div>
     </section>

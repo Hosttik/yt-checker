@@ -8,7 +8,10 @@ export const RULE_IDS = [
   'alcohol_drugs',
 ] as const
 
+export const SCAN_STORAGE_MODES = ['none', 'minimal', 'diagnostic'] as const
+
 export type RuleId = (typeof RULE_IDS)[number]
+export type ScanStorageMode = (typeof SCAN_STORAGE_MODES)[number]
 export type RuleSeverity = 'low' | 'medium' | 'high'
 export type TranscriptUnavailableReason =
   | 'not_available'
@@ -63,13 +66,32 @@ export interface RuleSummary {
   videoCount: number
 }
 
+export interface ScanCreditUsage {
+  transcriptCredits: number
+  channelVideosCredits: number
+  totalCredits: number
+  freeRequests: number
+}
+
+export interface ScanSelection {
+  targetVideos: number
+  inspectedVideos: number
+  captionEligibleVideos: number
+  transcriptAttempts: number
+  usedChannelVideosFallback: boolean
+}
+
 export interface ChannelCheckResponse {
+  scanId?: string
+  storageMode: ScanStorageMode
   channel: ChannelMetadata
   requestedVideos: number
   analyzedVideos: number
   failedVideos: number
   analysisMode: 'regex_only' | 'regex_jev'
   contextualFallbackVideos: number
+  creditUsage: ScanCreditUsage
+  selection: ScanSelection
   summary: RuleSummary[]
   videos: VideoScanResult[]
   limitations: string[]
