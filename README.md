@@ -17,10 +17,11 @@ Regex/JEV prefilter, отдельные запросы по категориям
 
 ## Настройка
 
-Требуется Node.js 22.12+.
+Требуется Node.js 22.12+ и npm 11.21.0. Docker-конфигурация уже фиксирует Node 22.23.3 + npm 11.21.0.
 
 ```bash
 cp .env.example .env
+npm install -g npm@11.21.0
 npm ci
 npm run dev
 ```
