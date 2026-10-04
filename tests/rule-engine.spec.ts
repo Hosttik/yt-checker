@@ -19,6 +19,9 @@ describe('transcript candidate extraction', () => {
     const candidates = findTranscriptCandidates(segments, ['profanity', 'insults'])
     expect(candidates).toHaveLength(2)
     expect(candidates.every((item) => item.context.includes(rawText))).toBe(true)
+    expect(candidates.every((item) => item.segmentText === rawText)).toBe(true)
+    expect(candidates.find((item) => item.ruleId === 'profanity')?.matchedTerms).toContain('Блять')
+    expect(candidates.find((item) => item.ruleId === 'insults')?.matchedTerms).toContain('дебил')
 
     const detections = buildDetections(candidates, ['profanity', 'insults'])
 

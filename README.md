@@ -209,3 +209,61 @@ rm -rf scan-results/*
 ```
 
 This configuration is intentionally for local/staging diagnosis. Do not expose it as the public production configuration because diagnostic artifacts contain raw third-party transcript text.
+
+
+## Transcript language selection
+
+The scan request accepts an optional `language` priority list supported by TranscriptAPI, for example:
+
+```text
+ru
+ru,en
+ru,en,asr
+asr-ru
+```
+
+`/youtube/info` is used first for free language preflight. A plain code such as `ru` matches manual Russian captions first and auto-generated Russian captions as fallback. `asr` means any auto-generated captions. The paid transcript request receives the same language priority list, and the returned `transcriptLanguage` records the actual resolved track.
+
+The UI exposes this as a language field with common presets plus free-form comma-separated priorities.
+
+## Raw candidate diagnostics
+
+Full-debug mode now records the exact text responsible for rule matches.
+
+Structured events:
+
+```text
+candidate.regex_match
+candidate.jev_result
+candidate.final_violation
+```
+
+When `NUXT_LOG_RAW_CANDIDATES=true` and the scan runs in `diagnostic` mode, stdout includes:
+
+- rule ID and label;
+- exact regex-matched term(s);
+- the full caption segment treated as the phrase;
+- bounded neighboring context;
+- start/end timestamps;
+- whether Jev kept or removed the candidate;
+- final resolution for violations that remain.
+
+Diagnostic storage also writes:
+
+```text
+scan-results/<scan-id>/analysis-trace.json
+```
+
+This trace keeps the same phrase-level information even if Docker stdout rotates.
+
+The dedicated full-debug Compose file enables:
+
+```text
+NUXT_LOG_LEVEL=debug
+NUXT_LOG_RAW_CANDIDATES=true
+NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
+NUXT_PUBLIC_DEFAULT_STORAGE_MODE=diagnostic
+NUXT_PUBLIC_DEFAULT_TRANSCRIPT_LANGUAGE=ru
+```
+
+Raw candidate logging is intentionally not enabled by normal production configuration.

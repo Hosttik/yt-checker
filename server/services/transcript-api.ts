@@ -89,6 +89,7 @@ export interface TranscriptApiExchange {
 export interface VideoInfoResult {
   available: boolean
   languages: string[]
+  matchedLanguage?: string
   metadata?: {
     title?: string
     thumbnailUrl?: string
@@ -127,6 +128,73 @@ function reasonForStatus(status: number): TranscriptUnavailableReason {
 
 function headersToObject(headers: Headers): Record<string, string> {
   return Object.fromEntries(headers.entries())
+}
+
+function parseLanguagePriority(languagePriority: string): string[] {
+  return languagePriority
+    .split(',')
+    .map((code) => code.trim().toLowerCase().replace(/_/g, '-'))
+    .filter(Boolean)
+}
+
+function languageParts(code: string): { asr: boolean; base?: string } {
+  const normalized = code.trim().toLowerCase().replace(/_/g, '-')
+
+  if (normalized === 'asr') return { asr: true }
+  if (normalized.startsWith('asr-')) {
+    return {
+      asr: true,
+      base: normalized.slice(4).split('-')[0],
+    }
+  }
+
+  return {
+    asr: false,
+    base: normalized.split('-')[0],
+  }
+}
+
+export function selectAvailableLanguage(
+  availableLanguages: string[],
+  languagePriority: string,
+): string | undefined {
+  const available = availableLanguages.map((code) => ({
+    code,
+    ...languageParts(code),
+  }))
+  const requested = parseLanguagePriority(languagePriority)
+
+  if (requested.length === 0) return available[0]?.code
+
+  for (const requestCode of requested) {
+    const request = languageParts(requestCode)
+
+    if (requestCode === 'asr') {
+      const automatic = available.find((item) => item.asr)
+      if (automatic) return automatic.code
+      continue
+    }
+
+    if (request.asr) {
+      const automatic = available.find(
+        (item) => item.asr && item.base === request.base,
+      )
+      if (automatic) return automatic.code
+      continue
+    }
+
+    const manual = available.find(
+      (item) => !item.asr && item.base === request.base,
+    )
+    if (manual) return manual.code
+
+    const automatic = available.find(
+      (item) => item.asr && item.base === request.base,
+    )
+    if (automatic) return automatic.code
+  }
+
+  return undefined
 }
 
 export class TranscriptApiClient {
@@ -179,7 +247,10 @@ export class TranscriptApiClient {
     }
   }
 
-  async getVideoInfo(videoId: string): Promise<VideoInfoResult> {
+  async getVideoInfo(
+    videoId: string,
+    languagePriority = '',
+  ): Promise<VideoInfoResult> {
     try {
       const data = await this.requestJson<TranscriptApiInfoResponse>(
         'video_info',
@@ -190,10 +261,12 @@ export class TranscriptApiClient {
       const languages = (data.available_languages ?? [])
         .map((language) => language.code)
         .filter((code): code is string => Boolean(code))
+      const matchedLanguage = selectAvailableLanguage(languages, languagePriority)
 
       return {
-        available: languages.length > 0,
+        available: Boolean(matchedLanguage),
         languages,
+        matchedLanguage,
         metadata: {
           title: data.metadata?.title,
           thumbnailUrl: data.metadata?.thumbnail_url,
@@ -233,16 +306,23 @@ export class TranscriptApiClient {
     }
   }
 
-  async getTranscript(videoId: string): Promise<TranscriptResult> {
+  async getTranscript(
+    videoId: string,
+    languagePriority = '',
+  ): Promise<TranscriptResult> {
+    const params: Record<string, string> = {
+      video_url: videoId,
+      format: 'json',
+      include_timestamp: 'true',
+      send_metadata: 'true',
+    }
+
+    if (languagePriority) params.language = languagePriority
+
     const data = await this.requestJson<TranscriptApiTranscriptResponse>(
       'transcript',
       '/youtube/transcript',
-      {
-        video_url: videoId,
-        format: 'json',
-        include_timestamp: 'true',
-        send_metadata: 'true',
-      },
+      params,
       'transcript',
     )
 

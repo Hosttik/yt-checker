@@ -12,9 +12,11 @@ export default defineNuxtConfig({
     scanStorageDir: '/data/scans',
     allowDiagnosticStorage: false,
     logLevel: 'info',
+    logRawCandidates: false,
     public: {
       appName: 'YT Checker',
       defaultStorageMode: 'minimal',
+      defaultTranscriptLanguage: '',
     },
   },
   typescript: {

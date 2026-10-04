@@ -58,3 +58,19 @@ Docker prevents npm packages from being installed directly into the host OS, but
 Current mitigations include non-root execution, read-only source mounts, capability dropping, no Docker socket and restricted writable paths.
 
 A reviewed lockfile and `npm ci` remain a follow-up hardening task.
+
+
+## Raw phrase logging
+
+Exact transcript phrases and bounded context may contain third-party content and potentially sensitive speech. They are therefore excluded from normal production logs.
+
+Raw phrase stdout requires both:
+
+```text
+storageMode = diagnostic
+NUXT_LOG_RAW_CANDIDATES=true
+```
+
+The full-debug local Compose configuration enables this deliberately for development diagnosis. Do not enable this combination on a public production service unless log access, retention, deletion, and downstream shipping are explicitly controlled.
+
+`analysis-trace.json`, `transcriptapi-exchanges.json`, and `jev-exchanges.json` must be treated as raw diagnostic data rather than normal product data.

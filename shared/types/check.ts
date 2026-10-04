@@ -79,6 +79,7 @@ export interface ScanSelection {
   captionEligibleVideos: number
   transcriptAttempts: number
   usedChannelVideosFallback: boolean
+  requestedLanguage: string
 }
 
 export interface ChannelCheckResponse {

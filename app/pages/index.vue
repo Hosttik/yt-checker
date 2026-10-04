@@ -24,8 +24,12 @@ const defaultStorageMode: ScanStorageMode = configuredStorageMode === 'none'
   ? configuredStorageMode
   : 'minimal'
 
+const configuredTranscriptLanguage = runtimeConfig.public.defaultTranscriptLanguage
 const channelUrl = ref('')
 const videoLimit = ref(10)
+const transcriptLanguage = ref(
+  typeof configuredTranscriptLanguage === 'string' ? configuredTranscriptLanguage : '',
+)
 const storageMode = ref<ScanStorageMode>(defaultStorageMode)
 const selectedRuleIds = ref<RuleId[]>(availableRules.map((rule) => rule.id))
 const loading = ref(false)
@@ -43,6 +47,7 @@ async function submit() {
       body: {
         channelUrl: channelUrl.value,
         videoLimit: videoLimit.value,
+        language: transcriptLanguage.value,
         ruleIds: selectedRuleIds.value,
         storageMode: storageMode.value,
       },
@@ -113,6 +118,29 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <input v-model.number="videoLimit" type="number" min="1" max="10">
         </label>
 
+        <label class="field language-field">
+          <span>Язык субтитров</span>
+          <input
+            v-model.trim="transcriptLanguage"
+            list="transcript-language-options"
+            type="text"
+            placeholder="ru или ru,en,asr"
+          >
+          <datalist id="transcript-language-options">
+            <option value="">Авто</option>
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+            <option value="sk">Slovenčina</option>
+            <option value="uk">Українська</option>
+            <option value="cs">Čeština</option>
+            <option value="de">Deutsch</option>
+            <option value="asr">Любые auto-generated captions</option>
+          </datalist>
+          <small class="muted">
+            Можно задать приоритет: ru,en,asr. Пусто = автоматический выбор TranscriptAPI.
+          </small>
+        </label>
+
         <label class="field storage-field">
           <span>Режим хранения</span>
           <select v-model="storageMode">
@@ -159,6 +187,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <p class="muted">
             Проверено кандидатов: {{ result.selection.inspectedVideos }}.
             Caption-eligible: {{ result.selection.captionEligibleVideos }}.
+            Язык: {{ result.selection.requestedLanguage }}.
             Storage: {{ result.storageMode }}.
             <span v-if="result.scanId">Scan ID: {{ result.scanId }}.</span>
           </p>
@@ -188,7 +217,10 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <p v-if="video.status === 'transcript_unavailable'" class="muted">
                 {{ unavailableText(video.unavailableReason) }}
               </p>
-              <p v-else-if="video.detections.length === 0" class="clean">
+              <p v-if="video.status === 'analyzed' && video.transcriptLanguage" class="muted">
+                Transcript track: {{ video.transcriptLanguage }}.
+              </p>
+              <p v-if="video.status === 'analyzed' && video.detections.length === 0" class="clean">
                 По выбранным правилам совпадений не найдено.
               </p>
               <p v-if="video.contextFilterStatus === 'fallback'" class="muted">

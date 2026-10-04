@@ -8,6 +8,7 @@ export class ScanStorage {
   readonly scanId = `${new Date().toISOString().replace(/[:.]/g, '-')}_${randomUUID()}`
   private providerExchanges: TranscriptApiExchange[] = []
   private jevExchanges: JevExchange[] = []
+  private analysisTrace: unknown[] = []
 
   constructor(
     readonly mode: ScanStorageMode,
@@ -25,6 +26,10 @@ export class ScanStorage {
 
   recordJev = (exchange: JevExchange): void => {
     if (this.mode === 'diagnostic') this.jevExchanges.push(exchange)
+  }
+
+  recordAnalysisTrace = (entry: unknown): void => {
+    if (this.mode === 'diagnostic') this.analysisTrace.push(entry)
   }
 
   async save(result: ChannelCheckResponse): Promise<void> {
@@ -48,6 +53,11 @@ export class ScanStorage {
         writeFile(
           `${directory}/jev-exchanges.json`,
           JSON.stringify(this.jevExchanges, null, 2) + '\n',
+          'utf8',
+        ),
+        writeFile(
+          `${directory}/analysis-trace.json`,
+          JSON.stringify(this.analysisTrace, null, 2) + '\n',
           'utf8',
         ),
       ])

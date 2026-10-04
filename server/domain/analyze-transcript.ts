@@ -14,7 +14,8 @@ const MAX_CONTEXT_CHARS = 900
 
 /**
  * Server-only intermediate that may contain raw transcript context.
- * Never return, persist, cache, log, or send this type to the client.
+ * Never return this type to the public API/client.
+ * Raw fields may only be persisted/logged in explicitly enabled diagnostic mode.
  */
 export interface TranscriptCandidate {
   id: string
@@ -22,6 +23,8 @@ export interface TranscriptCandidate {
   hitCount: number
   startMs: number
   endMs: number
+  segmentText: string
+  matchedTerms: string[]
   context: string
 }
 
@@ -70,20 +73,24 @@ export function findTranscriptCandidates(
   segments.forEach((segment, segmentIndex) => {
     for (const ruleId of enabledRuleIds) {
       const rule = getRule(ruleId)
-      let hitCount = 0
+      const matchedTerms: string[] = []
 
       for (const pattern of rule.patterns) {
-        hitCount += Array.from(segment.text.matchAll(pattern)).length
+        for (const match of segment.text.matchAll(pattern)) {
+          matchedTerms.push((match[1] ?? match[0]).trim())
+        }
       }
 
-      if (hitCount === 0) continue
+      if (matchedTerms.length === 0) continue
 
       candidates.push({
         id: `c${candidateIndex}`,
         ruleId,
-        hitCount,
+        hitCount: matchedTerms.length,
         startMs: segment.startMs,
         endMs: Math.max(segment.endMs, segment.startMs),
+        segmentText: segment.text,
+        matchedTerms,
         context: buildContext(segments, segmentIndex),
       })
       candidateIndex += 1
