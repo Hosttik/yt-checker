@@ -80,6 +80,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       statusMessage: parsed.error.issues.map((issue) => issue.message).join('; '),
     })
   }
+  const request = parsed.data
 
   const config = useRuntimeConfig(event)
   const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey
@@ -95,7 +96,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     throw createError({ statusCode: 503, statusMessage: 'OPENAI_REASONING_EFFORT must be low.' })
   }
 
-  const storageMode = parsed.data.storageMode as ScanStorageMode
+  const storageMode = request.storageMode as ScanStorageMode
   let storage: ScanStorage
   try {
     storage = new ScanStorage(
@@ -127,9 +128,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
   )
   const analyzer = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
-  const languagePriority = parsed.data.language
-  const targetVideos = parsed.data.videoLimit
-  const enabledRuleIds = parsed.data.ruleIds as RuleId[]
+  const languagePriority = request.language
+  const targetVideos = request.videoLimit
+  const enabledRuleIds = request.ruleIds as RuleId[]
 
   logger.info('scan.started', {
     storageMode,
@@ -143,7 +144,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   let latest
   try {
-    latest = await transcriptProvider.getLatestVideos(parsed.data.channelUrl)
+    latest = await transcriptProvider.getLatestVideos(request.channelUrl)
   } catch (error) {
     logger.error('channel.latest.failed', { reason: transcriptReason(error) })
     throw createError({ statusCode: 502, statusMessage: 'Could not load this YouTube channel.' })
@@ -176,7 +177,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     if (usedChannelVideosFallback) return
     usedChannelVideosFallback = true
     try {
-      const page = await transcriptProvider.getChannelVideos(parsed.data.channelUrl)
+      const page = await transcriptProvider.getChannelVideos(request.channelUrl)
       await inspectVideos(page.videos, 'fallback')
     } catch (error) {
       logger.warn('channel.fallback.failed', { reason: transcriptReason(error) })
