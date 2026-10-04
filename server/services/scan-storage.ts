@@ -85,10 +85,37 @@ export class ScanStorage {
     })
   }
 
-  private buildMinimalResult(result: ChannelCheckResponse): ChannelCheckResponse {
+  private withoutEvidenceText(event: ContentEvent): Record<string, unknown> {
+    const { text: _text, ...rest } = event
+    return rest
+  }
+
+  private buildMinimalResult(result: ChannelCheckResponse): unknown {
     return {
       ...result,
-      videoReports: result.videoReports.map(({ candidates: _candidates, rejectedCandidates: _rejected, ...report }) => report),
+      contentEvents: result.contentEvents.map((event) => this.withoutEvidenceText(event)),
+      videoReports: result.videoReports.map(({ candidates: _candidates, rejectedCandidates: _rejected, ...report }) => ({
+        ...report,
+        categoryReports: report.categoryReports.map((categoryReport) => ({
+          ...categoryReport,
+          highlights: categoryReport.highlights.map((event) => this.withoutEvidenceText(event)),
+          details: categoryReport.details.map((event) => this.withoutEvidenceText(event)),
+        })),
+        scenes: report.scenes.map((scene) => ({
+          ...scene,
+          events: scene.events.map((event) => this.withoutEvidenceText(event)),
+        })),
+      })),
+      videos: result.videos.map((video) => ({
+        ...video,
+        speechQuality: video.speechQuality
+          ? {
+              ...video.speechQuality,
+              examples: video.speechQuality.examples.map(({ text: _text, ...example }) => example),
+            }
+          : undefined,
+        violations: video.violations.map(({ text: _text, ...violation }) => violation),
+      })),
     }
   }
 
