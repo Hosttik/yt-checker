@@ -205,22 +205,22 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     throw createError({ statusCode: 502, statusMessage: 'Could not inspect video captions from TranscriptAPI.' })
   }
   let usedChannelVideosFallback = false
-  async function loadFallbackVideos(): Promise<void> {
+  async function loadFallbackVideos(requiredCandidateCount: number): Promise<void> {
     // Inspect any remaining free latest-video candidates before buying a fallback page.
-    await inspectVideos(latest.videos, 'latest')
-    if (eligibleVideos.length > candidateIndex || usedChannelVideosFallback) return
+    await inspectVideos(latest.videos, 'latest', requiredCandidateCount)
+    if (eligibleVideos.length >= requiredCandidateCount || usedChannelVideosFallback) return
 
     usedChannelVideosFallback = true
     try {
       const page = await transcriptProvider.getChannelVideos(request.channelUrl)
-      await inspectVideos(page.videos, 'fallback', candidateIndex + targetVideos)
+      await inspectVideos(page.videos, 'fallback', Math.max(requiredCandidateCount, targetVideos + 2))
     } catch (error) {
       logger.warn('channel.fallback.failed', { reason: transcriptReason(error) })
     }
   }
 
   if (eligibleVideos.length < targetVideos) {
-    await loadFallbackVideos()
+    await loadFallbackVideos(targetVideos)
   }
 
   const videoResults: VideoScanResult[] = []
@@ -247,7 +247,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       break
     }
     if (candidateIndex >= eligibleVideos.length) {
-      await loadFallbackVideos()
+      await loadFallbackVideos(candidateIndex + 1)
       if (candidateIndex >= eligibleVideos.length) break
     }
 
