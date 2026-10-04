@@ -397,7 +397,6 @@ export class TranscriptApiClient {
       video_url: videoId,
       format: 'json',
       include_timestamp: 'true',
-      send_metadata: 'true',
     }
 
     if (languagePriority) params.language = languagePriority
