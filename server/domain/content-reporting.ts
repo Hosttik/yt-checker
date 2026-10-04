@@ -43,31 +43,87 @@ function policyFor(category: ContentCategory): CategoryPolicy {
   return categoryPolicies[category] as CategoryPolicy
 }
 
-function orderedSceneEvents(events: ContentEvent[]): ContentEvent[] {
+function sceneEventSignalScore(event: ContentEvent): number {
   const severityRank = { low: 1, medium: 2, high: 3 } as const
-  return [...events].sort((a, b) => {
-    const relevanceDelta = PARENT_RELEVANCE_RANK[b.parentRelevance] - PARENT_RELEVANCE_RANK[a.parentRelevance]
-    if (relevanceDelta !== 0) return relevanceDelta
-    return severityRank[b.severity] - severityRank[a.severity]
-  })
+  const review = event.review
+  let score = PARENT_RELEVANCE_RANK[event.parentRelevance] * 100
+    + severityRank[event.severity] * 10
+
+  if (review && review.status !== 'not_reviewed') score += 10
+  if (review?.evidenceSufficiency === 'sufficient') score += 8
+  else if (review?.evidenceSufficiency === 'partial') score += 2
+
+  if (event.assertionStatus === 'actual' || event.assertionStatus === 'threatened') score += 4
+  if (event.engagementLevel === 'depiction' || event.engagementLevel === 'participation') score += 3
+
+  if (review?.distress === 'strong') score += 8
+  else if (review?.distress === 'clear') score += 4
+
+  if (review?.consequence === 'death') score += 12
+  else if (review?.consequence === 'injury_or_severe_harm') score += 10
+  else if (review?.consequence === 'threatened_harm') score += 6
+  else if (review?.consequence === 'property_only') score += 1
+
+  if (review?.duration === 'sustained') score += 5
+  if (review?.repetition === 'pattern') score += 5
+  else if (review?.repetition === 'repeated') score += 3
+
+  if (event.category === 'scary_and_disturbing') {
+    if (event.details.fearIntensity === 'strong') score += 8
+    else if (event.details.fearIntensity === 'moderate') score += 3
+    if (event.details.threatPresent) score += 3
+    if (event.subtype === 'intense_peril') score += 3
+  }
+
+  if (event.category === 'violence') {
+    if (event.subtype === 'life_threatening_situation') score += 10
+    else if (event.subtype === 'physical_attack' || event.subtype === 'violent_threat') score += 6
+    else if (event.subtype === 'dangerous_situation') score += 3
+    if (event.details.weaponRole === 'used' || event.details.weaponRole === 'threatened_use') score += 4
+    if (event.details.harmLevel === 'actual' || event.details.harmLevel === 'attempted') score += 3
+  }
+
+  return score
+}
+
+function orderedSceneEvents(events: ContentEvent[]): ContentEvent[] {
+  return [...events].sort((a, b) =>
+    sceneEventSignalScore(b) - sceneEventSignalScore(a)
+    || eventEvidenceStart(a) - eventEvidenceStart(b),
+  )
+}
+
+function primarySceneEvent(events: ContentEvent[]): ContentEvent | undefined {
+  const ordered = orderedSceneEvents(events)
+  return ordered.find((event) => event.review?.parentSummary?.trim())
+    ?? ordered.find((event) => event.reason.trim())
+    ?? ordered[0]
 }
 
 function sceneSummary(events: ContentEvent[]): string {
-  const ordered = orderedSceneEvents(events)
-  const reviewed = ordered.find((event) => event.review?.parentSummary?.trim())
-  return reviewed?.review?.parentSummary?.trim()
-    || ordered.find((event) => event.reason.trim())?.reason.trim()
+  const primary = primarySceneEvent(events)
+  return primary?.review?.parentSummary?.trim()
+    || primary?.reason.trim()
     || ''
 }
 
 function sceneMitigatingContext(events: ContentEvent[]): string | undefined {
-  const summary = sceneSummary(events)
+  const primary = primarySceneEvent(events)
+  const summary = primary?.review?.parentSummary?.trim() || primary?.reason.trim() || ''
+  const primaryContext = primary?.review?.mitigatingContext?.trim()
+  if (primaryContext && primaryContext !== summary) return primaryContext
+
   return orderedSceneEvents(events)
+    .filter((event) => event !== primary)
     .map((event) => event.review?.mitigatingContext?.trim())
     .find((value): value is string => Boolean(value && value !== summary))
 }
 
 function scenePriorityReason(events: ContentEvent[]): string | undefined {
+  const primary = primarySceneEvent(events)
+  if (primary?.parentRelevance === 'high' && primary.review?.highPriorityReason?.trim()) {
+    return primary.review.highPriorityReason.trim()
+  }
   return orderedSceneEvents(events)
     .filter((event) => event.parentRelevance === 'high')
     .map((event) => event.review?.highPriorityReason?.trim())
@@ -268,11 +324,44 @@ function mergeStoryArcScenes(scenes: DraftScene[]): DraftScene[] {
   return merged
 }
 
+function unreviewedModerateHasHardRisk(event: ContentEvent): boolean {
+  if (event.evidenceStrength === 'weak_context') return false
+
+  if (event.category === 'violence') {
+    const directedTarget = event.details.targetType === 'person'
+      || event.details.targetType === 'human_like_character'
+      || event.details.targetType === 'animal'
+      || event.details.targetType === 'fantasy_creature'
+    const weaponAggression = directedTarget
+      && (event.details.weaponRole === 'used' || event.details.weaponRole === 'threatened_use')
+      && (event.subtype === 'physical_attack' || event.subtype === 'violent_threat')
+    const lethalPeril = event.subtype === 'life_threatening_situation'
+      && (event.assertionStatus === 'actual' || event.assertionStatus === 'threatened')
+    const severeHarm = event.severity === 'high'
+      && (event.subtype === 'injury' || event.subtype === 'death' || event.subtype === 'graphic_violence')
+    return weaponAggression || lethalPeril || severeHarm
+  }
+
+  if (event.category === 'scary_and_disturbing') {
+    return event.subtype === 'intense_peril'
+      && event.severity === 'high'
+      && event.assertionStatus === 'actual'
+      && event.details.fearIntensity === 'strong'
+      && event.details.threatPresent
+  }
+
+  return false
+}
+
 function moderateEventBelongsOnMain(event: ContentEvent): boolean {
   if (event.parentRelevance !== 'moderate') return false
 
   const review = event.review
   if (review?.status === 'uncertain' && review.evidenceSufficiency !== 'sufficient') return false
+  if (review?.status === 'not_reviewed'
+    && (event.category === 'violence' || event.category === 'scary_and_disturbing')) {
+    return unreviewedModerateHasHardRisk(event)
+  }
 
   if (event.category !== 'violence' && event.category !== 'scary_and_disturbing') return true
 
@@ -512,14 +601,26 @@ export function buildChannelCategoryReports(
     const peakConcern: ReportLevel = displayed.length === 0
       ? 'none'
       : relevanceToReportLevel(maxDisplayedRelevance)
-    let level: ReportLevel = peakConcern
     const affectedRatio = analyzedVideos > 0 ? affectedVideos / analyzedVideos : 0
-    if (level === 'low' && affectedRatio >= 0.6 && displayed.length >= 3) level = 'moderate'
-    else if (level === 'moderate' && affectedRatio >= 0.8 && displayed.length >= 5) level = 'high'
-    if (displayed.some((event) => event.parentRelevance === 'high')) level = 'high'
     const prevalence = prevalenceLevel(affectedVideos, analyzedVideos)
     const moderatePlusAffectedRatio = analyzedVideos > 0 ? moderatePlusAffectedVideos / analyzedVideos : 0
     const moderatePlusPrevalence = prevalenceLevel(moderatePlusAffectedVideos, analyzedVideos)
+    const highlightedRatio = analyzedVideos > 0 ? highlightedVideos / analyzedVideos : 0
+
+    let level: ReportLevel
+    if (displayed.length === 0) {
+      level = 'none'
+    } else if (moderatePlusAffectedVideos === 0) {
+      level = affectedRatio >= 0.6 && displayed.length >= 3 ? 'moderate' : 'low'
+    } else if (
+      highlightedVideos >= 2
+      && highlightedRatio >= 0.3
+      && moderatePlusAffectedRatio >= 0.5
+    ) {
+      level = 'high'
+    } else {
+      level = 'moderate'
+    }
 
     const subtypeMap = new Map<string, { eventCount: number; videoIds: Set<string> }>()
     for (const item of perVideo) {
