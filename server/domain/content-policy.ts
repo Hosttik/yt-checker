@@ -284,18 +284,91 @@ export const categoryPolicies: {
   self_harm: selfHarmPolicy,
 }
 
+function reviewedHighPriorityIsSupported(event: ClassifiedContentEvent): boolean {
+  const review = event.review
+  if (!review || review.status === 'not_reviewed') return true
+  if (!review.highPriorityReason?.trim()) return false
+
+  const hasSeriousConsequence = review.consequence === 'threatened_harm'
+    || review.consequence === 'injury_or_severe_harm'
+    || review.consequence === 'death'
+  const directedCoercion = review.intent === 'coercive'
+    && review.aggressionDirection === 'actor_to_target'
+    && (review.duration === 'sustained'
+      || review.repetition === 'repeated'
+      || review.repetition === 'pattern'
+      || hasSeriousConsequence)
+
+  if (event.category === 'violence') {
+    const details = event.details
+    const directedTarget = details.targetType === 'person'
+      || details.targetType === 'human_like_character'
+      || details.targetType === 'animal'
+      || details.targetType === 'fantasy_creature'
+    const directedWeaponAggression = directedTarget
+      && (details.weaponRole === 'threatened_use' || details.weaponRole === 'used')
+      && details.harmLevel !== 'none'
+      && (review.intent === 'aggressive' || review.intent === 'coercive')
+    const immediateLethalPeril = event.subtype === 'life_threatening_situation'
+      && event.assertionStatus !== 'hypothetical'
+      && event.assertionStatus !== 'negated'
+      && details.harmLevel !== 'none'
+      && (hasSeriousConsequence
+        || review.distress === 'clear'
+        || review.distress === 'strong'
+        || review.duration === 'sustained')
+    const severeAttack = event.subtype === 'physical_attack'
+      && review.intent === 'aggressive'
+      && (details.harmLevel === 'actual'
+        || details.harmLevel === 'attempted'
+        || review.consequence === 'injury_or_severe_harm'
+        || review.consequence === 'death')
+
+    return event.subtype === 'graphic_violence'
+      || directedCoercion
+      || directedWeaponAggression
+      || immediateLethalPeril
+      || severeAttack
+  }
+
+  if (event.category === 'scary_and_disturbing') {
+    const immediatePeril = event.subtype === 'intense_peril'
+      && event.details.threatPresent
+      && event.details.fearIntensity === 'strong'
+      && event.assertionStatus !== 'hypothetical'
+      && event.assertionStatus !== 'negated'
+      && (hasSeriousConsequence
+        || review.distress === 'strong'
+        || review.duration === 'sustained')
+
+    return directedCoercion || immediatePeril
+  }
+
+  return true
+}
+
 function reviewAdjustedRelevance(
   event: ClassifiedContentEvent,
   baseline: ParentRelevance,
 ): ParentRelevance {
   const review = event.review
   if (!review || review.status === 'not_reviewed') return baseline
-  if (review.status === 'uncertain') {
-    return relevanceRank[review.recommendedParentRelevance] > relevanceRank[baseline]
-      ? review.recommendedParentRelevance
-      : baseline
+
+  if (review.status === 'uncertain'
+    && relevanceRank[review.recommendedParentRelevance] <= relevanceRank[baseline]) {
+    // An uncertain review may add caution, but must not erase a serious
+    // first-pass signal. High-priority gating only applies when review
+    // actually promotes the event.
+    return baseline
   }
-  return review.recommendedParentRelevance
+
+  const recommended = review.recommendedParentRelevance
+  if (recommended === 'high'
+    && (event.category === 'violence' || event.category === 'scary_and_disturbing')
+    && !reviewedHighPriorityIsSupported(event)) {
+    return 'moderate'
+  }
+  return recommended
 }
 
 function preferenceAdjustedRelevance(

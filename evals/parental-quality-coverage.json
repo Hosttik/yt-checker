@@ -1,0 +1,25 @@
+{
+  "note": "Card-level precision is valid only for videos marked exhaustive and humanConfirmed. Existing labels are anchor-only provisional calibration cases.",
+  "videos": {
+    "RmGCg3FRdb8": {
+      "coverage": "anchor_only",
+      "humanConfirmed": false
+    },
+    "kQCshtG4DOw": {
+      "coverage": "anchor_only",
+      "humanConfirmed": false
+    },
+    "wiuuBaYC8B8": {
+      "coverage": "anchor_only",
+      "humanConfirmed": false
+    },
+    "_xR7fZ24O4g": {
+      "coverage": "anchor_only",
+      "humanConfirmed": false
+    },
+    "CmABITGAsNs": {
+      "coverage": "anchor_only",
+      "humanConfirmed": false
+    }
+  }
+}

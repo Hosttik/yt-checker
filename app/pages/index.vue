@@ -376,6 +376,12 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               </div>
               <div class="evidence">
                 <p>{{ scene.summary }}</p>
+                <small v-if="scene.priorityReason">
+                  <strong>Почему высокий приоритет:</strong> {{ scene.priorityReason }}
+                </small>
+                <small v-if="scene.mitigatingContext">
+                  <strong>Контекст:</strong> {{ scene.mitigatingContext }}
+                </small>
                 <small v-if="result.profile === 'diagnostic'">
                   {{ scene.events.map(event => `${event.subtype} [${event.review?.status || 'not_reviewed'}]`).join(' · ') }}
                 </small>
@@ -405,6 +411,9 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                 </div>
                 <div class="evidence">
                   <p>{{ scene.summary }}</p>
+                  <small v-if="scene.mitigatingContext">
+                    <strong>Контекст:</strong> {{ scene.mitigatingContext }}
+                  </small>
                 </div>
               </li>
             </ul>

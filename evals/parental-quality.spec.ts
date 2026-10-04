@@ -43,7 +43,7 @@ type Priority = 'hidden' | 'details' | 'main'
 
 interface ManualCase {
   id: string
-  annotationSource: 'manual'
+  annotationSource: 'provisional' | 'human_confirmed'
   split: 'tuning' | 'holdout'
   sourceVideo: string
   anchor: string
@@ -108,6 +108,7 @@ interface MetricSet {
   annotatedCases: number
   shownCases: number
   usefulShownCases: number
+  /** Anchor-only precision. Do not interpret this as card-level precision. */
   usefulWarningPrecision: number | null
   substantialMisses: number
   lowValueCards: number
@@ -115,6 +116,25 @@ interface MetricSet {
   mainCases: number
   detailCases: number
   hiddenCases: number
+}
+
+interface VideoCoverageFile {
+  note: string
+  videos: Record<string, {
+    coverage: 'anchor_only' | 'exhaustive'
+    humanConfirmed: boolean
+  }>
+}
+
+interface CardAudit {
+  allDisplayedCards: number
+  matchedKnownVisibleAnchors: number
+  withoutKnownVisibleAnchor: number
+  exhaustiveHumanVideos: number
+  exhaustiveDisplayedCards: number
+  exhaustiveUsefulCards: number
+  cardPrecision: number | null
+  exhaustiveVisibleMisses: number
 }
 
 function zeroUsage(): AggregateOpenAIUsage {
@@ -235,6 +255,73 @@ function metricsFor(
   }
 }
 
+function cardAuditFor(
+  annotations: ManualCase[],
+  eventsByVideo: Map<string, ContentEvent[]>,
+  coverage: VideoCoverageFile,
+): CardAudit {
+  let allDisplayedCards = 0
+  let matchedKnownVisibleAnchors = 0
+  let exhaustiveHumanVideos = 0
+  let exhaustiveDisplayedCards = 0
+  let exhaustiveUsefulCards = 0
+  let exhaustiveVisibleMisses = 0
+
+  for (const [videoId, events] of eventsByVideo.entries()) {
+    const scenes = buildPresentationScenes(events)
+    const visibleAnnotations = annotations.filter((annotation) =>
+      annotation.sourceVideo === videoId && annotation.showToParent,
+    )
+    const matched = scenes.filter((scene) =>
+      visibleAnnotations.some((annotation) =>
+        scene.events.some((event) => eventMatches(event, annotation)),
+      ),
+    ).length
+
+    allDisplayedCards += scenes.length
+    matchedKnownVisibleAnchors += matched
+
+    const videoCoverage = coverage.videos[videoId]
+    const exhaustive = videoCoverage?.coverage === 'exhaustive' && videoCoverage.humanConfirmed
+    if (!exhaustive) continue
+
+    exhaustiveHumanVideos += 1
+    exhaustiveDisplayedCards += scenes.length
+    exhaustiveUsefulCards += matched
+    exhaustiveVisibleMisses += visibleAnnotations.filter((annotation) =>
+      !scenes.some((scene) => scene.events.some((event) => eventMatches(event, annotation))),
+    ).length
+  }
+
+  return {
+    allDisplayedCards,
+    matchedKnownVisibleAnchors,
+    withoutKnownVisibleAnchor: allDisplayedCards - matchedKnownVisibleAnchors,
+    exhaustiveHumanVideos,
+    exhaustiveDisplayedCards,
+    exhaustiveUsefulCards,
+    cardPrecision: exhaustiveDisplayedCards === 0
+      ? null
+      : exhaustiveUsefulCards / exhaustiveDisplayedCards,
+    exhaustiveVisibleMisses,
+  }
+}
+
+function displayedSceneSignatures(
+  eventsByVideo: Map<string, ContentEvent[]>,
+): Record<string, string[]> {
+  return Object.fromEntries([...eventsByVideo.entries()].map(([videoId, events]) => [
+    videoId,
+    buildPresentationScenes(events).map((scene) => [
+      scene.attention,
+      scene.level,
+      [...scene.categories].sort().join('+'),
+      Math.round(scene.startMs / 5_000),
+      Math.round(scene.endMs / 5_000),
+    ].join(':')),
+  ]))
+}
+
 function firstPassMisses(
   annotations: ManualCase[],
   eventsByVideo: Map<string, ClassifiedContentEvent[]>,
@@ -347,9 +434,12 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const reviewModel = process.env.OPENAI_REVIEW_MODEL ?? model
     const profile: AnalysisProfile = 'normal'
 
-    const annotations = JSON.parse(
-      await readFile(resolve('evals/parental-quality-manual.json'), 'utf8'),
-    ) as ManualCase[]
+    const [annotations, coverage] = await Promise.all([
+      readFile(resolve('evals/parental-quality-manual.json'), 'utf8')
+        .then((raw) => JSON.parse(raw) as ManualCase[]),
+      readFile(resolve('evals/parental-quality-coverage.json'), 'utf8')
+        .then((raw) => JSON.parse(raw) as VideoCoverageFile),
+    ])
     const loaded = await Promise.all(scanDirs.map(loadScan))
     const allRecords = loaded.flatMap((item) => item.records)
 
@@ -366,7 +456,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const selectedVideoIds = new Set(selected.map((record) => record.videoId))
     const applicableAnnotations = annotations.filter((annotation) => selectedVideoIds.has(annotation.sourceVideo))
     if (applicableAnnotations.length === 0) {
-      throw new Error('None of the manually annotated videos are present in the selected saved scans.')
+      throw new Error('None of the annotated videos are present in the selected saved scans.')
     }
 
     const baselineByScan = loaded.map((item, scanIndex) => {
@@ -378,6 +468,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       return {
         scan: basename(scanDirs[scanIndex]!),
         metrics: metricsFor(scanAnnotations, eventsByVideo),
+        cardAudit: cardAuditFor(scanAnnotations, eventsByVideo, coverage),
         usage: item.result.openaiUsage ?? zeroUsage(),
         latencyMs: records.reduce((sum, record) => sum + record.baselineLatencyMs, 0),
         annotations: scanAnnotations.map((item) => item.id),
@@ -387,6 +478,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const runOutputs: Array<{
       metrics: MetricSet
       onePassMetrics: MetricSet
+      cardAudit: CardAudit
+      onePassCardAudit: CardAudit
       firstPassSubstantialMisses: number
       requests: number
       tokens: number
@@ -396,6 +489,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       onePassSceneCount: number
       sceneCount: number
       priorities: Record<string, Priority>
+      sceneSignatures: Record<string, string[]>
     }> = []
 
     for (let run = 0; run < runs; run += 1) {
@@ -421,6 +515,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       runOutputs.push({
         metrics: metricsFor(applicableAnnotations, currentByVideo),
         onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
+        cardAudit: cardAuditFor(applicableAnnotations, currentByVideo, coverage),
+        onePassCardAudit: cardAuditFor(applicableAnnotations, onePassByVideo, coverage),
         firstPassSubstantialMisses: firstPassMisses(
           applicableAnnotations.filter((item) => item.priority === 'main'),
           firstPassByVideo,
@@ -433,10 +529,12 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         onePassSceneCount: outputs.reduce((sum, item) => sum + item.onePassSceneCount, 0),
         sceneCount: outputs.reduce((sum, item) => sum + item.sceneCount, 0),
         priorities: priorities(applicableAnnotations, currentByVideo),
+        sceneSignatures: displayedSceneSignatures(currentByVideo),
       })
     }
 
     let stability: number | null = null
+    let displayedCardStability: number | null = null
     if (runOutputs.length > 1) {
       let comparisons = 0
       let equal = 0
@@ -448,6 +546,22 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         }
       }
       stability = comparisons === 0 ? null : equal / comparisons
+
+      let cardComparisons = 0
+      let cardSimilarity = 0
+      const firstScenes = runOutputs[0]!.sceneSignatures
+      for (const output of runOutputs.slice(1)) {
+        const videoIds = new Set([...Object.keys(firstScenes), ...Object.keys(output.sceneSignatures)])
+        for (const videoId of videoIds) {
+          const left = new Set(firstScenes[videoId] ?? [])
+          const right = new Set(output.sceneSignatures[videoId] ?? [])
+          const union = new Set([...left, ...right])
+          const intersection = [...left].filter((signature) => right.has(signature)).length
+          cardSimilarity += union.size === 0 ? 1 : intersection / union.size
+          cardComparisons += 1
+        }
+      }
+      displayedCardStability = cardComparisons === 0 ? null : cardSimilarity / cardComparisons
     }
 
     const baselineCombinedEvents = new Map<string, ContentEvent[]>()
@@ -457,6 +571,11 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       }
     }
     const baselineCombined = metricsFor(applicableAnnotations, baselineCombinedEvents)
+    const baselineCombinedCardAudit = cardAuditFor(
+      applicableAnnotations,
+      baselineCombinedEvents,
+      coverage,
+    )
     const current = runOutputs[0]!
 
     const report = {
@@ -465,10 +584,15 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         scanDirs,
         selectedUniqueFullTranscripts: selected.length,
         selectedRecords: selectedRecords.length,
-        manualAnnotations: applicableAnnotations.length,
+        annotations: applicableAnnotations.length,
+        provisionalAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'provisional').length,
+        humanConfirmedAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'human_confirmed').length,
         tuningAnnotations: applicableAnnotations.filter((item) => item.split === 'tuning').length,
         holdoutAnnotations: applicableAnnotations.filter((item) => item.split === 'holdout').length,
-        annotationNote: 'Small manually engineered validation set; not evidence of general model accuracy.',
+        exhaustiveHumanVideos: Object.values(coverage.videos).filter((item) =>
+          item.coverage === 'exhaustive' && item.humanConfirmed,
+        ).length,
+        annotationNote: coverage.note,
       },
       versions: {
         detectorModel: model,
@@ -480,28 +604,34 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       },
       baselineByScan,
       baselineCombined,
+      baselineCombinedCardAudit,
       currentOnePass: {
         metrics: current.onePassMetrics,
         requests: selected.length,
         tokens: current.detectorTokens,
         latencyMs: current.detectorLatencyMs,
         sceneCount: current.onePassSceneCount,
+        cardAudit: current.onePassCardAudit,
       },
       newTwoPass: {
         ...current,
         repeatedRuns: runs,
         stability,
+        displayedCardStability,
         averageRequests: average(runOutputs.map((item) => item.requests)),
         averageTokens: average(runOutputs.map((item) => item.tokens)),
         averageLatencyMs: average(runOutputs.map((item) => item.latencyMs)),
       },
       interpretation: {
-        usefulWarningPrecision: 'Share of shown manually labelled cases that the gold set says should be parent-visible.',
-        substantialMisses: 'Gold main-priority scenes that were hidden or relegated to details.',
-        lowValueCards: 'Gold hidden cases shown at all, plus gold details cases promoted to main.',
-        unsupportedClaims: 'Machine-checkable forbidden category/subtype interpretations from the manual gold set.',
-        firstPassSubstantialMisses: 'Gold main scenes not detected by the full-transcript first pass before review.',
-        stability: 'Share of manual cases whose final priority is unchanged across repeated full-transcript runs.',
+        usefulWarningPrecision: 'Anchor-only metric: share of shown annotated anchors that are expected to be parent-visible. It is not card-level precision.',
+        cardAudit: 'Counts every displayed card. Cards without a known visible anchor are diagnostic only until that video has exhaustive human-confirmed labels.',
+        cardPrecision: 'Computed only on videos explicitly marked exhaustive and humanConfirmed; null otherwise.',
+        substantialMisses: 'Annotated main-priority scenes that were hidden or relegated to details.',
+        lowValueCards: 'Annotated hidden cases shown at all, plus annotated details cases promoted to main.',
+        unsupportedClaims: 'Machine-checkable forbidden category/subtype interpretations from the annotated set.',
+        firstPassSubstantialMisses: 'Annotated main scenes not detected by the full-transcript first pass before review.',
+        stability: 'Share of annotated anchors whose final priority is unchanged across repeated full-transcript runs.',
+        displayedCardStability: 'Average Jaccard similarity of all displayed scene signatures across repeated runs.',
       },
     }
 

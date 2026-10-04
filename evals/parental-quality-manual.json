@@ -1,7 +1,7 @@
 [
   {
     "id": "one-off-mild-insult",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "tuning",
     "sourceVideo": "RmGCg3FRdb8",
     "anchor": "Как же вы глупые и наивные",
@@ -24,7 +24,7 @@
   },
   {
     "id": "routine-building-demolition",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "tuning",
     "sourceVideo": "RmGCg3FRdb8",
     "anchor": "снести каменный дом и построить мне новый дом",
@@ -51,7 +51,7 @@
   },
   {
     "id": "coercive-confinement",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "tuning",
     "sourceVideo": "RmGCg3FRdb8",
     "anchor": "выход из деревни вам запрещён",
@@ -74,7 +74,7 @@
   },
   {
     "id": "railway-hostage-coercion",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "tuning",
     "sourceVideo": "kQCshtG4DOw",
     "anchor": "Ты должен выполнить мои задания для того, чтобы я их отпустил",
@@ -98,7 +98,7 @@
   },
   {
     "id": "conditional-hostage-threat",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "tuning",
     "sourceVideo": "kQCshtG4DOw",
     "anchor": "Не волнуйся, я вас не трону, если ты мне поможешь",
@@ -121,7 +121,7 @@
   },
   {
     "id": "ordinary-religious-exclamation",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "tuning",
     "sourceVideo": "wiuuBaYC8B8",
     "anchor": "О, господи",
@@ -143,7 +143,7 @@
   },
   {
     "id": "self-criticism-not-insult",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "holdout",
     "sourceVideo": "wiuuBaYC8B8",
     "anchor": "я всё-таки не очень",
@@ -165,7 +165,7 @@
   },
   {
     "id": "funeral-theme-without-death",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "holdout",
     "sourceVideo": "_xR7fZ24O4g",
     "anchor": "нам лишь остаётся попрощаться с ним",
@@ -190,7 +190,7 @@
   },
   {
     "id": "weapon-target-practice",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "holdout",
     "sourceVideo": "CmABITGAsNs",
     "anchor": "тренируется стрелять",
@@ -217,7 +217,7 @@
   },
   {
     "id": "railway-immediate-peril",
-    "annotationSource": "manual",
+    "annotationSource": "provisional",
     "split": "holdout",
     "sourceVideo": "kQCshtG4DOw",
     "anchor": "Мы привязаны",

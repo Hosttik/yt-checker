@@ -60,6 +60,12 @@ export interface ContentEventReview {
   duration: SceneDuration
   repetition: RepetitionLevel
   narrativeFraming: NarrativeFraming
+  /** Short parent-facing description grounded in direct evidence. */
+  parentSummary?: string
+  /** Separate mitigating context grounded in reviewed surrounding context. */
+  mitigatingContext?: string
+  /** Required from fresh reviews when high parent relevance is recommended. */
+  highPriorityReason?: string
   rationale: string
 }
 
@@ -304,5 +310,7 @@ export interface PresentationScene {
   evidenceRanges: Array<{ startMs: number; endMs: number }>
   label: string
   summary: string
+  mitigatingContext?: string
+  priorityReason?: string
   events: ContentEvent[]
 }

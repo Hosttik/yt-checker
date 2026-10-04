@@ -17,8 +17,8 @@ import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
 export const OPENAI_PROMPT_VERSION = '2026-10-04.content-events-v6'
 export const OPENAI_SCHEMA_VERSION = '9'
-export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-04.parent-scene-review-v1'
-export const OPENAI_REVIEW_SCHEMA_VERSION = '1'
+export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-04.parent-scene-review-v2'
+export const OPENAI_REVIEW_SCHEMA_VERSION = '2'
 
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
@@ -235,6 +235,9 @@ const reviewItemSchema = z.object({
   duration: z.enum(['momentary', 'brief', 'sustained', 'unclear']),
   repetition: z.enum(['single', 'repeated', 'pattern', 'unclear']),
   narrativeFraming: z.enum(['discouraged', 'neutral', 'humorous', 'endorsed', 'unclear']),
+  parentSummary: z.string().min(1).max(320),
+  mitigatingContext: z.string().min(1).max(280).nullable(),
+  highPriorityReason: z.string().min(1).max(280).nullable(),
   rationale: z.string().min(1).max(500),
 })
 
@@ -352,7 +355,13 @@ Parent relevance is NOT content intensity and NOT confidence:
 - minimal: genuine signal but normally not useful as a separate parent-facing item.
 - low: useful only in expandable light/disputed details.
 - moderate: useful as a main parent-facing scene.
-- high: high-priority parent-facing scene.
+- high: exceptional high-priority parent-facing scene.
+
+For every non-rejected review also write parentSummary: one short, natural Russian sentence describing only the core fact(s) supported by event.evidenceSegments. It is UI copy, not an internal classification explanation: avoid taxonomy names, confidence scores, duplicated clauses and speculation.
+mitigatingContext is separate UI context. Use null unless contextSegments directly support a material qualifier such as rescue, humorous framing, game/fiction framing that changes interpretation, or a later safe resolution. Do not use mitigating context to erase a real earlier threat.
+highPriorityReason must be null unless parentRelevance=high. For high, give one concise Russian sentence explaining the concrete escalation factor. Never justify high by category name, model confidence, severity label alone, or simply because something is fictional/game violence.
+
+Use high selectively. Ordinary game pursuit, routine monster combat, news that monsters/enemies may be approaching, brief fright, property-only destruction, and non-targeted weapon presence are normally moderate or low even when dramatic. High requires a clear escalation such as immediate potentially lethal peril with helpless targets, coercion or confinement that meaningfully removes choice, a directed weapon threat/attack, severe actual harm, or comparably strong scene facts. Positive calibration controls: people tied to rails while a train approaches; a captor using danger to force compliance; a directed attack or threat with a weapon. Game/fiction context does not automatically remove these from high.
 
 Calibrate relevance from the whole scene: actions and participants, who acts against whom, intent/coercion, consequences, expressed fear/distress, intensity, duration, repetition, fictional/game/real context, narrative stance when evidenced, and evidence sufficiency.
 A one-off mild tease such as calling characters "глупые и наивные" is normally low/minimal unless it participates in a sustained pattern of humiliation, especially where the target suffers or asks for it to stop. Repeated mild mockery can describe communication style without becoming a severe warning.
@@ -949,6 +958,9 @@ export class OpenAIAnalysisProvider {
             duration: item.duration,
             repetition: item.repetition,
             narrativeFraming: item.narrativeFraming,
+            parentSummary: item.parentSummary,
+            mitigatingContext: item.mitigatingContext ?? undefined,
+            highPriorityReason: item.highPriorityReason ?? undefined,
             rationale: item.rationale,
           }
           reviewedEvents.push({
