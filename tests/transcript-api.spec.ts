@@ -343,4 +343,64 @@ describe('TranscriptApiClient', () => {
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('treats 422 as a request/provider error rather than missing captions', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Invalid video URL or ID' }), { status: 422 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new TranscriptApiClient('secret', undefined, undefined, {
+      sleep: async () => {},
+    })
+
+    await expect(client.getTranscript('bad-video')).rejects.toMatchObject({
+      reason: 'provider_error',
+      status: 422,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry an ambiguous client-side network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('socket reset'))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new TranscriptApiClient('secret', undefined, undefined, {
+      sleep: async () => {},
+    })
+
+    await expect(client.getTranscript('video-one11')).rejects.toMatchObject({
+      reason: 'provider_error',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('classifies a client-side timeout without retrying it', async () => {
+    const timeout = new Error('timed out')
+    timeout.name = 'TimeoutError'
+    const fetchMock = vi.fn().mockRejectedValue(timeout)
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new TranscriptApiClient('secret', undefined, undefined, {
+      sleep: async () => {},
+      requestTimeoutMs: 1_000,
+    })
+
+    await expect(client.getTranscript('video-one11')).rejects.toMatchObject({
+      reason: 'provider_timeout',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('extracts the nested billing message from a 402 response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        message: 'You have run out of credits.',
+        reason: 'insufficient_credits',
+      },
+    }), { status: 402 })))
+    const client = new TranscriptApiClient('secret')
+
+    await expect(client.getTranscript('video-one11')).rejects.toMatchObject({
+      reason: 'billing',
+      providerMessage: 'You have run out of credits.',
+    })
+  })
 })
