@@ -130,6 +130,7 @@ describe('OpenAI content-event classifier', () => {
         harmLevel: 'none',
         targetType: 'object',
         weaponRole: 'possessed',
+        actionPurpose: 'unknown',
       },
     })])
   })
