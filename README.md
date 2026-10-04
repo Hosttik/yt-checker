@@ -1,343 +1,144 @@
 # YT Checker
 
-Parent-oriented YouTube channel checker. The application uses **TranscriptAPI.com as the only YouTube data gateway**; it does not call the official YouTube Data API directly.
+Проверка речи в последних YouTube-видео канала для родительского контроля. YouTube-данные и captions загружаются только через TranscriptAPI; анализ выполняется официальным OpenAI SDK через Responses API.
 
-## Channel scan flow
+## Pipeline
 
-A normal scan targets **10 successfully analyzed videos with captions**.
-
-1. `GET /youtube/channel/latest` — fetch the latest 15 videos. Free.
-2. `GET /youtube/info` — preflight candidate videos and keep only videos with available transcript languages. Free.
-3. If the latest 15 do not contain enough captioned videos, fetch one `GET /youtube/channel/videos` page and continue the free `/youtube/info` preflights. A successful page costs 1 credit.
-4. Request `GET /youtube/transcript` only for caption-eligible videos.
-5. A successful transcript costs 1 credit. Failed transcript requests do not consume a credit.
-6. Continue through eligible replacement videos until the requested number of successful transcript analyses is reached or the candidate pool is exhausted.
-7. Run local regex candidate detection.
-8. Optionally pass only bounded candidate context plus transcript-source metadata to TypeSafe Jev.
-9. Resolve every candidate as `confirmed`, `needs_review`, or `dismissed`.
-10. Return derived categories, confirmed/review counts, severity and YouTube timeline ranges.
-
-Typical 10-video scan:
+Для каждого видео выполняется один простой путь:
 
 ```text
-/channel/latest       0 credits
-/youtube/info         0 credits
-10 successful
-/youtube/transcript  10 credits
--------------------------------
-total                10 credits
+TranscriptAPI → normalizeTranscript → один OpenAI Responses API request
+              → strict Structured Output → evidence/result.json
 ```
 
-If a `/youtube/channel/videos` fallback page is required, the usual total is 11 credits.
+Regex/JEV prefilter, отдельные запросы по категориям, второй AI-pass и fallback на другой AI-провайдер не используются. Автоповторы SDK отключены: максимум один HTTP request на transcript, включая временные ошибки.
 
-TranscriptAPI charges paid endpoints only on successful HTTP 200 responses. Cached successful paid responses are also charged.
+Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка, и анализирует до 10 подходящих видео. Существующая логика TranscriptAPI и платный fallback `/youtube/channel/videos` сохранены.
 
-## Storage modes
+## Настройка
 
-The request supports three explicit modes.
-
-### `none`
-
-Nothing is persisted. Raw transcript exists only in process memory while the scan runs.
-
-### `minimal` — default
-
-Writes only:
-
-```text
-scan-results/<scan-id>/result.json
-```
-
-The result contains:
-
-- channel/video metadata needed by the product;
-- scan selection statistics;
-- actual TranscriptAPI credit usage;
-- transcript language;
-- Jev status;
-- derived rule categories/counts/severity;
-- YouTube timeline ranges.
-
-It does **not** contain transcript text or Jev candidate context.
-
-### `diagnostic`
-
-Writes the same derived `result.json` plus:
-
-```text
-transcriptapi-exchanges.json
-jev-exchanges.json
-```
-
-These files contain the complete diagnostic exchange needed to understand provider/classifier behavior, including raw response bodies and candidate context. Authorization headers are redacted.
-
-Diagnostic mode is disabled unless:
-
-```env
-NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
-```
-
-Do not enable it as the production default.
-
-## Docker-only local setup
-
-Only Docker Desktop / Docker Compose is required on the host.
+Требуется Node.js 22+.
 
 ```bash
 cp .env.example .env
-mkdir -p scan-results
-docker compose up --build
+npm install
+npm run dev
 ```
 
-Required:
+Обязательные переменные:
 
-```env
-NUXT_TRANSCRIPT_API_KEY=...
+```dotenv
+NUXT_TRANSCRIPT_API_KEY=
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5.6-luna
+OPENAI_REASONING_EFFORT=low
 ```
 
-Optional Jev layer:
+`OPENAI_REASONING_EFFORT` намеренно принимает только `low`. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
 
-```env
-NUXT_TYPESAFE_API_KEY=...
-NUXT_JEV_BENIGN_DISMISS_THRESHOLD=0.75
-NUXT_JEV_VIOLATION_CONFIRM_THRESHOLD=0.70
-```
+## OpenAI analyzer
 
-To use diagnostic storage locally:
+Статический system prompt экспортируется как `OPENAI_SYSTEM_PROMPT` из `server/services/openai-analysis.ts` и отправляется через `instructions` до динамического transcript. Пользовательский input содержит только язык, выбранные категории и компактный transcript с timestamps. Tools отключены (`tools: []`), `store: false`.
 
-```env
-NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
-```
-
-Open `http://localhost:3000`.
-
-Local scan artifacts appear under:
-
-```text
-scan-results/<scan-id>/
-```
-
-The directory is ignored by Git and excluded from Docker build contexts.
-
-## Checks
-
-```bash
-docker build --target verify .
-```
-
-CI runs type checking, Vitest and the production Nuxt build inside Docker, then smoke-tests the hardened runtime image.
-
-## Production privacy boundary
-
-The production default should remain `minimal` or `none`.
-
-Raw transcript content must not be persisted, cached, logged, returned from our API or displayed in the UI. Only bounded candidate context may be sent to Jev. Persistent product data should remain derived analysis plus the minimum channel/video metadata needed to render the result.
-
-See [SECURITY.md](./SECURITY.md) for the container and diagnostic-storage threat model.
-
-
-## Production-like local run with full diagnostics
-
-For local integration testing there is a dedicated production-image configuration with maximum diagnostics:
-
-```bash
-mkdir -p scan-results
-docker compose -f compose.full-debug.yaml up --build
-```
-
-This mode forces:
-
-```text
-NODE_ENV=production (from the runtime image)
-NUXT_LOG_LEVEL=debug
-NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
-NUXT_PUBLIC_DEFAULT_STORAGE_MODE=diagnostic
-```
-
-The browser UI therefore opens with `Diagnostic` selected by default.
-
-Operational logs are structured JSON and are visible with:
-
-```bash
-docker compose -f compose.full-debug.yaml logs -f app
-```
-
-Typical events include:
-
-```text
-scan.started
-channel.latest.loaded
-transcriptapi.exchange
-video.preflight.completed
-scan.selection.completed
-video.analysis.started
-video.regex.completed
-jev.exchange
-video.jev.completed
-video.analysis.completed
-scan.storage.completed
-scan.completed
-```
-
-Stdout intentionally contains metadata only: status codes, latency, counts, video IDs, credit usage and state transitions. API keys and raw transcript/Jev context are not printed to stdout.
-
-Complete diagnostic payloads are instead written to:
-
-```text
-scan-results/<scan-id>/
-  result.json
-  transcriptapi-exchanges.json
-  jev-exchanges.json
-```
-
-`transcriptapi-exchanges.json` contains complete provider response bodies including transcript text. `jev-exchanges.json` contains the bounded candidate contexts sent to Jev. Authorization headers are redacted.
-
-Docker stdout uses the `json-file` driver with rotation:
-
-```text
-max-size: 20m
-max-file: 5
-```
-
-Stop the full-debug stack with:
-
-```bash
-docker compose -f compose.full-debug.yaml down
-```
-
-Delete diagnostic content when finished:
-
-```bash
-rm -rf scan-results/*
-```
-
-This configuration is intentionally for local/staging diagnosis. Do not expose it as the public production configuration because diagnostic artifacts contain raw third-party transcript text.
-
-
-## Transcript language selection
-
-The scan request accepts an optional `language` priority list supported by TranscriptAPI, for example:
-
-```text
-ru
-ru,en
-ru,en,asr
-asr-ru
-```
-
-`/youtube/info` is used first for free language preflight. A plain code such as `ru` matches manual Russian captions first and auto-generated Russian captions as fallback. `asr` means any auto-generated captions. The paid transcript request receives the same language priority list, and the returned `transcriptLanguage` records the actual resolved track.
-
-The UI exposes this as a language field with common presets plus free-form comma-separated priorities.
-
-## Raw candidate diagnostics
-
-Full-debug mode now records the exact text responsible for rule matches.
-
-Structured events:
-
-```text
-transcript.request
-transcript.retry
-transcript.success
-transcript.failed
-candidate.regex_match
-candidate.jev_result
-candidate.final_resolution
-```
-
-When `NUXT_LOG_RAW_CANDIDATES=true` and the scan runs in `diagnostic` mode, stdout includes:
-
-- rule ID and label;
-- exact regex-matched term(s);
-- the full caption segment treated as the phrase;
-- bounded neighboring context;
-- start/end timestamps;
-- Jev choice, confidence and probabilities;
-- final `confirmed`, `needs_review`, or `dismissed` resolution.
-
-Diagnostic storage also writes:
-
-```text
-scan-results/<scan-id>/analysis-trace.json
-```
-
-This trace keeps the same phrase-level information even if Docker stdout rotates.
-
-The dedicated full-debug Compose file enables:
-
-```text
-NUXT_LOG_LEVEL=debug
-NUXT_LOG_RAW_CANDIDATES=true
-NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
-NUXT_PUBLIC_DEFAULT_STORAGE_MODE=diagnostic
-NUXT_PUBLIC_DEFAULT_TRANSCRIPT_LANGUAGE=ru
-```
-
-Raw candidate logging is intentionally not enabled by normal production configuration.
-
-
-### Diagnostic result.json evidence
-
-When a scan uses `storageMode: diagnostic`, the file written to disk at
-`scan-results/<scan-id>/result.json` is enriched with raw evidence for every final candidate resolution.
-
-Each video can contain:
+Structured Output строится SDK helper `zodTextFormat` со strict JSON Schema. Production schema:
 
 ```json
 {
-  "diagnosticEvidence": [
-    {
-      "candidateId": "c7",
-      "ruleId": "insults",
-      "ruleLabel": "Оскорбления",
-      "hitCount": 1,
-      "matchedTerms": ["дебил"],
-      "phrase": "да ты дебил вообще",
-      "context": "предыдущая фраза [CANDIDATE] да ты дебил вообще следующая фраза",
-      "startMs": 12400,
-      "endMs": 14400,
-      "youtubeUrl": "https://www.youtube.com/watch?v=VIDEO_ID&t=12s",
-      "resolution": "needs_review",
-      "transcriptLanguage": "asr-ru",
-      "transcriptSource": "asr",
-      "jev": {
-        "choice": "benign",
-        "confidence": 0.47,
-        "probabilities": { "benign": 0.65, "uncertain": 0.27, "violation": 0.08 }
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["violations"],
+  "properties": {
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "severity", "context", "type", "startMs", "endMs", "text", "reason"],
+        "properties": {
+          "category": { "enum": ["profanity_and_rude_language", "insults", "toilet_humor", "gambling", "sexual_content", "violence", "alcohol_and_drugs"] },
+          "severity": { "enum": ["low", "medium", "high"] },
+          "context": { "enum": ["realistic", "game", "fantasy", "cartoon", "verbal", "educational", "idiom", "other"] },
+          "type": { "enum": ["profanity", "rude_language", "not_applicable"] },
+          "startMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 },
+          "text": { "type": "string" },
+          "reason": { "type": "string" }
+        }
       }
     }
-  ]
+  }
 }
 ```
 
-For backward compatibility, non-dismissed evidence is also included in
-`diagnosticViolations`. All three resolutions are included in `diagnosticEvidence`,
-and all regex/Jev/retry decisions remain available in `analysis-trace.json`.
+Diagnostic mode добавляет только `rejectedCandidates`. В compact/minimal режиме это поле не запрашивается, чтобы не тратить output tokens.
 
-`selection.transcriptAttempts` remains a backward-compatible count of videos for
-which transcript retrieval was attempted. The explicit fields are:
+После Structured Output приложение дополнительно проверяет, что evidence text дословно присутствует в нормализованном transcript и timestamps лежат в его диапазоне. Нарушение этой инварианты становится `provider_error`, а видео не помечается безопасным.
+
+## Нормализация
+
+`normalizeTranscript()`:
+
+- сохраняет millisecond timestamps;
+- удаляет пустые segments, HTML-обвязку и бессодержательные `[музыка]`;
+- склеивает повторяющиеся слова в overlapping caption windows;
+- не переводит, не модерирует и не исправляет смысл.
+
+Пример:
+
+```text
+[00:00:00.199] Меня и моего друга заточили внутри
+[00:00:02.760] красного круга посреди луны.
+[00:01:49.960] Лёня дурёня.
+```
+
+## Результат и usage
+
+Minimal `result.json` содержит evidence и агрегированный OpenAI usage:
 
 ```json
 {
-  "transcriptVideosAttempted": 10,
-  "transcriptHttpRequests": 12
+  "analysisMode": "openai",
+  "openaiUsage": {
+    "requests": 1,
+    "inputTokens": 1200,
+    "outputTokens": 90,
+    "reasoningTokens": 32,
+    "totalTokens": 1322
+  },
+  "videos": [{
+    "id": "video-one11",
+    "url": "https://www.youtube.com/watch?v=video-one11",
+    "status": "analyzed",
+    "violations": [{
+      "category": "violence",
+      "severity": "low",
+      "context": "fantasy",
+      "type": "not_applicable",
+      "startMs": 511840,
+      "endMs": 519000,
+      "text": "Лунные зомби атакуют. Бежать нужно.",
+      "reason": "Фантастические существа атакуют персонажей; лёгкое игровое насилие."
+    }]
+  }]
 }
 ```
 
-`hitCount`/`count` mean all non-dismissed regex hits. `confirmedCount` and
-`reviewCount` split that total by final resolution.
+Usage хранится в `video.openaiUsage`, включая полученный usage отказов, неполных и невалидных ответов. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость не хардкодится.
 
-Jev decisions require finite confidence and all three probabilities in [0, 1],
-with probabilities summing to 1 (rounding tolerance 0.02). Missing or malformed
-scores resolve to `needs_review`. Confirmation requires both confidence and
-violation probability >= 0.70; dismissal requires both confidence and benign
-probability >= 0.75. The selected choice must have the largest probability.
-Threshold overrides must be greater than 0.5 and at most 1.
+Unit tests с подставленными ответами проверяют контракт и обработку evidence, но не качество классификации модели. Для оценки false positives нужны реальные вызовы выбранной модели на размеченных примерах.
 
-Incident merging uses a 5-second gap, a maximum 25-second span, and never
-discards evidence to fit the 900-character context limit. Compound matching
-uses at most three segments within 10 seconds. Truncated candidate segments
-remain `needs_review`. A paid successful HTTP response is accounted for even
-if reading its body fails; it is not automatically requested and charged again.
+## Storage и безопасность
 
-This enrichment applies only to the diagnostic file persisted on disk. The public API response remains derived-only and does not expose raw transcript phrases.
+- `none`: ничего не записывает.
+- `minimal`: только `result.json` с evidence и usage.
+- `diagnostic`: дополнительно `transcriptapi-exchanges.json` и `openai-analysis.json` с нормализованным transcript, metadata без ключа, raw structured response, parsed result, usage или безопасной ошибкой.
+
+Diagnostic требует `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`. API-ключ OpenAI никогда не попадает в request metadata, логи или файлы.
+
+## Проверка
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```

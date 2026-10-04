@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type {
+  AggregateOpenAIUsage,
   ChannelCheckResponse,
-  ContextFilterStatus,
   RuleId,
   ScanStorageMode,
   TranscriptUnavailableReason,
@@ -9,14 +9,9 @@ import type {
   VideoScanResult,
 } from '../../shared/types/check'
 import { RULE_IDS, SCAN_STORAGE_MODES } from '../../shared/types/check'
-import {
-  buildDetections,
-  buildRuleSummary,
-  findTranscriptCandidates,
-  type TranscriptCandidate,
-} from '../domain/analyze-transcript'
-import { getRule } from '../domain/rules'
-import { JevContextFilter } from '../services/jev-context-filter'
+import { buildDetections, buildRuleSummary } from '../domain/analyze-transcript'
+import { normalizeTranscript } from '../domain/normalize-transcript'
+import { OpenAIAnalysisError, OpenAIAnalysisProvider } from '../services/openai-analysis'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
@@ -25,16 +20,12 @@ import {
 } from '../services/transcript-api'
 import { createScanLogger } from '../utils/logger'
 
-const languageSchema = z.string()
-  .trim()
-  .max(100)
-  .default('')
-  .refine((value) => {
-    if (!value) return true
-    const codes = value.split(',').map((code) => code.trim())
-    return codes.length <= 10
-      && codes.every((code) => /^(?:asr(?:-[a-z0-9_-]+)?|[a-z0-9_-]+)$/i.test(code))
-  }, 'Language must be a comma-separated list of up to 10 language codes.')
+const languageSchema = z.string().trim().max(100).default('').refine((value) => {
+  if (!value) return true
+  const codes = value.split(',').map((code) => code.trim())
+  return codes.length <= 10
+    && codes.every((code) => /^(?:asr(?:-[a-z0-9_-]+)?|[a-z0-9_-]+)$/i.test(code))
+}, 'Language must be a comma-separated list of up to 10 language codes.')
 
 const checkRequestSchema = z.object({
   channelUrl: z.string().trim().min(1).max(500),
@@ -44,7 +35,7 @@ const checkRequestSchema = z.object({
   storageMode: z.enum(SCAN_STORAGE_MODES).default('minimal'),
 })
 
-function providerReason(error: unknown): TranscriptUnavailableReason {
+function transcriptReason(error: unknown): TranscriptUnavailableReason {
   return error instanceof TranscriptApiError ? error.reason : 'provider_error'
 }
 
@@ -73,9 +64,16 @@ function providerLogFields(exchange: TranscriptApiExchange): Record<string, unkn
   }
 }
 
+function addUsage(total: AggregateOpenAIUsage, usage: VideoScanResult['openaiUsage']): void {
+  if (!usage) return
+  total.inputTokens += usage.inputTokens
+  total.outputTokens += usage.outputTokens
+  total.reasoningTokens += usage.reasoningTokens
+  total.totalTokens += usage.totalTokens
+}
+
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
   const parsed = checkRequestSchema.safeParse(await readBody(event))
-
   if (!parsed.success) {
     throw createError({
       statusCode: 400,
@@ -84,15 +82,20 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const config = useRuntimeConfig(event)
+  const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey
+  const openaiModel = process.env.OPENAI_MODEL || config.openaiModel
+  const openaiReasoningEffort = process.env.OPENAI_REASONING_EFFORT || config.openaiReasoningEffort
   if (!config.transcriptApiKey) {
-    throw createError({
-      statusCode: 503,
-      statusMessage: 'Server is missing NUXT_TRANSCRIPT_API_KEY.',
-    })
+    throw createError({ statusCode: 503, statusMessage: 'Server is missing NUXT_TRANSCRIPT_API_KEY.' })
+  }
+  if (!openaiApiKey) {
+    throw createError({ statusCode: 503, statusMessage: 'Server is missing OPENAI_API_KEY.' })
+  }
+  if (openaiReasoningEffort !== 'low') {
+    throw createError({ statusCode: 503, statusMessage: 'OPENAI_REASONING_EFFORT must be low.' })
   }
 
   const storageMode = parsed.data.storageMode as ScanStorageMode
-  const languagePriority = parsed.data.language
   let storage: ScanStorage
   try {
     storage = new ScanStorage(
@@ -108,61 +111,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const logger = createScanLogger(storage.scanId, config.logLevel)
-  const logRawCandidates = storageMode === 'diagnostic'
-    && runtimeBoolean(config.logRawCandidates)
-
-  function candidateFields(
-    videoId: string,
-    candidate: TranscriptCandidate,
-  ): Record<string, unknown> {
-    const rule = getRule(candidate.ruleId)
-    return {
-      videoId,
-      candidateId: candidate.id,
-      ruleId: candidate.ruleId,
-      ruleLabel: rule.label,
-      hitCount: candidate.hitCount,
-      matchedTerms: candidate.matchedTerms,
-      phrase: candidate.segmentText,
-      context: candidate.context,
-      startMs: candidate.startMs,
-      endMs: candidate.endMs,
-      transcriptLanguage: candidate.transcriptLanguage,
-      transcriptSource: candidate.transcriptSource,
-      jev: candidate.jev,
-    }
-  }
-
-  function traceCandidate(
-    eventName: string,
-    videoId: string,
-    candidate: TranscriptCandidate,
-    extra: Record<string, unknown> = {},
-  ): void {
-    const fields = {
-      ...candidateFields(videoId, candidate),
-      ...extra,
-    }
-
-    storage.recordAnalysisTrace({
-      timestamp: new Date().toISOString(),
-      event: eventName,
-      ...fields,
-    })
-
-    if (logRawCandidates) logger.debug(eventName, fields)
-  }
-
-  logger.info('scan.started', {
-    storageMode,
-    targetVideos: parsed.data.videoLimit,
-    requestedLanguage: languagePriority || 'auto',
-    enabledRules: parsed.data.ruleIds,
-    jevEnabled: Boolean(config.typesafeApiKey),
-    rawCandidateLogging: logRawCandidates,
-  })
-
-  const provider = new TranscriptApiClient(
+  const transcriptProvider = new TranscriptApiClient(
     config.transcriptApiKey,
     config.transcriptApiBaseUrl,
     async (exchange) => {
@@ -171,236 +120,159 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
     {
       traceObserver: (traceEvent) => {
-        storage.recordAnalysisTrace({
-          timestamp: new Date().toISOString(),
-          ...traceEvent,
-        })
         const { providerMessage: _providerMessage, ...safeFields } = traceEvent as
           typeof traceEvent & { providerMessage?: string }
         logger.debug(traceEvent.event, safeFields)
       },
     },
   )
-
-  const contextFilter = config.typesafeApiKey
-    ? new JevContextFilter(
-        config.typesafeApiKey,
-        config.typesafeBaseUrl,
-        config.typesafeModel,
-        Number(config.jevBenignDismissThreshold),
-        Number(config.jevViolationConfirmThreshold),
-        async (exchange) => {
-          storage.recordJev(exchange)
-          logger.debug('jev.exchange', {
-            status: exchange.response.status,
-            statusText: exchange.response.statusText,
-            candidateCount: Object.keys(
-              (exchange.request.body as { questions?: Record<string, unknown> }).questions ?? {},
-            ).length,
-          })
-        },
-      )
-    : null
-
+  const analyzer = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
+  const languagePriority = parsed.data.language
   const targetVideos = parsed.data.videoLimit
+  const enabledRuleIds = parsed.data.ruleIds as RuleId[]
+
+  logger.info('scan.started', {
+    storageMode,
+    targetVideos,
+    requestedLanguage: languagePriority || 'auto',
+    enabledRules: enabledRuleIds,
+    analysisProvider: 'openai',
+    model: openaiModel,
+    reasoningEffort: 'low',
+  })
+
   let latest
   try {
-    latest = await provider.getLatestVideos(parsed.data.channelUrl)
-    logger.info('channel.latest.loaded', {
-      channelId: latest.channel.id,
-      channelTitle: latest.channel.title,
-      videoCount: latest.videos.length,
-    })
+    latest = await transcriptProvider.getLatestVideos(parsed.data.channelUrl)
   } catch (error) {
-    logger.error('channel.latest.failed', {
-      reason: providerReason(error),
-    })
-    throw createError({
-      statusCode: 502,
-      statusMessage: 'Could not load this YouTube channel.',
-    })
+    logger.error('channel.latest.failed', { reason: transcriptReason(error) })
+    throw createError({ statusCode: 502, statusMessage: 'Could not load this YouTube channel.' })
   }
 
   const inspectedIds = new Set<string>()
   const eligibleVideos: VideoMetadata[] = []
-
   async function inspectVideos(videos: VideoMetadata[], source: 'latest' | 'fallback'): Promise<void> {
     for (const video of videos) {
       if (inspectedIds.has(video.id)) continue
       inspectedIds.add(video.id)
-
       try {
-        const info = await provider.getVideoInfo(video.id, languagePriority)
+        const info = await transcriptProvider.getVideoInfo(video.id, languagePriority)
         logger.debug('video.preflight.completed', {
           videoId: video.id,
           source,
           captionAvailable: info.available,
-          requestedLanguage: languagePriority || 'auto',
           matchedLanguage: info.matchedLanguage ?? null,
-          languages: info.languages,
         })
         if (info.available) eligibleVideos.push(mergeMetadata(video, info))
       } catch (error) {
-        logger.warn('video.preflight.failed', {
-          videoId: video.id,
-          source,
-          requestedLanguage: languagePriority || 'auto',
-          reason: providerReason(error),
-        })
+        logger.warn('video.preflight.failed', { videoId: video.id, reason: transcriptReason(error) })
       }
     }
   }
 
   await inspectVideos(latest.videos, 'latest')
-
   let usedChannelVideosFallback = false
   if (eligibleVideos.length < targetVideos) {
     usedChannelVideosFallback = true
-    logger.info('channel.fallback.started', {
-      eligibleVideos: eligibleVideos.length,
-      targetVideos,
-    })
-
     try {
-      const page = await provider.getChannelVideos(parsed.data.channelUrl)
-      logger.info('channel.fallback.loaded', {
-        videoCount: page.videos.length,
-        hasMore: page.hasMore,
-      })
+      const page = await transcriptProvider.getChannelVideos(parsed.data.channelUrl)
       await inspectVideos(page.videos, 'fallback')
     } catch (error) {
-      logger.warn('channel.fallback.failed', {
-        reason: providerReason(error),
-      })
+      logger.warn('channel.fallback.failed', { reason: transcriptReason(error) })
     }
   }
 
-  logger.info('scan.selection.completed', {
-    inspectedVideos: inspectedIds.size,
-    captionEligibleVideos: eligibleVideos.length,
-    targetVideos,
-    requestedLanguage: languagePriority || 'auto',
-    usedChannelVideosFallback,
-  })
-
-  const enabledRuleIds = parsed.data.ruleIds as RuleId[]
   const videoResults: VideoScanResult[] = []
-  let contextualFallbackVideos = 0
+  const openaiUsage: AggregateOpenAIUsage = {
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+  }
   let transcriptAttempts = 0
 
-  for (const video of eligibleVideos) {
-    if (videoResults.filter((item) => item.status === 'analyzed').length >= targetVideos) break
+  const selectedVideos = eligibleVideos.slice(0, targetVideos)
+  for (const video of selectedVideos) {
     transcriptAttempts += 1
-    logger.debug('video.analysis.started', {
-      videoId: video.id,
-      transcriptAttempt: transcriptAttempts,
-      requestedLanguage: languagePriority || 'auto',
-    })
-
+    const url = `https://www.youtube.com/watch?v=${video.id}`
+    let transcript
     try {
-      const transcript = await provider.getTranscript(video.id, languagePriority)
-      const candidates = findTranscriptCandidates(
-        transcript.segments,
-        enabledRuleIds,
-        transcript.language,
-      )
-
-      logger.debug('video.regex.completed', {
-        videoId: video.id,
-        requestedLanguage: languagePriority || 'auto',
-        transcriptLanguage: transcript.language ?? null,
-        segmentCount: transcript.segments.length,
-        candidateCount: candidates.length,
-      })
-
-      for (const candidate of candidates) {
-        traceCandidate('candidate.regex_match', video.id, candidate)
-      }
-
-      let resolvedCandidates: TranscriptCandidate[] = candidates.map((candidate) => ({
-        ...candidate,
-        resolution: 'needs_review' as const,
-      }))
-      let contextFilterStatus: ContextFilterStatus = contextFilter ? 'not_needed' : 'disabled'
-
-      if (contextFilter && candidates.length > 0) {
-        try {
-          resolvedCandidates = await contextFilter.filter(candidates)
-          contextFilterStatus = 'applied'
-
-          for (const candidate of resolvedCandidates) {
-            traceCandidate('candidate.jev_result', video.id, candidate, {
-              jevChoice: candidate.jev?.choice,
-              jevConfidence: candidate.jev?.confidence,
-              probabilities: candidate.jev?.probabilities,
-              resolution: candidate.resolution,
-            })
-          }
-
-          logger.debug('video.jev.completed', {
-            videoId: video.id,
-            inputCandidates: candidates.length,
-            confirmedCandidates: resolvedCandidates.filter((item) => item.resolution === 'confirmed').length,
-            reviewCandidates: resolvedCandidates.filter((item) => item.resolution === 'needs_review').length,
-            dismissedCandidates: resolvedCandidates.filter((item) => item.resolution === 'dismissed').length,
-          })
-        } catch {
-          contextualFallbackVideos += 1
-          contextFilterStatus = 'fallback'
-
-          resolvedCandidates = candidates.map((candidate) => ({
-            ...candidate,
-            resolution: 'needs_review' as const,
-          }))
-          for (const candidate of resolvedCandidates) {
-            traceCandidate('candidate.jev_result', video.id, candidate, {
-              resolution: 'needs_review',
-              fallbackReason: 'jev_unavailable',
-            })
-          }
-
-          logger.warn('video.jev.fallback', {
-            videoId: video.id,
-            candidateCount: candidates.length,
-          })
-        }
-      }
-
-      for (const candidate of resolvedCandidates) {
-        traceCandidate('candidate.final_resolution', video.id, candidate, {
-          resolution: candidate.resolution,
-        })
-      }
-
-      const detections = buildDetections(resolvedCandidates, enabledRuleIds)
+      transcript = await transcriptProvider.getTranscript(video.id, languagePriority)
+    } catch (error) {
       videoResults.push({
         ...video,
+        url,
+        status: 'transcript_unavailable',
+        unavailableReason: transcriptReason(error),
+        violations: [],
+        detections: [],
+      })
+      continue
+    }
+
+    let normalized: ReturnType<typeof normalizeTranscript> | undefined
+    try {
+      normalized = normalizeTranscript(transcript.segments)
+      if (!normalized.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
+      openaiUsage.requests += 1
+      const analysis = await analyzer.analyze(
+        normalized,
+        transcript.language ?? languagePriority,
+        enabledRuleIds,
+        storageMode === 'diagnostic',
+      )
+      storage.recordOpenAISuccess(video.id, analysis, normalized.text)
+      addUsage(openaiUsage, analysis.usage)
+      const detections = buildDetections(analysis.violations, enabledRuleIds)
+      videoResults.push({
+        ...video,
+        url,
         status: 'analyzed',
         transcriptLanguage: transcript.language,
-        contextFilterStatus,
+        openaiUsage: analysis.usage,
+        violations: analysis.violations,
         detections,
       })
-
       logger.info('video.analysis.completed', {
         videoId: video.id,
-        transcriptLanguage: transcript.language ?? null,
-        detectionCategories: detections.length,
-        detectionCount: detections.reduce((sum, detection) => sum + detection.count, 0),
-        contextFilterStatus,
+        violationCount: analysis.violations.length,
+        inputTokens: analysis.usage.inputTokens,
+        outputTokens: analysis.usage.outputTokens,
+        reasoningTokens: analysis.usage.reasoningTokens,
       })
     } catch (error) {
-      const reason = providerReason(error)
+      const analysisError = error instanceof OpenAIAnalysisError
+        ? error
+        : new OpenAIAnalysisError('provider', 'OpenAI request failed.')
+      addUsage(openaiUsage, analysisError.usage)
+      storage.recordOpenAIError(video.id, analysisError, {
+        model: openaiModel,
+        reasoningEffort: 'low',
+        transcriptLanguage: transcript.language ?? (languagePriority || 'unknown'),
+        enabledCategories: enabledRuleIds,
+        diagnostic: storageMode === 'diagnostic',
+      }, normalized?.text ?? '')
       videoResults.push({
         ...video,
-        status: 'transcript_unavailable',
-        unavailableReason: reason,
-        contextFilterStatus: contextFilter ? 'not_needed' : 'disabled',
+        url,
+        status: 'provider_error',
+        openaiUsage: analysisError.usage,
+        transcriptLanguage: transcript.language,
+        analysisError: {
+          type: analysisError.type,
+          status: analysisError.status,
+          code: analysisError.code,
+          message: analysisError.message,
+        },
+        violations: [],
         detections: [],
       })
       logger.warn('video.analysis.failed', {
         videoId: video.id,
-        requestedLanguage: languagePriority || 'auto',
-        reason,
+        type: analysisError.type,
+        status: analysisError.status ?? null,
+        code: analysisError.code ?? null,
       })
     }
   }
@@ -413,67 +285,44 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     requestedVideos: targetVideos,
     analyzedVideos,
     failedVideos: videoResults.length - analyzedVideos,
-    analysisMode: contextFilter ? 'regex_jev' : 'regex_only',
-    contextualFallbackVideos,
-    creditUsage: provider.getCreditUsage(),
+    analysisMode: 'openai',
+    contextualFallbackVideos: 0,
+    creditUsage: transcriptProvider.getCreditUsage(),
+    openaiUsage,
     selection: {
       targetVideos,
       inspectedVideos: inspectedIds.size,
       captionEligibleVideos: eligibleVideos.length,
       transcriptAttempts,
       transcriptVideosAttempted: transcriptAttempts,
-      transcriptHttpRequests: provider.getTranscriptHttpRequestCount(),
+      transcriptHttpRequests: transcriptProvider.getTranscriptHttpRequestCount(),
       usedChannelVideosFallback,
       requestedLanguage: languagePriority || 'auto',
     },
     summary: buildRuleSummary(videoResults, enabledRuleIds),
     videos: videoResults,
     limitations: [
-      languagePriority
-        ? `Only videos offering the requested transcript language priority "${languagePriority}" are selected.`
-        : 'Transcript language is automatic: TranscriptAPI chooses English when available, otherwise the first available track.',
-      'The scan targets the latest videos with a matching transcript track, not simply the latest videos regardless of transcript availability.',
-      usedChannelVideosFallback
-        ? 'The latest 15 videos did not contain enough matching captioned videos, so one paid /youtube/channel/videos page was used to find replacements.'
-        : 'The scan was satisfied from the free /youtube/channel/latest feed and free /youtube/info preflights.',
-      contextFilter
-        ? 'Regex finds candidates; Jev removes only high-confidence contextual false positives. Ambiguous cases are kept for parental review.'
-        : 'Contextual Jev filtering is disabled because NUXT_TYPESAFE_API_KEY is not configured.',
+      'Each transcript is normalized and analyzed by one OpenAI Responses API request.',
+      'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions.',
       storageMode === 'diagnostic'
-        ? 'Diagnostic mode stores raw TranscriptAPI/Jev exchanges and analysis trace on the server for debugging.'
-        : 'Raw transcript text is not persisted in this storage mode.',
-      'Current checks analyze speech transcripts, not visual content.',
+        ? 'Diagnostic mode stores normalized transcripts and redacted provider diagnostics on the server.'
+        : 'Normalized and raw transcript text is not persisted in this storage mode.',
     ],
   }
 
   try {
     await storage.save(result)
-    logger.info('scan.storage.completed', {
-      storageMode,
-      persisted: storageMode !== 'none',
-    })
   } catch {
-    logger.error('scan.storage.failed', {
-      storageMode,
-    })
     throw createError({
       statusCode: 500,
       statusMessage: 'Scan completed but its requested result could not be stored.',
     })
   }
-
   logger.info('scan.completed', {
     analyzedVideos,
     failedVideos: result.failedVideos,
-    requestedLanguage: languagePriority || 'auto',
-    transcriptAttempts,
-    transcriptHttpRequests: provider.getTranscriptHttpRequestCount(),
-    contextualFallbackVideos,
-    totalCredits: result.creditUsage.totalCredits,
-    transcriptCredits: result.creditUsage.transcriptCredits,
-    channelVideosCredits: result.creditUsage.channelVideosCredits,
-    freeRequests: result.creditUsage.freeRequests,
+    openaiRequests: openaiUsage.requests,
+    openaiTotalTokens: openaiUsage.totalTokens,
   })
-
   return result
 })

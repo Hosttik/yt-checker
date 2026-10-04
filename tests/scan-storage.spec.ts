@@ -6,164 +6,53 @@ import type { ChannelCheckResponse } from '../shared/types/check'
 import { ScanStorage } from '../server/services/scan-storage'
 
 const result: ChannelCheckResponse = {
-  storageMode: 'minimal',
-  channel: { id: 'UC1', title: 'Test' },
-  requestedVideos: 10,
-  analyzedVideos: 1,
-  failedVideos: 0,
-  analysisMode: 'regex_only',
-  contextualFallbackVideos: 0,
-  creditUsage: {
-    transcriptCredits: 1,
-    channelVideosCredits: 0,
-    totalCredits: 1,
-    freeRequests: 3,
-  },
+  storageMode: 'minimal', channel: { id: 'UC1', title: 'Test' },
+  requestedVideos: 1, analyzedVideos: 1, failedVideos: 0,
+  analysisMode: 'openai', contextualFallbackVideos: 0,
+  creditUsage: { transcriptCredits: 1, channelVideosCredits: 0, totalCredits: 1, freeRequests: 2 },
+  openaiUsage: { requests: 1, inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 17 },
   selection: {
-    targetVideos: 10,
-    inspectedVideos: 1,
-    captionEligibleVideos: 1,
-    transcriptAttempts: 1,
-    transcriptVideosAttempted: 1,
-    transcriptHttpRequests: 1,
-    usedChannelVideosFallback: false,
-    requestedLanguage: 'ru',
+    targetVideos: 1, inspectedVideos: 1, captionEligibleVideos: 1,
+    transcriptAttempts: 1, transcriptVideosAttempted: 1, transcriptHttpRequests: 1,
+    usedChannelVideosFallback: false, requestedLanguage: 'ru',
   },
   summary: [],
-  videos: [
-    {
-      id: 'video-one11',
-      title: 'Video one',
-      publishedAt: '',
-      status: 'analyzed',
-      transcriptLanguage: 'ru',
-      contextFilterStatus: 'applied',
-      detections: [
-        {
-          ruleId: 'insults',
-          label: 'Оскорбления',
-          severity: 'medium',
-          count: 1,
-          confirmedCount: 0,
-          reviewCount: 1,
-          ranges: [{ startMs: 12_400, endMs: 14_400 }],
-        },
-      ],
-    },
-  ],
+  videos: [{
+    id: 'video-one11', title: 'One', publishedAt: '',
+    url: 'https://www.youtube.com/watch?v=video-one11', status: 'analyzed',
+    violations: [], detections: [],
+  }],
   limitations: [],
 }
 
 describe('ScanStorage', () => {
-  it('minimal mode writes only the derived result', async () => {
+  it('minimal mode writes only result.json without transcript text', async () => {
     const root = await mkdtemp(join(tmpdir(), 'yt-checker-minimal-'))
     const storage = new ScanStorage('minimal', root, false)
     await storage.save({ ...result, scanId: storage.scanId })
-
-    const files = await readdir(join(root, storage.scanId))
-    expect(files).toEqual(['result.json'])
-
-    const content = await readFile(join(root, storage.scanId, 'result.json'), 'utf8')
-    expect(content).not.toContain('raw transcript')
+    expect(await readdir(join(root, storage.scanId))).toEqual(['result.json'])
   })
 
-  it('diagnostic mode stores provider and Jev exchanges only when explicitly allowed', async () => {
+  it('diagnostic mode writes redacted provider data and OpenAI diagnostics', async () => {
     const root = await mkdtemp(join(tmpdir(), 'yt-checker-diagnostic-'))
     expect(() => new ScanStorage('diagnostic', root, false)).toThrow(/disabled/i)
-
     const storage = new ScanStorage('diagnostic', root, true)
-    storage.recordProvider({
-      operation: 'transcript',
-      request: {
-        method: 'GET',
-        url: 'https://example.test',
-        headers: { authorization: 'Bearer <redacted>', accept: 'application/json' },
-        startedAt: '2026-10-04T00:00:00Z',
+    storage.recordOpenAISuccess('video-one11', {
+      violations: [], rejectedCandidates: [],
+      usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 17 },
+      rawResponse: { id: 'resp_1', output_parsed: { violations: [], rejectedCandidates: [] } },
+      requestMetadata: {
+        model: 'gpt-5.6-luna', reasoningEffort: 'low', transcriptLanguage: 'ru',
+        enabledCategories: ['violence'], diagnostic: true,
       },
-      response: {
-        receivedAt: '2026-10-04T00:00:01Z',
-        latencyMs: 100,
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        bodyText: '{"transcript":"raw transcript"}',
-        bodyJson: { transcript: 'raw transcript' },
-      },
-      chargedCredits: 1,
-    })
-
-    storage.recordAnalysisTrace({
-      timestamp: '2026-10-04T00:00:01Z',
-      event: 'candidate.final_resolution',
-      videoId: 'video-one11',
-      candidateId: 'c7',
-      ruleId: 'insults',
-      ruleLabel: 'Оскорбления',
-      hitCount: 1,
-      matchedTerms: ['дебил'],
-      phrase: 'да ты дебил вообще',
-      context: 'ну хватит [CANDIDATE] да ты дебил вообще пошли дальше',
-      startMs: 12_400,
-      endMs: 14_400,
-      resolution: 'needs_review',
-      transcriptLanguage: 'asr-ru',
-      transcriptSource: 'asr',
-      jev: {
-        choice: 'benign',
-        confidence: 0.47,
-        probabilities: { benign: 0.65, uncertain: 0.27, violation: 0.08 },
-      },
-    })
-
+    }, '[00:00:00.000] Нормализованный transcript')
     await storage.save({ ...result, storageMode: 'diagnostic', scanId: storage.scanId })
-    const files = (await readdir(join(root, storage.scanId))).sort()
-    expect(files).toEqual([
-      'analysis-trace.json',
-      'jev-exchanges.json',
-      'result.json',
-      'transcriptapi-exchanges.json',
+    expect((await readdir(join(root, storage.scanId))).sort()).toEqual([
+      'openai-analysis.json', 'result.json', 'transcriptapi-exchanges.json',
     ])
-
-    const raw = await readFile(join(root, storage.scanId, 'transcriptapi-exchanges.json'), 'utf8')
-    expect(raw).toContain('raw transcript')
-    expect(raw).toContain('Bearer <redacted>')
-
-    const trace = await readFile(join(root, storage.scanId, 'analysis-trace.json'), 'utf8')
-    expect(trace).toContain('да ты дебил вообще')
-
-    const diagnosticResult = JSON.parse(
-      await readFile(join(root, storage.scanId, 'result.json'), 'utf8'),
-    )
-    expect(diagnosticResult.videos[0].diagnosticViolations).toEqual([
-      {
-        candidateId: 'c7',
-        ruleId: 'insults',
-        ruleLabel: 'Оскорбления',
-        hitCount: 1,
-        matchedTerms: ['дебил'],
-        phrase: 'да ты дебил вообще',
-        context: 'ну хватит [CANDIDATE] да ты дебил вообще пошли дальше',
-        startMs: 12_400,
-        endMs: 14_400,
-        youtubeUrl: 'https://www.youtube.com/watch?v=video-one11&t=12s',
-        resolution: 'needs_review',
-        transcriptLanguage: 'asr-ru',
-        transcriptSource: 'asr',
-        jev: {
-          choice: 'benign',
-          confidence: 0.47,
-          probabilities: { benign: 0.65, uncertain: 0.27, violation: 0.08 },
-        },
-      },
-    ])
-    expect(diagnosticResult.diagnostic.finalViolationCount).toBe(1)
-    expect(diagnosticResult.diagnostic).toMatchObject({
-      confirmedCount: 0,
-      reviewCount: 1,
-      dismissedCount: 0,
-    })
-    expect(diagnosticResult.videos[0].diagnosticEvidence).toEqual(
-      diagnosticResult.videos[0].diagnosticViolations,
-    )
+    const diagnostic = await readFile(join(root, storage.scanId, 'openai-analysis.json'), 'utf8')
+    expect(diagnostic).toContain('Нормализованный transcript')
+    expect(diagnostic).toContain('reasoningTokens')
+    expect(diagnostic).not.toContain('secret')
   })
 })

@@ -11,7 +11,6 @@ services:
     environment:
       NUXT_ALLOW_DIAGNOSTIC_STORAGE: "true"
       NUXT_LOG_LEVEL: "debug"
-      NUXT_LOG_RAW_CANDIDATES: "true"
       NUXT_PUBLIC_DEFAULT_STORAGE_MODE: "diagnostic"
       NUXT_PUBLIC_DEFAULT_TRANSCRIPT_LANGUAGE: "ru"
       NUXT_SCAN_STORAGE_DIR: /data/scans

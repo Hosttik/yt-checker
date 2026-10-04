@@ -20,6 +20,29 @@ describe('TranscriptAPI language selection', () => {
 })
 
 describe('TranscriptApiClient', () => {
+  it('decodes JSON3 fragments without breaking split words or leaking technical fields', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      language: 'ru',
+      events: [{ tStartMs: 199, dDurationMs: 2000, segs: [
+        { utf8: 'Лё', tOffsetMs: 0 }, { utf8: 'ня дурёня.', tOffsetMs: 200 },
+      ] }],
+    }))))
+    const client = new TranscriptApiClient('key')
+    expect(await client.getTranscript('video')).toEqual({
+      language: 'ru', segments: [{ text: 'Лёня дурёня.', startMs: 199, endMs: 2199 }],
+    })
+    expect(client.getCreditUsage().transcriptCredits).toBe(1)
+  })
+
+  it('accounts for a billed successful HTTP response even when captions are invalid', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      transcript: [{ text: 42, start: 0, duration: 1 }],
+    }))))
+    const client = new TranscriptApiClient('key')
+    await expect(client.getTranscript('video')).rejects.toMatchObject({ reason: 'not_available' })
+    expect(client.getCreditUsage().transcriptCredits).toBe(1)
+    expect(client.getTranscriptHttpRequestCount()).toBe(1)
+  })
   it.each([200, 503])('records interrupted HTTP %s bodies and accounts for paid responses', async (status) => {
     const response = new Response('', { status })
     vi.spyOn(response, 'text').mockRejectedValue(new Error('socket closed'))

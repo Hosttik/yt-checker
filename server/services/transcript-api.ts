@@ -50,7 +50,11 @@ interface TranscriptApiTranscriptResponse {
     text?: string
     start?: number
     duration?: number
+    tStartMs?: number
+    dDurationMs?: number
+    segs?: Array<{ utf8?: string; tOffsetMs?: number }>
   }>
+  events?: TranscriptApiTranscriptResponse['transcript']
   metadata?: unknown
   length_seconds?: number
   lengthText?: string
@@ -398,12 +402,26 @@ export class TranscriptApiClient {
           'transcript',
         )
 
-        if (!Array.isArray(data.transcript)) {
+        const captions = data.transcript ?? data.events
+        if (!Array.isArray(captions)) {
           throw new TranscriptApiError('provider_error', 'Provider returned an invalid transcript response.')
         }
 
-        const segments = data.transcript.flatMap((segment) => {
-          if (!segment.text || typeof segment.start !== 'number' || typeof segment.duration !== 'number') {
+        const segments = captions.flatMap((segment) => {
+          if (Array.isArray(segment.segs)) {
+            if (!Number.isFinite(segment.tStartMs) || !Number.isFinite(segment.dDurationMs)
+              || segment.tStartMs! < 0 || segment.dDurationMs! < 0) return []
+            const text = segment.segs.map((part) => typeof part.utf8 === 'string' ? part.utf8 : '').join('')
+            if (!text.trim()) return []
+            return [{
+              text,
+              startMs: Math.round(segment.tStartMs!),
+              endMs: Math.round(segment.tStartMs! + segment.dDurationMs!),
+            }]
+          }
+          if (typeof segment.text !== 'string' || !segment.text.trim()
+            || !Number.isFinite(segment.start) || !Number.isFinite(segment.duration)
+            || typeof segment.start !== 'number' || typeof segment.duration !== 'number') {
             return []
           }
           const startMs = Math.max(0, Math.round(segment.start * 1_000))

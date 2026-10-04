@@ -5,15 +5,12 @@ export default defineNuxtConfig({
   runtimeConfig: {
     transcriptApiKey: '',
     transcriptApiBaseUrl: 'https://transcriptapi.com/api/v2',
-    typesafeApiKey: '',
-    typesafeBaseUrl: 'https://api.typesafe.ai/v1',
-    typesafeModel: 'jev-latest',
-    jevBenignDismissThreshold: 0.75,
-    jevViolationConfirmThreshold: 0.7,
+    openaiApiKey: '',
+    openaiModel: process.env.OPENAI_MODEL ?? 'gpt-5.6-luna',
+    openaiReasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? 'low',
     scanStorageDir: '/data/scans',
     allowDiagnosticStorage: false,
     logLevel: 'info',
-    logRawCandidates: false,
     public: {
       appName: 'YT Checker',
       defaultStorageMode: 'minimal',

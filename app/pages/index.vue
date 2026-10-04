@@ -7,13 +7,13 @@ import type {
 } from '../../shared/types/check'
 
 const availableRules: Array<{ id: RuleId; label: string }> = [
-  { id: 'profanity', label: 'Мат и грубая лексика' },
+  { id: 'profanity_and_rude_language', label: 'Мат и грубая лексика' },
   { id: 'insults', label: 'Оскорбления' },
   { id: 'toilet_humor', label: 'Туалетный юмор' },
   { id: 'gambling', label: 'Азартные игры и ставки' },
   { id: 'sexual_content', label: 'Сексуальные темы' },
   { id: 'violence', label: 'Насилие' },
-  { id: 'alcohol_drugs', label: 'Алкоголь и наркотики' },
+  { id: 'alcohol_and_drugs', label: 'Алкоголь и наркотики' },
 ]
 
 const runtimeConfig = useRuntimeConfig()
@@ -150,7 +150,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             <option value="diagnostic">Diagnostic — полный raw debug</option>
           </select>
           <small v-if="storageMode === 'diagnostic'" class="warning">
-            Diagnostic сохраняет raw transcripts и Jev payloads на сервере. Требует разрешения через env.
+            Diagnostic сохраняет transcript и OpenAI payloads на сервере. Требует разрешения через env.
           </small>
         </label>
 
@@ -194,11 +194,10 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             <span v-if="result.scanId">Scan ID: {{ result.scanId }}.</span>
           </p>
           <p class="muted">
-            Контекстный фильтр:
-            {{ result.analysisMode === 'regex_jev' ? 'Jev' : 'выключен (regex-only)' }}.
-            <span v-if="result.contextualFallbackVideos">
-              Fallback на regex: {{ result.contextualFallbackVideos }} видео.
-            </span>
+            OpenAI: {{ result.openaiUsage.requests }} запросов,
+            {{ result.openaiUsage.totalTokens }} tokens
+            (input {{ result.openaiUsage.inputTokens }}, output {{ result.openaiUsage.outputTokens }},
+            reasoning {{ result.openaiUsage.reasoningTokens }}).
           </p>
         </div>
       </div>
@@ -228,8 +227,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <p v-if="video.status === 'analyzed' && video.detections.length === 0" class="clean">
                 По выбранным правилам совпадений не найдено.
               </p>
-              <p v-if="video.contextFilterStatus === 'fallback'" class="muted">
-                Jev был недоступен: показаны консервативные regex-кандидаты.
+              <p v-if="video.status === 'provider_error'" class="error">
+                OpenAI analysis error: {{ video.analysisError?.type }}.
               </p>
             </div>
             <a :href="`https://www.youtube.com/watch?v=${video.id}`" target="_blank" rel="noreferrer">
@@ -258,6 +257,10 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                 >
                   ▶ {{ formatRange(range.startMs, range.endMs) }}
                 </a>
+              </div>
+              <div v-for="item in detection.evidence" :key="`${item.startMs}-${item.text}`" class="evidence">
+                <p>“{{ item.text }}”</p>
+                <small>{{ item.reason }} · {{ item.context }} · {{ item.severity }}</small>
               </div>
             </li>
           </ul>

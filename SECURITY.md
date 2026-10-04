@@ -35,11 +35,11 @@ No scan artifact is persisted.
 
 ### minimal
 
-Only the derived scan result is written. Transcript text and Jev candidate context are not part of the stored result.
+The result includes exact short transcript excerpts as violation evidence. Full transcripts are not stored in minimal mode.
 
 ### diagnostic
 
-Diagnostic mode intentionally records raw TranscriptAPI responses and Jev request/response payloads. This can include complete third-party transcript text and candidate context.
+Diagnostic mode intentionally records raw TranscriptAPI responses and OpenAI analysis diagnostics. This can include complete third-party transcript text, the normalized transcript, and structured model output. OpenAI API keys are never recorded.
 
 Diagnostic mode therefore:
 
@@ -49,7 +49,7 @@ Diagnostic mode therefore:
 - must not feed raw artifacts into analytics/error tracking;
 - requires explicit deletion/retention rules before any hosted use.
 
-The normal production raw-content policy remains: raw transcript is transient input and only derived detections/timeline ranges are persisted.
+Full transcripts remain transient in normal production; detections, quoted evidence, reasons and timestamps are persisted.
 
 ## Dependency risk
 
@@ -64,13 +64,6 @@ A reviewed lockfile and `npm ci` remain a follow-up hardening task.
 
 Exact transcript phrases and bounded context may contain third-party content and potentially sensitive speech. They are therefore excluded from normal production logs.
 
-Raw phrase stdout requires both:
+Raw phrases are not printed to stdout. Diagnostic storage requires explicit server enablement.
 
-```text
-storageMode = diagnostic
-NUXT_LOG_RAW_CANDIDATES=true
-```
-
-The full-debug local Compose configuration enables this deliberately for development diagnosis. Do not enable this combination on a public production service unless log access, retention, deletion, and downstream shipping are explicitly controlled.
-
-`analysis-trace.json`, `transcriptapi-exchanges.json`, and `jev-exchanges.json` must be treated as raw diagnostic data rather than normal product data.
+`transcriptapi-exchanges.json` and `openai-analysis.json` must be treated as raw diagnostic data rather than normal product data.
