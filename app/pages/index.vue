@@ -154,10 +154,10 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <select v-model="storageMode">
             <option value="none">Не сохранять</option>
             <option value="minimal">Minimal — только результат</option>
-            <option value="diagnostic">Diagnostic — полный raw debug</option>
+            <option value="diagnostic">Diagnostic — расширенный debug</option>
           </select>
           <small v-if="storageMode === 'diagnostic'" class="warning">
-            Diagnostic сохраняет transcript и OpenAI payloads на сервере. Требует разрешения через env.
+            Diagnostic сохраняет transcript и компактные provider diagnostics на сервере. Требует разрешения через env.
           </small>
         </label>
 
