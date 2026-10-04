@@ -139,10 +139,7 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
     if (event.subtype === 'injury'
       && details.actionPurpose === 'accident'
       && event.severity === 'low') return 'minimal'
-    if (event.subtype === 'fantasy_combat') {
-      if (event.severity === 'high') return 'high'
-      return event.context === 'game' || event.context === 'fiction' ? 'low' : 'moderate'
-    }
+    if (event.subtype === 'fantasy_combat') return event.severity === 'high' ? 'high' : 'moderate'
     if (event.subtype === 'dangerous_situation') {
       if (details.weaponRole === 'threatened_use'
         || (details.actionPurpose === 'threat' && details.harmLevel === 'threatened')) {
