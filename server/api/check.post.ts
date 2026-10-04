@@ -314,6 +314,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           sourceCandidateId: candidateId,
           sceneId,
         }
+        logger.debug('content.candidate', {
+          videoId: video.id,
+          candidateId: candidateId ?? null,
+          sceneId: sceneId ?? null,
+          suspectedCategory: classifiedEvent.category,
+          startMs: classifiedEvent.startMs,
+          endMs: classifiedEvent.endMs,
+        })
         const eventId = `${video.id}:event:${eventIndex}`
         const contentEvent = applyContentPolicy(normalizedEvent, eventId, profile)
         logger.debug('content.classified', {
@@ -464,6 +472,17 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     analyzedVideos,
     profile,
   )
+
+  logger.debug('content.aggregate', {
+    scope: 'channel',
+    categories: channelReport.map((item) => ({
+      category: item.category,
+      level: item.level,
+      affectedVideos: item.affectedVideos,
+      rawEventCount: item.rawEventCount,
+      displayedEventCount: item.displayedEventCount,
+    })),
+  })
 
   const result: ChannelCheckResponse = {
     scanId: storageMode === 'none' ? undefined : storage.scanId,
