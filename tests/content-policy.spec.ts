@@ -85,6 +85,19 @@ describe('deterministic content policy', () => {
     expect(event.displayLevel).toBe('summary')
   })
 
+  it('keeps environmental destruction distinct from a physical attack', () => {
+    const event = applyContentPolicy(violence('destruction', {
+      harmLevel: 'implied', targetType: 'environment', weaponRole: 'none',
+    }, {
+      severity: 'medium',
+      reason: 'Чёрная дыра разрушает деревню.',
+    }), 'event_black_hole', 'normal')
+
+    expect(event.subtype).toBe('destruction')
+    expect(event.details.targetType).toBe('environment')
+    expect(event.parentRelevance).toBe('moderate')
+  })
+
   it('treats fantasy combat as moderate relevance without making severity high', () => {
     const event = applyContentPolicy(violence('fantasy_combat', {
       harmLevel: 'implied', targetType: 'fantasy_creature', weaponRole: 'used',
