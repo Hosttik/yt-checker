@@ -11,6 +11,7 @@ interface OpenAIDiagnosticEntry {
   requestMetadata: OpenAIAnalysisResult['requestMetadata']
   provider?: OpenAIAnalysisResult['provider']
   parsedResult?: {
+    modelOutputText?: string
     classifiedEvents: OpenAIAnalysisResult['classifiedEvents']
     rejectedCandidates?: OpenAIAnalysisResult['rejectedCandidates']
     normalizedContentEvents?: ContentEvent[]
@@ -52,6 +53,7 @@ export class ScanStorage {
       requestMetadata: result.requestMetadata,
       provider: result.provider,
       parsedResult: {
+        modelOutputText: result.outputText,
         classifiedEvents: result.classifiedEvents,
         rejectedCandidates: result.rejectedCandidates,
         normalizedContentEvents,
