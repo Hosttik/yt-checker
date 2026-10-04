@@ -1,21 +1,20 @@
 <script setup lang="ts">
 import type {
   ChannelCheckResponse,
-  RuleId,
   ScanStorageMode,
   TranscriptUnavailableReason,
 } from '../../shared/types/check'
+import type { AnalysisProfile, ContentCategory, ReportLevel } from '../../shared/types/content'
 
-const availableRules: Array<{ id: RuleId; label: string }> = [
+const availableRules: Array<{ id: ContentCategory; label: string }> = [
   { id: 'profanity_and_rude_language', label: 'Мат и грубая лексика' },
   { id: 'insults', label: 'Оскорбления' },
   { id: 'toilet_humor', label: 'Туалетный юмор' },
-  { id: 'gambling', label: 'Азартные игры и ставки' },
-  { id: 'sexual_content', label: 'Сексуальные темы' },
   { id: 'violence', label: 'Насилие' },
-  { id: 'alcohol_and_drugs', label: 'Алкоголь и наркотики' },
   { id: 'scary_and_disturbing', label: 'Пугающие и тревожные темы' },
-  { id: 'tobacco_and_nicotine', label: 'Табак и никотин' },
+  { id: 'sexual_content', label: 'Сексуальные темы' },
+  { id: 'gambling', label: 'Азартные игры и ставки' },
+  { id: 'substances', label: 'Алкоголь, никотин и другие вещества' },
   { id: 'self_harm', label: 'Самоповреждение' },
 ]
 
@@ -34,7 +33,8 @@ const transcriptLanguage = ref(
   typeof configuredTranscriptLanguage === 'string' ? configuredTranscriptLanguage : '',
 )
 const storageMode = ref<ScanStorageMode>(defaultStorageMode)
-const selectedRuleIds = ref<RuleId[]>(availableRules.map((rule) => rule.id))
+const profile = ref<AnalysisProfile>('normal')
+const selectedRuleIds = ref<ContentCategory[]>(availableRules.map((rule) => rule.id))
 const loading = ref(false)
 const result = ref<ChannelCheckResponse | null>(null)
 const error = ref('')
@@ -53,6 +53,7 @@ async function submit() {
         language: transcriptLanguage.value,
         ruleIds: selectedRuleIds.value,
         storageMode: storageMode.value,
+        profile: profile.value,
       },
     })
   } catch (requestError: unknown) {
@@ -85,8 +86,15 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
   return `https://www.youtube.com/watch?v=${videoId}&t=${seconds}s`
 }
 
-function violationsFor(video: ChannelCheckResponse['videos'][number], ruleId: RuleId) {
-  return video.violations.filter((item) => item.category === ruleId)
+function videoReport(videoId: string) {
+  return result.value?.videoReports.find((item) => item.videoId === videoId)
+}
+
+function levelText(level: ReportLevel): string {
+  if (level === 'high') return 'Высокий'
+  if (level === 'moderate') return 'Умеренный'
+  if (level === 'low') return 'Низкий'
+  return 'Не обнаружено'
 }
 
 function unavailableText(reason?: TranscriptUnavailableReason): string {
@@ -104,8 +112,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
       <p class="eyebrow">YT Checker · MVP</p>
       <h1>Проверь, что ребёнок реально услышит на YouTube-канале</h1>
       <p class="lead">
-        Проверяем до 10 последних роликов с доступными субтитрами через TranscriptAPI.com.
-        В обычном режиме сохраняем только derived-результат.
+        Анализируем речь из доступных субтитров, отделяем найденные content signals
+        от того, что действительно стоит показывать родителю.
       </p>
     </section>
 
@@ -144,9 +152,15 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             <option value="de">Deutsch</option>
             <option value="asr">Любые auto-generated captions</option>
           </datalist>
-          <small class="muted">
-            Можно задать приоритет: ru,en,asr. Пусто = автоматический выбор TranscriptAPI.
-          </small>
+        </label>
+
+        <label class="field">
+          <span>Чувствительность отчёта</span>
+          <select v-model="profile">
+            <option value="normal">Normal — скрывать минимальные сигналы</option>
+            <option value="strict">Strict — показывать даже мягкие элементы</option>
+            <option value="diagnostic">Diagnostic — показывать всё и trace</option>
+          </select>
         </label>
 
         <label class="field storage-field">
@@ -157,7 +171,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             <option value="diagnostic">Diagnostic — расширенный debug</option>
           </select>
           <small v-if="storageMode === 'diagnostic'" class="warning">
-            Diagnostic сохраняет transcript и компактные provider diagnostics на сервере. Требует разрешения через env.
+            Diagnostic сохраняет transcript и компактные provider diagnostics на сервере.
           </small>
         </label>
 
@@ -186,6 +200,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <h2>{{ result.channel.title }}</h2>
           <p>
             Проанализировано {{ result.analyzedVideos }} из {{ result.requestedVideos }} целевых видео.
+            Профиль: {{ result.profile }}.
           </p>
           <p class="muted">
             TranscriptAPI credits: {{ result.creditUsage.totalCredits }}
@@ -209,22 +224,23 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             cache writes {{ result.openaiUsage.cacheWriteTokens }}).
           </p>
           <p class="muted">
-            Речь: {{ result.speechQuality.fillerWordCount }} маркеров /
+            Speech quality (отдельная метрика): {{ result.speechQuality.fillerWordCount }} маркеров /
             {{ result.speechQuality.fillersPer1000Words }} на 1000 слов,
-            непосредственных повторов {{ result.speechQuality.repeatedWordCount }} /
+            повторов {{ result.speechQuality.repeatedWordCount }} /
             {{ result.speechQuality.repeatedWordsPer1000Words }} на 1000 слов.
           </p>
         </div>
       </div>
 
       <div class="summary-grid">
-        <article v-for="item in result.summary" :key="item.ruleId" class="summary-card">
-          <strong>{{ item.violationCount }}</strong>
+        <article v-for="item in result.channelReport" :key="item.category" class="summary-card">
+          <strong>{{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
           <small>
-            {{ item.affectedVideoCount }} видео
-            <template v-if="item.severity"> · максимум {{ item.severity }}</template>
+            {{ item.affectedVideos }}/{{ item.analyzedVideos }} видео ·
+            {{ item.displayedEventCount }} показано из {{ item.rawEventCount }} signals
           </small>
+          <p>{{ item.summary }}</p>
         </article>
       </div>
 
@@ -243,15 +259,14 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <p v-if="video.captionSourceMismatch" class="warning">
                 TranscriptAPI вернул другой caption track, чем был выбран на preflight.
               </p>
-              <p v-if="video.speechQuality" class="muted">
-                Речь: {{ video.speechQuality.fillersPer1000Words }} маркеров и
-                {{ video.speechQuality.repeatedWordsPer1000Words }} повторов на 1000 слов.
-              </p>
-              <p v-if="video.status === 'analyzed' && video.detections.length === 0" class="clean">
-                По выбранным правилам совпадений не найдено.
-              </p>
               <p v-if="video.status === 'provider_error'" class="error">
                 OpenAI analysis error: {{ video.analysisError?.type }}.
+              </p>
+              <p
+                v-if="video.status === 'analyzed' && (videoReport(video.id)?.scenes.length ?? 0) === 0"
+                class="clean"
+              >
+                В текущем профиле значимых особенностей контента не показано.
               </p>
             </div>
             <a :href="`https://www.youtube.com/watch?v=${video.id}`" target="_blank" rel="noreferrer">
@@ -259,34 +274,49 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             </a>
           </div>
 
-          <ul v-if="video.detections.length" class="violations">
-            <li v-for="detection in video.detections" :key="detection.ruleId">
+          <ul v-if="videoReport(video.id)?.scenes.length" class="violations">
+            <li v-for="scene in videoReport(video.id)?.scenes" :key="scene.sceneId">
               <div>
-                <strong>{{ detection.label }}</strong>
-                <small>Всего: {{ detection.count }} · {{ detection.severity }}</small>
+                <strong>{{ scene.label }}</strong>
+                <small>
+                  {{ levelText(scene.level) }} · {{ scene.categories.join(', ') }}
+                </small>
               </div>
               <div class="range-list">
                 <a
-                  v-for="range in detection.ranges"
-                  :key="`${detection.ruleId}-${range.startMs}-${range.endMs}`"
                   class="timestamp"
-                  :href="youtubeTimestampUrl(video.id, range.startMs)"
+                  :href="youtubeTimestampUrl(video.id, scene.startMs)"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  ▶ {{ formatRange(range.startMs, range.endMs) }}
+                  ▶ {{ formatRange(scene.startMs, scene.endMs) }}
                 </a>
               </div>
-              <div
-                v-for="item in violationsFor(video, detection.ruleId)"
-                :key="`${item.startMs}-${item.text}`"
-                class="evidence"
-              >
-                <p>“{{ item.text }}”</p>
-                <small>{{ item.reason }} · {{ item.context }} · {{ item.severity }}</small>
+              <div class="evidence">
+                <p>{{ scene.summary }}</p>
+                <small>
+                  {{ scene.events.map(event => event.subtype).join(' · ') }}
+                </small>
               </div>
             </li>
           </ul>
+
+          <details v-if="result.profile === 'diagnostic' && videoReport(video.id)" class="limitations">
+            <summary>Diagnostic trace</summary>
+            <p>
+              Candidates: {{ videoReport(video.id)?.candidates?.length ?? 0 }},
+              rejected: {{ videoReport(video.id)?.rejectedCandidates?.length ?? 0 }}.
+            </p>
+            <ul>
+              <li
+                v-for="candidate in videoReport(video.id)?.rejectedCandidates"
+                :key="candidate.candidateId"
+              >
+                {{ candidate.suspectedCategory }} · {{ formatRange(candidate.startMs, candidate.endMs) }} ·
+                {{ candidate.reason }}
+              </li>
+            </ul>
+          </details>
         </article>
       </div>
 
