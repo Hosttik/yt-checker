@@ -167,11 +167,19 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         if (info.available) eligibleVideos.push(mergeMetadata(video, info))
       } catch (error) {
         logger.warn('video.preflight.failed', { videoId: video.id, reason: transcriptReason(error) })
+        // /youtube/info already converts a normal 404/no-captions case into available=false.
+        // Anything thrown here is a provider/configuration failure and should not be hidden.
+        throw error
       }
     }
   }
 
-  await inspectVideos(latest.videos, 'latest')
+  try {
+    await inspectVideos(latest.videos, 'latest')
+  } catch (error) {
+    logger.error('channel.preflight.failed', { reason: transcriptReason(error) })
+    throw createError({ statusCode: 502, statusMessage: 'Could not inspect video captions from TranscriptAPI.' })
+  }
   let usedChannelVideosFallback = false
   async function loadFallbackVideos(): Promise<void> {
     if (usedChannelVideosFallback) return
@@ -200,6 +208,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   let successfulAnalyses = 0
   let candidateIndex = 0
   let stoppedForOpenAIProviderError = false
+  let stoppedForTranscriptProviderError = false
   let transcriptCreditBudgetExhausted = false
   const transcriptCreditBudget = targetVideos
 
@@ -221,15 +230,22 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     try {
       transcript = await transcriptProvider.getTranscript(video.id, languagePriority)
     } catch (error) {
+      const unavailableReason = transcriptReason(error)
       videoResults.push({
         ...video,
         url,
         status: 'transcript_unavailable',
-        unavailableReason: transcriptReason(error),
+        unavailableReason,
         violations: [],
         detections: [],
       })
-      continue
+
+      // A confirmed 404/not_available response costs 0 credits and is specific to this
+      // video, so trying the next candidate is safe. Other failures are systemic or
+      // ambiguous; stop instead of risking repeated requests or hidden billing.
+      if (unavailableReason === 'not_available') continue
+      stoppedForTranscriptProviderError = true
+      break
     }
 
     let normalized: ReturnType<typeof normalizeTranscript> | undefined
@@ -336,6 +352,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       transcriptCreditBudgetExhausted
         ? 'The scan stopped because its paid TranscriptAPI transcript-credit budget was exhausted.'
         : 'The paid TranscriptAPI transcript-credit budget was not exhausted.',
+      stoppedForTranscriptProviderError
+        ? 'The scan stopped after a systemic or ambiguous TranscriptAPI failure to avoid further paid requests.'
+        : 'TranscriptAPI did not produce a scan-stopping provider failure.',
       stoppedForOpenAIProviderError
         ? 'The scan stopped after an OpenAI analysis error to avoid consuming more TranscriptAPI credits.'
         : 'OpenAI analysis completed without a scan-stopping provider error.',

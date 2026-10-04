@@ -57,7 +57,7 @@ Docker prevents npm packages from being installed directly into the host OS, but
 
 Current mitigations include non-root execution, read-only source mounts, capability dropping, no Docker socket and restricted writable paths.
 
-A reviewed lockfile and `npm ci` remain a follow-up hardening task.
+The Docker build pins Node 22.23.3 and npm 11.21.0, then uses the committed `package-lock.json` with `npm ci`. This avoids npm 10 optional/peer lockfile inconsistencies and keeps CI/container installs on the verified dependency graph.
 
 
 ## Raw phrase logging

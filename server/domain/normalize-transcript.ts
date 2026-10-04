@@ -66,7 +66,7 @@ export function normalizeTranscript(input: TranscriptSegment[]): NormalizedTrans
   }
 
   return {
-    text: normalized.map((segment) => `[${formatTranscriptTimestamp(segment.startMs)}] ${segment.text}`).join('\n'),
+    text: normalized.map((segment, index) => `[${index}|${formatTranscriptTimestamp(segment.startMs)}] ${segment.text}`).join('\n'),
     sourceText: normalized.map((segment) => segment.text).join(' '),
     segments: normalized,
   }

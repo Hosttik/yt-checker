@@ -42,7 +42,7 @@ describe('ScanStorage', () => {
       usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 17 },
       rawResponse: { id: 'resp_1', output_parsed: { violations: [], rejectedCandidates: [] } },
       requestMetadata: {
-        model: 'gpt-5.6-luna', reasoningEffort: 'low', transcriptLanguage: 'ru',
+        model: 'gpt-6-luna', reasoningEffort: 'low', transcriptLanguage: 'ru',
         enabledCategories: ['violence'], diagnostic: true,
       },
     }, '[00:00:00.000] Нормализованный transcript')

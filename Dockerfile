@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm-slim AS deps
+FROM node:22.23.3-bookworm-slim AS deps
 
 WORKDIR /app
 
@@ -8,13 +8,14 @@ ENV NPM_CONFIG_AUDIT=false \
     NPM_CONFIG_FUND=false \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
-RUN chown node:node /app
+RUN npm install --global npm@11.21.0 --no-audit --no-fund \
+    && chown node:node /app
 
-COPY --chown=node:node package.json ./
+COPY --chown=node:node package.json package-lock.json ./
 
 USER node
 
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 FROM deps AS source
 
@@ -36,7 +37,7 @@ FROM source AS build
 
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.23.3-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
     NITRO_HOST=0.0.0.0 \

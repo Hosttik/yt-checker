@@ -122,6 +122,7 @@ export type TranscriptApiTraceEvent =
 export interface TranscriptApiRetryOptions {
   maxAttempts?: number
   baseDelayMs?: number
+  requestTimeoutMs?: number
   sleep?: (delayMs: number) => Promise<void>
   traceObserver?: (event: TranscriptApiTraceEvent) => void | Promise<void>
 }
@@ -142,9 +143,10 @@ export class TranscriptApiError extends Error {
 
 function reasonForStatus(status: number): TranscriptUnavailableReason {
   if (status === 408) return 'provider_timeout'
-  if (status === 404 || status === 422) return 'not_available'
+  if (status === 404) return 'not_available'
   if (status === 429) return 'rate_limited'
   if (status === 402) return 'billing'
+  // 422 is a validation error (invalid video URL/ID), not "no captions".
   return 'provider_error'
 }
 
@@ -153,6 +155,10 @@ function providerMessage(bodyJson: unknown): string | undefined {
   const body = bodyJson as Record<string, unknown>
   for (const key of ['message', 'detail', 'error']) {
     if (typeof body[key] === 'string') return body[key]
+    if (body[key] && typeof body[key] === 'object') {
+      const nested = body[key] as Record<string, unknown>
+      if (typeof nested.message === 'string') return nested.message
+    }
   }
   return undefined
 }
@@ -268,6 +274,7 @@ export class TranscriptApiClient {
   private transcriptHttpRequests = 0
   private readonly maxTranscriptAttempts: number
   private readonly retryBaseDelayMs: number
+  private readonly requestTimeoutMs: number
   private readonly sleep: (delayMs: number) => Promise<void>
   private readonly traceObserver?: TranscriptApiRetryOptions['traceObserver']
 
@@ -280,6 +287,7 @@ export class TranscriptApiClient {
     if (!apiKey) throw new Error('TranscriptAPI key is not configured.')
     this.maxTranscriptAttempts = Math.max(1, Math.floor(retry.maxAttempts ?? 3))
     this.retryBaseDelayMs = Math.max(0, retry.baseDelayMs ?? 1_000)
+    this.requestTimeoutMs = Math.max(1_000, Math.floor(retry.requestTimeoutMs ?? 60_000))
     this.sleep = retry.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)))
     this.traceObserver = retry.traceObserver
   }
@@ -389,7 +397,6 @@ export class TranscriptApiClient {
       video_url: videoId,
       format: 'json',
       include_timestamp: 'true',
-      send_metadata: 'true',
     }
 
     if (languagePriority) params.language = languagePriority
@@ -407,6 +414,7 @@ export class TranscriptApiClient {
       this.transcriptHttpRequests += 1
 
       try {
+        const creditsBefore = this.usage.transcriptCredits
         const data = await this.requestJson<TranscriptApiTranscriptResponse>(
           'transcript',
           '/youtube/transcript',
@@ -450,7 +458,7 @@ export class TranscriptApiClient {
           videoId,
           language: data.language ?? (languagePriority || 'auto'),
           attempt,
-          chargedCredits: 1,
+          chargedCredits: this.usage.transcriptCredits - creditsBefore,
         })
         return { language: data.language, segments }
       } catch (error) {
@@ -502,8 +510,13 @@ export class TranscriptApiClient {
 
     let response: Response
     try {
-      response = await fetch(url, { headers: this.headers() })
+      response = await fetch(url, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      })
     } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'UnknownError'
+      const timedOut = errorName === 'TimeoutError' || errorName === 'AbortError'
       await this.observer?.({
         operation,
         request: {
@@ -514,18 +527,16 @@ export class TranscriptApiClient {
         },
         response: null,
         networkError: {
-          name: error instanceof Error ? error.name : 'UnknownError',
-          message: error instanceof Error ? error.message : 'Network error',
+          name: errorName,
+          message: timedOut ? 'Request timed out' : 'Network error',
         },
         chargedCredits: 0,
       })
+      // Do not retry an ambiguous client-side network failure: the upstream may have
+      // completed and billed the request even though this process never received it.
       throw new TranscriptApiError(
-        'provider_error',
-        'TranscriptAPI network request failed.',
-        undefined,
-        undefined,
-        undefined,
-        true,
+        timedOut ? 'provider_timeout' : 'provider_error',
+        timedOut ? 'TranscriptAPI request timed out.' : 'TranscriptAPI network request failed.',
       )
     }
 
