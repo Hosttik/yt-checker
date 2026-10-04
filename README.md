@@ -61,21 +61,24 @@ Structured Output строится через официальный SDK helper 
     "confidence": 0.97,
     "context": "game",
     "evidenceStrength": "explicit",
-    "startSegment": 120,
-    "endSegment": 123,
+    "assertionStatus": "actual",
+    "evidenceSegments": [121, 122],
+    "sceneStartSegment": 120,
+    "sceneEndSegment": 126,
     "details": {
       "harmLevel": "implied",
       "targetType": "fantasy_creature",
-      "weaponRole": "used"
+      "weaponRole": "used",
+      "actionPurpose": "attack"
     },
     "reason": "Герой сражается с зомби в Minecraft."
   }]
 }
 ```
 
-Diagnostic analysis добавляет `rejectedCandidates`. Evidence должен быть минимальным: модель использует весь transcript для контекста, но возвращает самый короткий достаточный contiguous segment range.
+Diagnostic analysis добавляет `rejectedCandidates`. Для accepted events модель отдельно возвращает до 6 коротких `evidenceSegments`, которые непосредственно доказывают классификацию, и более широкий `sceneStartSegment`/`sceneEndSegment` для сюжетного контекста. Поэтому длинная сцена больше не обязана становиться длинным пользовательским evidence timestamp.
 
-После ответа OpenAI сервер проверяет segment indexes и сам детерминированно строит `startMs`, `endMs` и точный `text` из нормализованного transcript. Поэтому модель не может ошибиться при переводе `00:08:31.840` в миллисекунды или придумать evidence text.
+После ответа OpenAI сервер проверяет segment indexes и сам детерминированно строит evidence `startMs`, `endMs` и точный `text` из нормализованного transcript; широкий scene range хранится отдельно. Presentation дополнительно объединяет существенно перекрывающиеся сюжетные сцены даже при разных `sceneId`, но показывает родителю компактные evidence ranges. Поэтому модель не может ошибиться при переводе `00:08:31.840` в миллисекунды или придумать evidence text.
 
 ## ContentEvent architecture
 
@@ -161,7 +164,7 @@ Diagnostic требует `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`. API-ключ Ope
 
 Нормализованные content-safety категории: `profanity_and_rude_language`, `insults`, `toilet_humor`, `violence`, `scary_and_disturbing`, `sexual_content`, `gambling`, `substances`, `self_harm`. Старые request ids `alcohol_and_drugs` и `tobacco_and_nicotine` временно принимаются как aliases для `substances`.
 
-Отдельно от safety-категорий локально и без дополнительного AI-вызова считается `speechQuality`: для русского — частота маркеров «ну», «короче», «типа», «как бы», «значит», «э/ээ», «эм», а для всех языков — непосредственные повторы слов. Это диагностическая метрика, а не оценка «хороший/плохой канал».
+Отдельно от safety-категорий локально и без дополнительного AI-вызова считаются речевые особенности: для русского — частота маркеров «ну», «короче», «типа», «как бы», «значит», «э/ээ», «эм», а для всех языков — непосредственные повторы слов. API сохраняет raw counts/rates для диагностики, но UI переводит их в понятное объяснение вроде «примерно 1 раз на 80 слов» и показывает наиболее частые маркеры. Градации «редко / заметно / часто» — продуктовая эвристика, не лингвистическая норма и не оценка «хороший/плохой канал». Для `asr-*` UI отдельно предупреждает, что auto-generated captions могут завышать повторы.
 
 Для каждого видео сохраняются `preflightCaptionLanguage` (language hint из бесплатного `/youtube/info`) и фактический `transcriptLanguage`, а также `captionSource` и `captionLanguageResolution`. По подтверждению TranscriptAPI, plain code вроде `ru` в `available_languages` сейчас НЕ гарантирует human-made track; если human track отсутствует, `language=ru` может штатно вернуть `asr-ru`. Поэтому source определяется только по фактическому `language` ответа `/youtube/transcript`.
 
