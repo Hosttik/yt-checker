@@ -97,6 +97,41 @@ describe('ScanStorage', () => {
     expect(stored).not.toContain('Нормализованный transcript')
   })
 
+  it('does not persist diagnostic candidate trace when storage mode is minimal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'yt-checker-minimal-diagnostic-profile-'))
+    const storage = new ScanStorage('minimal', root, false)
+    await storage.save({
+      ...result,
+      profile: 'diagnostic',
+      scanId: storage.scanId,
+      videoReports: [{
+        videoId: 'video-one11',
+        categoryReports: [],
+        scenes: [],
+        candidates: [{
+          candidateId: 'candidate_1',
+          suspectedCategory: 'violence',
+          startMs: 0,
+          endMs: 1_000,
+          text: 'candidate text',
+        }],
+        rejectedCandidates: [{
+          candidateId: 'candidate_2',
+          suspectedCategory: 'self_harm',
+          startMs: 1_000,
+          endMs: 2_000,
+          text: 'rejected text',
+          reason: 'not self-harm',
+        }],
+      }],
+    })
+
+    const stored = await readFile(join(root, storage.scanId, 'result.json'), 'utf8')
+    expect(stored).not.toContain('candidate text')
+    expect(stored).not.toContain('rejected text')
+    expect(stored).not.toContain('rejectedCandidates')
+  })
+
   it('diagnostic mode preserves classification -> normalized event trace', async () => {
     const root = await mkdtemp(join(tmpdir(), 'yt-checker-diagnostic-'))
     expect(() => new ScanStorage('diagnostic', root, false)).toThrow(/disabled/i)
