@@ -105,6 +105,11 @@ function prevalenceText(level: PrevalenceLevel): string {
   return 'не обнаружено'
 }
 
+function speechMarkerSummary(): string {
+  const entries = result.value?.speechQuality.fillerBreakdown.slice(0, 4) ?? []
+  return entries.map((entry) => `${entry.marker} — ${entry.count}`).join(', ')
+}
+
 function unavailableText(reason?: TranscriptUnavailableReason): string {
   if (reason === 'rate_limited') return 'Провайдер временно ограничил запросы.'
   if (reason === 'billing') return 'Закончились credits у TranscriptAPI.'
@@ -231,12 +236,24 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             cached {{ result.openaiUsage.cachedTokens }},
             cache writes {{ result.openaiUsage.cacheWriteTokens }}).
           </p>
-          <p class="muted">
-            Speech quality (отдельная метрика): {{ result.speechQuality.fillerWordCount }} маркеров /
-            {{ result.speechQuality.fillersPer1000Words }} на 1000 слов,
-            повторов {{ result.speechQuality.repeatedWordCount }} /
-            {{ result.speechQuality.repeatedWordsPer1000Words }} на 1000 слов.
-          </p>
+          <div class="limitations">
+            <strong>Речевые особенности · отдельно от безопасности</strong>
+            <p>{{ result.speechQuality.interpretation.summary }}</p>
+            <p v-if="speechMarkerSummary()" class="muted">
+              Чаще всего встречаются: {{ speechMarkerSummary() }}.
+            </p>
+            <small class="muted">{{ result.speechQuality.interpretation.note }}</small>
+            <details>
+              <summary>Технические метрики</summary>
+              <p class="muted">
+                Проанализировано {{ result.speechQuality.totalWords }} слов.
+                Речевые маркеры: {{ result.speechQuality.fillerWordCount }}
+                ({{ result.speechQuality.fillersPer1000Words }} на 1000 слов).
+                Повторы слов подряд: {{ result.speechQuality.repeatedWordCount }}
+                ({{ result.speechQuality.repeatedWordsPer1000Words }} на 1000 слов).
+              </p>
+            </details>
+          </div>
         </div>
       </div>
 
@@ -309,12 +326,14 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               </div>
               <div class="range-list">
                 <a
+                  v-for="range in scene.evidenceRanges"
+                  :key="`${scene.sceneId}:${range.startMs}:${range.endMs}`"
                   class="timestamp"
-                  :href="youtubeTimestampUrl(video.id, scene.startMs)"
+                  :href="youtubeTimestampUrl(video.id, range.startMs)"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  ▶ {{ formatRange(scene.startMs, scene.endMs) }}
+                  ▶ {{ formatRange(range.startMs, range.endMs) }}
                 </a>
               </div>
               <div class="evidence">

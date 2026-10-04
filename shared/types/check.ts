@@ -77,6 +77,17 @@ export interface SpeechQualityMarkerCount {
   count: number
 }
 
+export type SpeechPatternFrequency = 'none' | 'occasional' | 'noticeable' | 'frequent'
+
+export interface SpeechQualityInterpretation {
+  fillerFrequency: SpeechPatternFrequency
+  repetitionFrequency: SpeechPatternFrequency
+  fillerEveryWords?: number
+  repetitionEveryWords?: number
+  summary: string
+  note: string
+}
+
 export interface SpeechQualityExample {
   marker: string
   startMs: number
@@ -94,6 +105,7 @@ export interface SpeechQualityMetrics {
   repeatedWordsPer1000Words: number
   fillerBreakdown: SpeechQualityMarkerCount[]
   examples: SpeechQualityExample[]
+  interpretation: SpeechQualityInterpretation
 }
 
 export interface ChannelSpeechQualitySummary {
@@ -103,6 +115,9 @@ export interface ChannelSpeechQualitySummary {
   repeatedWordCount: number
   repeatedWordsPer1000Words: number
   fillerBreakdown: SpeechQualityMarkerCount[]
+  analyzedVideos: number
+  asrVideos: number
+  interpretation: SpeechQualityInterpretation
 }
 
 export interface VideoMetadata {

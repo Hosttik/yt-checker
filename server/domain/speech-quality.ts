@@ -3,6 +3,8 @@ import type {
   SpeechQualityExample,
   SpeechQualityMarkerCount,
   SpeechQualityMetrics,
+  SpeechPatternFrequency,
+  SpeechQualityInterpretation,
 } from '../../shared/types/check'
 import type { NormalizedTranscript } from './normalize-transcript'
 
@@ -18,6 +20,62 @@ const RU_FILLERS = [
 
 function round(value: number): number {
   return Math.round(value * 10) / 10
+}
+
+function frequencyBand(ratePer1000: number): SpeechPatternFrequency {
+  if (ratePer1000 <= 0) return 'none'
+  if (ratePer1000 < 5) return 'occasional'
+  if (ratePer1000 < 15) return 'noticeable'
+  return 'frequent'
+}
+
+function frequencyText(level: SpeechPatternFrequency): string {
+  if (level === 'frequent') return 'часто'
+  if (level === 'noticeable') return 'заметно'
+  if (level === 'occasional') return 'редко'
+  return 'не обнаружены'
+}
+
+function everyWords(totalWords: number, count: number): number | undefined {
+  if (!totalWords || !count) return undefined
+  return Math.max(1, Math.round(totalWords / count))
+}
+
+function interpretation(
+  totalWords: number,
+  fillerWordCount: number,
+  fillersPer1000Words: number,
+  repeatedWordCount: number,
+  repeatedWordsPer1000Words: number,
+  options: { fillersSupported: boolean; asrVideos: number; analyzedVideos: number },
+): SpeechQualityInterpretation {
+  const fillerFrequency = options.fillersSupported ? frequencyBand(fillersPer1000Words) : 'none'
+  const repetitionFrequency = frequencyBand(repeatedWordsPer1000Words)
+  const fillerEveryWords = options.fillersSupported ? everyWords(totalWords, fillerWordCount) : undefined
+  const repetitionEveryWords = everyWords(totalWords, repeatedWordCount)
+
+  const fillerSummary = options.fillersSupported
+    ? fillerWordCount > 0
+      ? `Речевые маркеры вроде «ну», «короче», «э/ээ» встречаются ${frequencyText(fillerFrequency)} — примерно 1 раз на ${fillerEveryWords} слов.`
+      : 'Речевые маркеры из поддерживаемого списка не обнаружены.'
+    : 'Для этого языка речевые маркеры пока не оцениваются.'
+
+  const repetitionSummary = repeatedWordCount > 0
+    ? `Повторы слов подряд встречаются ${frequencyText(repetitionFrequency)} — примерно 1 раз на ${repetitionEveryWords} слов.`
+    : 'Повторы слов подряд не обнаружены.'
+
+  const asrNote = options.asrVideos > 0
+    ? ` ${options.asrVideos === options.analyzedVideos ? 'Все' : `${options.asrVideos} из ${options.analyzedVideos}`} анализируемые субтитры auto-generated, поэтому ASR может добавлять ложные повторы или искажать отдельные слова.`
+    : ''
+
+  return {
+    fillerFrequency,
+    repetitionFrequency,
+    fillerEveryWords,
+    repetitionEveryWords,
+    summary: `${fillerSummary} ${repetitionSummary}`,
+    note: `Это эвристика речевых особенностей, а не оценка безопасности или «качества» автора. Градации «редко / заметно / часто» — внутренние ориентиры интерфейса, а не языковая норма. Маркеры считаются по форме слова: например, «ну» не в каждом контексте является словом-паразитом.${asrNote}`,
+  }
 }
 
 function baseLanguage(language: string): string {
@@ -75,16 +133,30 @@ export function analyzeSpeechQuality(
   }
 
   const repeatedWords = repeatedWordCount(transcript.sourceText)
+  const fillersPer1000Words = totalWords ? round((fillerWordCount / totalWords) * 1000) : 0
+  const repeatedWordsPer1000Words = totalWords ? round((repeatedWords / totalWords) * 1000) : 0
   return {
     method: russian ? 'heuristic_ru_v1' : 'repetition_only_v1',
     language: language || 'unknown',
     totalWords,
     fillerWordCount,
-    fillersPer1000Words: totalWords ? round((fillerWordCount / totalWords) * 1000) : 0,
+    fillersPer1000Words,
     repeatedWordCount: repeatedWords,
-    repeatedWordsPer1000Words: totalWords ? round((repeatedWords / totalWords) * 1000) : 0,
+    repeatedWordsPer1000Words,
     fillerBreakdown: fillerBreakdown.sort((a, b) => b.count - a.count || a.marker.localeCompare(b.marker)),
     examples,
+    interpretation: interpretation(
+      totalWords,
+      fillerWordCount,
+      fillersPer1000Words,
+      repeatedWords,
+      repeatedWordsPer1000Words,
+      {
+        fillersSupported: russian,
+        asrVideos: language.toLowerCase().startsWith('asr-') ? 1 : 0,
+        analyzedVideos: 1,
+      },
+    ),
   }
 }
 
@@ -100,14 +172,30 @@ export function summarizeSpeechQuality(items: SpeechQualityMetrics[]): ChannelSp
     }
   }
 
+  const fillersPer1000Words = totalWords ? round((fillerWordCount / totalWords) * 1000) : 0
+  const repeatedWordsPer1000Words = totalWords ? round((repeatedWordCount / totalWords) * 1000) : 0
+  const analyzedVideos = items.length
+  const asrVideos = items.filter((item) => item.language.toLowerCase().startsWith('asr-')).length
+  const fillersSupported = items.some((item) => item.method === 'heuristic_ru_v1')
+
   return {
     totalWords,
     fillerWordCount,
-    fillersPer1000Words: totalWords ? round((fillerWordCount / totalWords) * 1000) : 0,
+    fillersPer1000Words,
     repeatedWordCount,
-    repeatedWordsPer1000Words: totalWords ? round((repeatedWordCount / totalWords) * 1000) : 0,
+    repeatedWordsPer1000Words,
     fillerBreakdown: [...byMarker.entries()]
       .map(([marker, count]) => ({ marker, count }))
       .sort((a, b) => b.count - a.count || a.marker.localeCompare(b.marker)),
+    analyzedVideos,
+    asrVideos,
+    interpretation: interpretation(
+      totalWords,
+      fillerWordCount,
+      fillersPer1000Words,
+      repeatedWordCount,
+      repeatedWordsPer1000Words,
+      { fillersSupported, asrVideos, analyzedVideos },
+    ),
   }
 }

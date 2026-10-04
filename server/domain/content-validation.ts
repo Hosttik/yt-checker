@@ -5,9 +5,33 @@ export interface ContentValidationRejection {
   reason: string
 }
 
+export interface ContentValidationAdjustment {
+  originalEvent: ClassifiedContentEvent
+  event: ClassifiedContentEvent
+  reason: string
+}
+
 export interface ContentValidationResult {
   accepted: ClassifiedContentEvent[]
   rejected: ContentValidationRejection[]
+  adjustments: ContentValidationAdjustment[]
+}
+
+function normalizeEvent(
+  event: ClassifiedContentEvent,
+): { event: ClassifiedContentEvent; reason?: string } {
+  if (event.category === 'violence'
+    && event.subtype === 'violent_threat'
+    && event.assertionStatus === 'hypothetical'
+    && event.details.harmLevel === 'threatened'
+    && event.details.actionPurpose === 'threat') {
+    return {
+      event: { ...event, assertionStatus: 'threatened' },
+      reason: 'conditional coercive threat normalized from hypothetical to threatened',
+    }
+  }
+
+  return { event }
 }
 
 function validationReason(event: ClassifiedContentEvent): string | undefined {
@@ -39,6 +63,12 @@ function validationReason(event: ClassifiedContentEvent): string | undefined {
     return 'violent_threat requires threatened harm or threatened weapon use'
   }
 
+  if (event.subtype === 'physical_attack'
+    && details.harmLevel === 'implied'
+    && event.evidenceStrength !== 'explicit') {
+    return 'physical_attack with implied harm requires explicit transcript evidence'
+  }
+
   if (event.subtype === 'weapon_presence'
     && (details.weaponRole === 'used' || details.weaponRole === 'threatened_use')) {
     return 'weapon_presence conflicts with active/threatened weapon use'
@@ -61,12 +91,19 @@ export function validateClassifiedEvents(
 ): ContentValidationResult {
   const accepted: ClassifiedContentEvent[] = []
   const rejected: ContentValidationRejection[] = []
+  const adjustments: ContentValidationAdjustment[] = []
 
-  for (const event of events) {
+  for (const originalEvent of events) {
+    const normalized = normalizeEvent(originalEvent)
+    const event = normalized.event
+    if (normalized.reason) {
+      adjustments.push({ originalEvent, event, reason: normalized.reason })
+    }
+
     const reason = validationReason(event)
     if (reason) rejected.push({ event, reason })
     else accepted.push(event)
   }
 
-  return { accepted, rejected }
+  return { accepted, rejected, adjustments }
 }

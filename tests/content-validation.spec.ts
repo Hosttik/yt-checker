@@ -66,4 +66,42 @@ describe('content semantic validation', () => {
     })])
     expect(result.accepted).toHaveLength(0)
   })
+  it('normalizes a conditional coercive threat instead of dropping it as hypothetical', () => {
+    const result = validateClassifiedEvents([violence({
+      subtype: 'violent_threat',
+      assertionStatus: 'hypothetical',
+      details: {
+        harmLevel: 'threatened',
+        targetType: 'human_like_character',
+        weaponRole: 'none',
+        actionPurpose: 'threat',
+      },
+      text: 'Сделай это, иначе жителям конец.',
+      reason: 'Персонаж ставит условие и угрожает жителям.',
+    })])
+
+    expect(result.rejected).toHaveLength(0)
+    expect(result.accepted[0]?.assertionStatus).toBe('threatened')
+    expect(result.adjustments).toHaveLength(1)
+  })
+
+  it('rejects an implied physical attack when transcript evidence is not explicit', () => {
+    const result = validateClassifiedEvents([violence({
+      subtype: 'physical_attack',
+      assertionStatus: 'actual',
+      evidenceStrength: 'strong_context',
+      details: {
+        harmLevel: 'implied',
+        targetType: 'human_like_character',
+        weaponRole: 'none',
+        actionPurpose: 'attack',
+      },
+      text: 'О нет, зомби тут. [стон]',
+      reason: 'Стоны могут указывать на нападение.',
+    })])
+
+    expect(result.accepted).toHaveLength(0)
+    expect(result.rejected[0]?.reason).toContain('requires explicit transcript evidence')
+  })
+
 })

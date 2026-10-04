@@ -157,6 +157,8 @@ export interface BaseContentEvent {
   confidence: number
   startMs: number
   endMs: number
+  sceneStartMs?: number
+  sceneEndMs?: number
   text: string
   reason: string
   evidenceStrength: EvidenceStrength
@@ -250,6 +252,7 @@ export interface PresentationScene {
   endMs: number
   level: ReportLevel
   categories: ContentCategory[]
+  evidenceRanges: Array<{ startMs: number; endMs: number }>
   label: string
   summary: string
   events: ContentEvent[]

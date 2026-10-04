@@ -29,6 +29,8 @@ describe('speech quality metrics', () => {
       { marker: 'э/ээ', count: 1 },
     ]))
     expect(result.examples.length).toBeGreaterThan(0)
+    expect(result.interpretation.summary).toContain('Речевые маркеры')
+    expect(result.interpretation.summary).toContain('Повторы слов подряд')
   })
 
   it('does not classify Russian-specific fillers for unsupported languages', () => {
@@ -36,6 +38,7 @@ describe('speech quality metrics', () => {
     expect(result.method).toBe('repetition_only_v1')
     expect(result.fillerWordCount).toBe(0)
     expect(result.repeatedWordCount).toBe(2)
+    expect(result.interpretation.summary).toContain('Для этого языка речевые маркеры пока не оцениваются')
   })
 
   it('aggregates channel-level rates from video metrics', () => {
@@ -46,5 +49,22 @@ describe('speech quality metrics', () => {
     expect(result.fillerWordCount).toBe(3)
     expect(result.repeatedWordCount).toBe(2)
     expect(result.fillersPer1000Words).toBe(500)
+    expect(result.analyzedVideos).toBe(2)
+    expect(result.asrVideos).toBe(0)
+    expect(result.interpretation.fillerFrequency).toBe('frequent')
   })
+  it('turns raw rates into parent-friendly frequency wording and warns about ASR', () => {
+    const items = [
+      analyzeSpeechQuality(transcript(Array.from({ length: 40 }, (_, i) =>
+        i % 5 === 0 ? 'Ну тест тест' : 'обычная спокойная речь',
+      )), 'asr-ru'),
+    ]
+    const result = summarizeSpeechQuality(items)
+
+    expect(result.asrVideos).toBe(1)
+    expect(result.interpretation.summary).toMatch(/примерно 1 раз на/)
+    expect(result.interpretation.note).toContain('auto-generated')
+    expect(result.interpretation.note).toContain('ASR')
+  })
+
 })

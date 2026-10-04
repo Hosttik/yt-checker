@@ -55,6 +55,14 @@ const result: ChannelCheckResponse = {
     repeatedWordCount: 0,
     repeatedWordsPer1000Words: 0,
     fillerBreakdown: [],
+    analyzedVideos: 1,
+    asrVideos: 0,
+    interpretation: {
+      fillerFrequency: 'none',
+      repetitionFrequency: 'none',
+      summary: 'Слова-паразиты из поддерживаемого списка не обнаружены. Повторы слов подряд не обнаружены.',
+      note: 'Это эвристика речевых особенностей, а не оценка безопасности или «качества» автора.',
+    },
   },
   selection: {
     targetVideos: 1,
@@ -86,6 +94,7 @@ const result: ChannelCheckResponse = {
       endMs: 2_000,
       level: 'low',
       categories: ['violence'],
+      evidenceRanges: [{ startMs: 0, endMs: 2_000 }],
       label: 'Насилие',
       summary: 'Сцена с мечом.',
       events: [event],
@@ -114,6 +123,13 @@ const result: ChannelCheckResponse = {
         endMs: 2_000,
         text: 'Ну эээ текстовый фрагмент.',
       }],
+      interpretation: {
+        fillerFrequency: 'frequent',
+        repetitionFrequency: 'none',
+        fillerEveryWords: 4,
+        summary: 'Слова-паразиты встречаются часто — примерно 1 раз на 4 слов. Повторы слов подряд не обнаружены.',
+        note: 'Это эвристика речевых особенностей, а не оценка безопасности или «качества» автора.',
+      },
     },
     violations: [{
       category: 'violence',
@@ -202,7 +218,7 @@ describe('ScanStorage', () => {
         portrayal: 'neutral',
         explicitness: 'mild',
         assertionStatus: 'actual',
-        details: { harmLevel: 'none', targetType: 'object', weaponRole: 'possessed' },
+        details: { harmLevel: 'none', targetType: 'object', weaponRole: 'possessed', actionPurpose: 'unknown' },
       }],
       rejectedCandidates: [{
         candidateId: 'candidate_2_1',
