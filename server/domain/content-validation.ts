@@ -17,9 +17,36 @@ export interface ContentValidationResult {
   adjustments: ContentValidationAdjustment[]
 }
 
+function looksLikeCurrentReportedThreat(text: string): boolean {
+  const normalized = text.toLocaleLowerCase()
+  return [
+    /прямо сейчас/,
+    /уже (?:ид[её]т|идут|приближа)/,
+    /(?:ид[её]т|идут).{0,40}(?:сюда|к нам|к деревне|на деревню)/,
+    /сообщил.{0,60}(?:ид[её]т|идут|приближа)/,
+    /right now/,
+    /currently/,
+    /(?:is|are) (?:coming|approaching)/,
+  ].some((pattern) => pattern.test(normalized))
+}
+
 function normalizeEvent(
   event: ClassifiedContentEvent,
 ): { event: ClassifiedContentEvent; reason?: string } {
+  if (event.category === 'violence'
+    && event.subtype === 'dangerous_situation'
+    && event.assertionStatus === 'hypothetical'
+    && event.details.harmLevel === 'threatened'
+    && event.evidenceStrength === 'explicit'
+    && event.confidence >= 0.9
+    && event.engagementLevel === 'depiction'
+    && looksLikeCurrentReportedThreat(event.text)) {
+    return {
+      event: { ...event, assertionStatus: 'reported' },
+      reason: 'current reported danger normalized from hypothetical to reported',
+    }
+  }
+
   if (event.category === 'violence'
     && event.subtype === 'violent_threat'
     && event.assertionStatus === 'hypothetical'
@@ -43,6 +70,14 @@ function validationReason(event: ClassifiedContentEvent): string | undefined {
     return 'event is only hypothetical and is not an actual or threatened event'
   }
 
+  if (event.category === 'scary_and_disturbing') {
+    if (event.subtype === 'intense_peril'
+      && (!event.details.threatPresent || event.details.fearIntensity === 'mild')) {
+      return 'intense_peril requires a present threat and at least moderate fear intensity'
+    }
+    return undefined
+  }
+
   if (event.category !== 'violence') return undefined
 
   const details = event.details
@@ -61,6 +96,13 @@ function validationReason(event: ClassifiedContentEvent): string | undefined {
     && details.harmLevel !== 'actual'
     && details.weaponRole !== 'threatened_use') {
     return 'violent_threat requires threatened harm or threatened weapon use'
+  }
+
+  if (event.subtype === 'violent_threat'
+    && event.evidenceStrength !== 'explicit'
+    && (event.confidence < 0.85
+      || (event.assertionStatus === 'actual' && details.actionPurpose !== 'threat'))) {
+    return 'violent_threat requires stronger corroboration when transcript evidence is ambiguous'
   }
 
   if (event.subtype === 'physical_attack'

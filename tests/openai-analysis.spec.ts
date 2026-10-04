@@ -129,6 +129,7 @@ describe('OpenAI content-event classifier', () => {
       endMs: 2_000,
       text: 'Мне подарили меч.',
       confidence: 0.98,
+      evidenceRanges: [{ startMs: 0, endMs: 2_000 }],
       sceneStartMs: 0,
       sceneEndMs: 2_000,
       details: {
@@ -138,6 +139,35 @@ describe('OpenAI content-event classifier', () => {
         actionPurpose: 'unknown',
       },
     })])
+  })
+
+
+  it('materializes non-contiguous evidence as separate ranges', async () => {
+    const { provider } = providerWith({
+      events: [{
+        ...violenceEvent,
+        evidenceSegments: [0, 2, 3, 6],
+        sceneStartSegment: 0,
+        sceneEndSegment: 6,
+      }],
+    })
+    const result = await provider.analyze(
+      transcript(['a', 'b', 'c', 'd', 'e', 'f', 'g']),
+      'ru',
+      ['violence'],
+      false,
+    )
+
+    expect(result.classifiedEvents[0]).toMatchObject({
+      startMs: 0,
+      endMs: 20_000,
+      evidenceRanges: [
+        { startMs: 0, endMs: 2_000 },
+        { startMs: 6_000, endMs: 11_000 },
+        { startMs: 18_000, endMs: 20_000 },
+      ],
+      text: 'a c d g',
+    })
   })
 
   it('rejects out-of-range segment indexes', async () => {
@@ -217,6 +247,9 @@ describe('OpenAI content-event classifier', () => {
     expect(OPENAI_SYSTEM_PROMPT).toContain('Reuse the exact same sceneId')
     expect(OPENAI_SYSTEM_PROMPT).toContain('1-6 nearby segment indexes')
     expect(OPENAI_SYSTEM_PROMPT).toContain('coercive condition')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('11 000 зомби')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('demonstration')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('ASR')
   })
 
   it('contains regression guidance for self-harm and weak violence candidates', () => {

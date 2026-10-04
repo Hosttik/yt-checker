@@ -27,7 +27,7 @@ export type EngagementLevel = 'mention' | 'depiction' | 'participation' | 'encou
 export type Portrayal = 'neutral' | 'normalized' | 'glamorized' | 'discouraged' | 'educational' | 'humorous' | 'unknown'
 export type Explicitness = 'none' | 'mild' | 'explicit' | 'graphic'
 export type AssertionStatus = 'actual' | 'threatened' | 'hypothetical' | 'negated' | 'reported'
-export type ViolenceActionPurpose = 'attack' | 'threat' | 'defense' | 'rescue' | 'utility' | 'sport' | 'destruction' | 'unknown'
+export type ViolenceActionPurpose = 'attack' | 'threat' | 'defense' | 'rescue' | 'utility' | 'sport' | 'demonstration' | 'accident' | 'destruction' | 'unknown'
 export type PrevalenceLevel = 'none' | 'rare' | 'occasional' | 'common' | 'pervasive'
 
 export type ProfanitySubtype = 'profanity' | 'rude_language' | 'slur' | 'obscene_expression'
@@ -157,6 +157,7 @@ export interface BaseContentEvent {
   confidence: number
   startMs: number
   endMs: number
+  evidenceRanges?: Array<{ startMs: number; endMs: number }>
   sceneStartMs?: number
   sceneEndMs?: number
   text: string
@@ -236,6 +237,9 @@ export interface ChannelCategoryReport {
   peakConcern: ReportLevel
   prevalence: PrevalenceLevel
   affectedRatio: number
+  moderatePlusPrevalence: PrevalenceLevel
+  moderatePlusAffectedRatio: number
+  moderatePlusAffectedVideos: number
   analyzedVideos: number
   rawAffectedVideos: number
   affectedVideos: number

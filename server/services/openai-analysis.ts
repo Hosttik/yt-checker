@@ -13,8 +13,8 @@ import type {
 import { CONTENT_CATEGORIES } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
-export const OPENAI_PROMPT_VERSION = '2026-10-04.content-events-v3'
-export const OPENAI_SCHEMA_VERSION = '6'
+export const OPENAI_PROMPT_VERSION = '2026-10-04.content-events-v4'
+export const OPENAI_SCHEMA_VERSION = '7'
 
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
@@ -94,7 +94,7 @@ const violenceEventSchema = z.object({
       'unknown',
     ]),
     weaponRole: z.enum(['none', 'mentioned', 'possessed', 'threatened_use', 'used']),
-    actionPurpose: z.enum(['attack', 'threat', 'defense', 'rescue', 'utility', 'sport', 'destruction', 'unknown']),
+    actionPurpose: z.enum(['attack', 'threat', 'defense', 'rescue', 'utility', 'sport', 'demonstration', 'accident', 'destruction', 'unknown']),
   }),
 })
 
@@ -232,7 +232,7 @@ For every accepted event determine:
 - confidence: 0..1 confidence that this classification is correct, not danger;
 - context: game, fiction, real_world, educational, or unknown;
 - evidenceStrength: explicit, strong_context, or weak_context;
-- assertionStatus: actual if the event/action is presently occurring; threatened for a genuine threat or coercive condition issued by an actor (for example, "if you do not do X, I will hurt Y"); hypothetical for a prediction, fear, possibility or imagined consequence without an actor committing to cause it; negated when surrounding context explicitly denies it; reported when speakers report a past/off-screen event without directly depicting it;
+- assertionStatus: actual if the event/action is presently occurring; threatened for a genuine threat or coercive condition issued by an actor (for example, "if you do not do X, I will hurt Y"); reported when a speaker reports a real current/past/off-screen event (for example, "админ сообщил, что прямо сейчас к деревне идут 11 000 зомби"); hypothetical only for a prediction, fear, possibility or imagined consequence that is not established as occurring; negated when surrounding context explicitly denies it;
 - engagementLevel, portrayal, explicitness when semantically useful; otherwise null;
 - category-specific details;
 - short factual reason in Russian. The reason must be supported by evidenceSegments themselves; never cite a later/earlier fact that is outside the selected evidence just because it exists elsewhere in the transcript.
@@ -256,7 +256,7 @@ toilet_humor:
 
 violence:
 - weapon_presence: weapon present/received/held without threatened or actual use.
-- weapon_use: weapon actively used, even if no target is harmed. Fill actionPurpose: attack, threat, defense, rescue, utility, sport, destruction, or unknown. Cutting a rope to rescue someone is rescue; target practice is sport; using a tool-like weapon on an object can be utility.
+- weapon_use: weapon actively used, even if no target is harmed. Fill actionPurpose: attack, threat, defense, rescue, utility, sport, demonstration, accident, destruction, or unknown. Cutting a rope to rescue someone is rescue; target practice is sport; showing how a gifted weapon works without threatening/harming anyone is demonstration; using a tool-like weapon on an object can be utility.
 - violent_threat: explicit or strongly implied threat to harm a target.
 - physical_attack: attack on a target.
 - fantasy_combat: combat with fantasy/game creatures or characters.
@@ -264,10 +264,11 @@ violence:
 - life_threatening_situation: a target is intentionally or clearly placed in potentially lethal danger.
 - destruction: destruction of environment/objects; do not call it a physical attack by itself.
 - injury, death, graphic_violence as appropriate.
-Fill harmLevel, targetType, weaponRole and actionPurpose independently. A denied fear is not a threat: e.g. "вы хотите скинуть меня в лаву?" followed by "да какую лаву" is negated and must not become a life_threatening_situation. A fear such as "боюсь, вдруг они придут и меня съедят" is hypothetical unless the danger is already established as present/imminent. General forecasts such as "если придут гриферы, они разрушат деревню" are hypothetical, not threatened. By contrast, coercion such as "сделай X, иначе жителям конец" is threatened. physical_attack requires an attack supported by the transcript, not merely groans or ambiguous sounds. A prison escape, arrest, theft or property crime without physical danger is not violence by itself.
+Fill harmLevel, targetType, weaponRole and actionPurpose independently. For injury, use actionPurpose=accident when the harm is accidental/non-aggressive. A denied fear is not a threat: e.g. "вы хотите скинуть меня в лаву?" followed by "да какую лаву" is negated and must not become a life_threatening_situation. A fear such as "боюсь, вдруг они придут и меня съедят" is hypothetical unless the danger is already established as present/imminent. General forecasts such as "если придут гриферы, они разрушат деревню" are hypothetical, not threatened. A report that a threat is already approaching right now (for example, "сообщили, что прямо сейчас идут 11 000 зомби") is reported/actual danger, not hypothetical. By contrast, coercion such as "сделай X, иначе жителям конец" is threatened. physical_attack requires an attack supported by the transcript, not merely groans or ambiguous sounds. A prison escape, arrest, theft or property crime without physical danger is not violence by itself. Be especially conservative with ASR: a single ambiguous word that could be a transcription error (for example «гробануть» in a theft/loot context that may actually be «грабануть») is not enough to create violent_threat without corroborating physical-harm semantics.
 
 scary_and_disturbing:
 - threatening_character, pursuit, horror_theme, jump_scare, disturbing_theme, death_related_theme, confinement, intense_peril, other.
+- intense_peril requires a present threat and at least moderate fear/intensity. If threatPresent=false or fearIntensity=mild, use a milder subtype such as other/disturbing_theme or reject the candidate.
 - A zombie/monster existing is not automatically scary. A coffin word alone is not automatically meaningful. Consider actual threat, fear, confinement, sustained peril and the tone supported by transcript.
 - jump_scare requires transcript evidence of a sudden scare; never infer it from visuals that were not analyzed.
 
@@ -394,18 +395,33 @@ function materializeRange(
 function materializeEvidence(
   indexes: number[],
   transcript: NormalizedTranscript,
-): { startMs: number; endMs: number; text: string } {
+): { startMs: number; endMs: number; evidenceRanges: Array<{ startMs: number; endMs: number }>; text: string } {
   const uniqueIndexes = [...new Set(indexes)].sort((a, b) => a - b)
   if (uniqueIndexes.length === 0 || uniqueIndexes.length > 6
     || uniqueIndexes.some((index) => index < 0 || index >= transcript.segments.length)) {
     throw new OpenAIAnalysisError('schema', 'OpenAI returned invalid evidence segments.')
   }
+
+  const clusters: number[][] = []
+  for (const index of uniqueIndexes) {
+    const cluster = clusters.at(-1)
+    if (cluster && index === cluster.at(-1)! + 1) cluster.push(index)
+    else clusters.push([index])
+  }
+
   const selected = uniqueIndexes.map((index) => transcript.segments[index]!)
   const first = selected[0]!
   const last = selected.at(-1)!
+  const evidenceRanges = clusters.map((cluster) => {
+    const firstSegment = transcript.segments[cluster[0]!]!
+    const lastSegment = transcript.segments[cluster.at(-1)!]!
+    return { startMs: firstSegment.startMs, endMs: lastSegment.endMs }
+  })
+
   return {
     startMs: first.startMs,
     endMs: last.endMs,
+    evidenceRanges,
     text: selected.map((segment) => segment.text).join(' '),
   }
 }

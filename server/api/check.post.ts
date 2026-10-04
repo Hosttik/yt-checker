@@ -157,7 +157,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const enabledRuleIds = request.ruleIds as RuleId[]
   const enabledCategories = normalizeRequestedCategories(enabledRuleIds)
   const profile = request.profile as AnalysisProfile
-  const diagnosticAnalysis = profile === 'diagnostic'
+  const diagnosticAnalysis = profile === 'diagnostic' || storageMode === 'diagnostic'
 
   logger.info('scan.started', {
     storageMode,

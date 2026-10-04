@@ -172,6 +172,39 @@ describe('deterministic content policy', () => {
 })
 
 describe('calibration regressions', () => {
+  it('hides a low-severity accidental injury in normal mode but keeps it in strict mode', () => {
+    const classified = violence('injury', {
+      harmLevel: 'actual',
+      targetType: 'person',
+      weaponRole: 'none',
+      actionPurpose: 'accident',
+    }, {
+      severity: 'low',
+      reason: 'Пружина случайно ударила героя в спину.',
+    })
+
+    const normal = applyContentPolicy(classified, 'accident-normal', 'normal')
+    const strict = applyContentPolicy(classified, 'accident-strict', 'strict')
+
+    expect([normal.parentRelevance, normal.displayLevel]).toEqual(['minimal', 'hidden'])
+    expect([strict.parentRelevance, strict.displayLevel]).toEqual(['minimal', 'summary'])
+  })
+
+  it('hides harmless weapon demonstrations in normal mode', () => {
+    const event = applyContentPolicy(violence('weapon_use', {
+      harmLevel: 'none',
+      targetType: 'object',
+      weaponRole: 'used',
+      actionPurpose: 'demonstration',
+    }, {
+      severity: 'low',
+      reason: 'Персонаж показывает, как работает подаренный меч.',
+    }), 'event-demo', 'normal')
+
+    expect(event.parentRelevance).toBe('minimal')
+    expect(event.displayLevel).toBe('hidden')
+  })
+
   it('hides rescue-oriented weapon use in normal mode', () => {
     const event = applyContentPolicy(violence('weapon_use', {
       harmLevel: 'none', targetType: 'object', weaponRole: 'used', actionPurpose: 'rescue',

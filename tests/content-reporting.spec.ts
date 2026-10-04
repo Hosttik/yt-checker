@@ -120,6 +120,8 @@ describe('content reporting', () => {
     expect(report.peakConcern).toBe('high')
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
+    expect(report.moderatePlusPrevalence).toBe('rare')
+    expect(report.moderatePlusAffectedVideos).toBe(1)
   })
   it('merges overlapping narrative scenes even when the model used different scene ids', () => {
     const first = violenceEvent({
@@ -160,6 +162,97 @@ describe('content reporting', () => {
     expect(scene.startMs).toBe(200_000)
     expect(scene.endMs).toBe(205_000)
     expect(scene.evidenceRanges).toEqual([{ startMs: 200_000, endMs: 205_000 }])
+  })
+
+  it('preserves sparse evidence ranges instead of expanding them to the whole envelope', () => {
+    const event = violenceEvent({
+      startMs: 10_000,
+      endMs: 80_000,
+      evidenceRanges: [
+        { startMs: 10_000, endMs: 12_000 },
+        { startMs: 30_000, endMs: 34_000 },
+        { startMs: 78_000, endMs: 80_000 },
+      ],
+    })
+
+    const scene = buildPresentationScenes([event])[0]!
+    expect(scene.evidenceRanges).toEqual([
+      { startMs: 10_000, endMs: 12_000 },
+      { startMs: 30_000, endMs: 34_000 },
+      { startMs: 78_000, endMs: 80_000 },
+    ])
+  })
+
+  it('splits one oversized model scene when displayed evidence is far apart', () => {
+    const early = violenceEvent({
+      id: 'train-early',
+      sceneId: 'train-thread',
+      startMs: 75_000,
+      endMs: 127_000,
+      evidenceRanges: [{ startMs: 75_000, endMs: 127_000 }],
+      sceneStartMs: 75_000,
+      sceneEndMs: 579_000,
+    })
+    const late = violenceEvent({
+      id: 'train-late',
+      sceneId: 'train-thread',
+      startMs: 290_000,
+      endMs: 306_000,
+      evidenceRanges: [{ startMs: 290_000, endMs: 306_000 }],
+      sceneStartMs: 75_000,
+      sceneEndMs: 579_000,
+    })
+
+    const scenes = buildPresentationScenes([early, late])
+    expect(scenes).toHaveLength(2)
+    expect(scenes[0]?.evidenceRanges).toEqual([{ startMs: 75_000, endMs: 127_000 }])
+    expect(scenes[1]?.evidenceRanges).toEqual([{ startMs: 290_000, endMs: 306_000 }])
+  })
+
+  it('limits a scene summary to the strongest non-duplicate reasons', () => {
+    const first = violenceEvent({
+      id: 'summary-1',
+      parentRelevance: 'high',
+      displayLevel: 'highlight',
+      reason: 'Чёрная дыра затягивает персонажей; они пытаются спастись.',
+    })
+    const second = violenceEvent({
+      id: 'summary-2',
+      reason: 'Чёрная дыра затягивает персонажей и создаёт непосредственную опасность.',
+    })
+    const third = violenceEvent({
+      id: 'summary-3',
+      subtype: 'destruction',
+      reason: 'Чёрная дыра разрушает дома и поглощает деревню.',
+    })
+
+    const scene = buildPresentationScenes([first, second, third])[0]!
+    expect(scene.summary.split('.').filter(Boolean).length).toBeLessThanOrEqual(2)
+  })
+
+  it('separates low-signal prevalence from moderate-plus prevalence', () => {
+    const low = violenceEvent({ parentRelevance: 'low', displayLevel: 'summary' })
+    const moderate = violenceEvent({
+      id: 'moderate',
+      parentRelevance: 'moderate',
+      displayLevel: 'summary',
+      severity: 'medium',
+    })
+
+    const report = buildChannelCategoryReports([
+      { videoId: 'v1', events: [moderate] },
+      { videoId: 'v2', events: [low] },
+      { videoId: 'v3', events: [low] },
+      { videoId: 'v4', events: [low] },
+      { videoId: 'v5', events: [low] },
+      { videoId: 'v6', events: [low] },
+      ...Array.from({ length: 4 }, (_, index) => ({ videoId: `v${index + 7}`, events: [] })),
+    ], ['violence'], 10, 'normal')[0]!
+
+    expect(report.prevalence).toBe('common')
+    expect(report.affectedVideos).toBe(6)
+    expect(report.moderatePlusPrevalence).toBe('rare')
+    expect(report.moderatePlusAffectedVideos).toBe(1)
   })
 
 })
