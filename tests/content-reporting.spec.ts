@@ -117,6 +117,7 @@ describe('content reporting', () => {
       'normal',
     )[0]!
 
+    expect(report.level).toBe('moderate')
     expect(report.peakConcern).toBe('high')
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
@@ -253,6 +254,39 @@ describe('content reporting', () => {
     expect(report.affectedVideos).toBe(6)
     expect(report.moderatePlusPrevalence).toBe('rare')
     expect(report.moderatePlusAffectedVideos).toBe(1)
+  })
+
+  it('uses high channel level only when high-priority scenes form a meaningful pattern', () => {
+    const high = (id: string) => violenceEvent({
+      id,
+      sourceCandidateId: id,
+      sceneId: id,
+      parentRelevance: 'high',
+      displayLevel: 'highlight',
+      severity: 'high',
+    })
+    const moderate = (id: string) => violenceEvent({
+      id,
+      sourceCandidateId: id,
+      sceneId: id,
+      parentRelevance: 'moderate',
+      displayLevel: 'summary',
+      severity: 'medium',
+    })
+
+    const report = buildChannelCategoryReports([
+      { videoId: 'v1', events: [high('h1')] },
+      { videoId: 'v2', events: [high('h2')] },
+      { videoId: 'v3', events: [high('h3')] },
+      { videoId: 'v4', events: [moderate('m4')] },
+      { videoId: 'v5', events: [moderate('m5')] },
+      ...Array.from({ length: 5 }, (_, index) => ({ videoId: `v${index + 6}`, events: [] })),
+    ], ['violence'], 10, 'normal')[0]!
+
+    expect(report.level).toBe('high')
+    expect(report.peakConcern).toBe('high')
+    expect(report.highlightedVideos).toBe(3)
+    expect(report.moderatePlusAffectedVideos).toBe(5)
   })
 
 })
