@@ -252,6 +252,7 @@ export interface PresentationScene {
   endMs: number
   level: ReportLevel
   categories: ContentCategory[]
+  evidenceRanges: Array<{ startMs: number; endMs: number }>
   label: string
   summary: string
   events: ContentEvent[]
