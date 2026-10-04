@@ -1,8 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { TranscriptApiClient, TranscriptApiError } from '../server/services/transcript-api'
+import {
+  selectAvailableLanguage,
+  TranscriptApiClient,
+  TranscriptApiError,
+} from '../server/services/transcript-api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('TranscriptAPI language selection', () => {
+  it('matches plain language codes to manual captions first and ASR as fallback', () => {
+    expect(selectAvailableLanguage(['asr-ru', 'ru', 'en'], 'ru')).toBe('ru')
+    expect(selectAvailableLanguage(['asr-ru', 'en'], 'ru')).toBe('asr-ru')
+    expect(selectAvailableLanguage(['en', 'asr-ru'], 'ru,en')).toBe('asr-ru')
+    expect(selectAvailableLanguage(['en', 'asr-ru'], 'asr')).toBe('asr-ru')
+    expect(selectAvailableLanguage(['en'], 'ru')).toBeUndefined()
+  })
 })
 
 describe('TranscriptApiClient', () => {
@@ -63,6 +77,24 @@ describe('TranscriptApiClient', () => {
     expect(client.getCreditUsage().totalCredits).toBe(0)
   })
 
+  it('uses /youtube/info to filter for the requested transcript language', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      available_languages: [
+        { code: 'en', name: 'English' },
+        { code: 'asr-ru', name: 'Russian (auto-generated)' },
+      ],
+    }), { status: 200 })))
+
+    const client = new TranscriptApiClient('secret-key')
+    await expect(client.getVideoInfo('video-one11', 'ru')).resolves.toMatchObject({
+      available: true,
+      matchedLanguage: 'asr-ru',
+      languages: ['en', 'asr-ru'],
+    })
+
+    expect(client.getCreditUsage().totalCredits).toBe(0)
+  })
+
   it('charges one credit for a successful channel/videos fallback page', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       results: [
@@ -98,7 +130,7 @@ describe('TranscriptApiClient', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const client = new TranscriptApiClient('secret-key')
-    const result = await client.getTranscript('video-one11')
+    const result = await client.getTranscript('video-one11', 'ru,en')
 
     expect(result).toEqual({
       language: 'ru',
@@ -118,6 +150,7 @@ describe('TranscriptApiClient', () => {
     const requestUrl = String(fetchMock.mock.calls[0]?.[0])
     expect(requestUrl).toContain('send_metadata=true')
     expect(requestUrl).toContain('include_timestamp=true')
+    expect(requestUrl).toContain('language=ru%2Cen')
   })
 
   it('captures raw diagnostic exchange with a redacted auth header without leaking it through errors', async () => {
