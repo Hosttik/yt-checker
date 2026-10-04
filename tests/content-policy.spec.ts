@@ -133,6 +133,18 @@ describe('deterministic content policy', () => {
     expect([promo.parentRelevance, promo.displayLevel]).toEqual(['high', 'highlight'])
   })
 
+  it('keeps low-confidence high-relevance events visible but not highlighted in normal mode', () => {
+    const event = applyContentPolicy(violence('life_threatening_situation', {
+      harmLevel: 'actual', targetType: 'human_like_character', weaponRole: 'none',
+    }, {
+      confidence: 0.4,
+      evidenceStrength: 'weak_context',
+    }), 'event_uncertain', 'normal')
+
+    expect(event.parentRelevance).toBe('high')
+    expect(event.displayLevel).toBe('summary')
+  })
+
   it('strict mode surfaces minimal findings without changing their relevance', () => {
     const event = applyContentPolicy(violence('weapon_presence', {
       harmLevel: 'none', targetType: 'object', weaponRole: 'possessed',
