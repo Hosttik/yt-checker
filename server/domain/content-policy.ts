@@ -354,11 +354,15 @@ function reviewAdjustedRelevance(
   const review = event.review
   if (!review || review.status === 'not_reviewed') return baseline
 
-  const recommended = review.status === 'uncertain'
-    && relevanceRank[review.recommendedParentRelevance] <= relevanceRank[baseline]
-    ? baseline
-    : review.recommendedParentRelevance
+  if (review.status === 'uncertain'
+    && relevanceRank[review.recommendedParentRelevance] <= relevanceRank[baseline]) {
+    // An uncertain review may add caution, but must not erase a serious
+    // first-pass signal. High-priority gating only applies when review
+    // actually promotes the event.
+    return baseline
+  }
 
+  const recommended = review.recommendedParentRelevance
   if (recommended === 'high'
     && (event.category === 'violence' || event.category === 'scary_and_disturbing')
     && !reviewedHighPriorityIsSupported(event)) {
