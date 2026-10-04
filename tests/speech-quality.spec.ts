@@ -29,7 +29,7 @@ describe('speech quality metrics', () => {
       { marker: 'э/ээ', count: 1 },
     ]))
     expect(result.examples.length).toBeGreaterThan(0)
-    expect(result.interpretation.summary).toContain('Слова-паразиты')
+    expect(result.interpretation.summary).toContain('Речевые маркеры')
     expect(result.interpretation.summary).toContain('Повторы слов подряд')
   })
 
@@ -38,7 +38,7 @@ describe('speech quality metrics', () => {
     expect(result.method).toBe('repetition_only_v1')
     expect(result.fillerWordCount).toBe(0)
     expect(result.repeatedWordCount).toBe(2)
-    expect(result.interpretation.summary).toContain('Для этого языка слова-паразиты пока не оцениваются')
+    expect(result.interpretation.summary).toContain('Для этого языка речевые маркеры пока не оцениваются')
   })
 
   it('aggregates channel-level rates from video metrics', () => {
