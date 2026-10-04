@@ -129,3 +129,40 @@ When Jev contextual filtering is enabled, only a bounded local window around a r
 Persistent/output data is limited to video/channel identifiers and metadata plus our own derived classification: category, count, severity, time ranges, and classifier/rule version when versioning is added.
 
 The transcript provider is isolated behind `VideoSource` and `TranscriptProvider`; contextual filtering is isolated behind `ContextFilter`, so either upstream dependency can be replaced independently.
+
+## Transcript provider benchmark
+
+The repository includes a Docker-only benchmark for comparing `transcriptapi.com` and `transcriptapi.io` on exactly the same 50 videos.
+
+Add both provider keys to `.env`:
+
+```env
+BENCHMARK_TRANSCRIPT_COM_KEY=...
+BENCHMARK_TRANSCRIPT_IO_KEY=...
+```
+
+By default the benchmark discovers the latest 50 videos from `@TED` through the `.io` channel-list endpoint, then sends those exact 50 IDs to both transcript providers. Override the dataset with:
+
+```env
+BENCHMARK_CHANNEL=@someChannel
+BENCHMARK_LANGUAGE=ru
+```
+
+Or freeze an exact list:
+
+```env
+BENCHMARK_VIDEO_IDS=id1,id2,...,id50
+```
+
+Run:
+
+```bash
+mkdir -p benchmark-results
+docker compose --profile benchmark run --rm benchmark
+```
+
+The report compares success rate, observed latency (average/p50/p95), segment counts, transcript length, final timestamp coverage, normalized-text equality, and token-set similarity.
+
+Raw transcript text is never written to disk or printed. It exists only in benchmark process memory long enough to calculate aggregate comparison metrics. Results are written to `benchmark-results/latest.md` and `benchmark-results/latest.json`, which are ignored by Git.
+
+Provider billing note: successful `.com` transcript requests cost one credit. `.io` also prices a transcript fetch at one credit, but documented cache hits are free, so the benchmark's actual `.io` credit consumption can be below the number of successful requests.
