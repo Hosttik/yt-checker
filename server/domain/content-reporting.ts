@@ -43,35 +43,35 @@ function policyFor(category: ContentCategory): CategoryPolicy {
   return categoryPolicies[category] as CategoryPolicy
 }
 
-function reasonWords(reason: string): Set<string> {
-  return new Set(reason.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
-}
-
-function reasonsOverlap(a: string, b: string): boolean {
-  const left = reasonWords(a)
-  const right = reasonWords(b)
-  if (left.size === 0 || right.size === 0) return false
-  let common = 0
-  for (const word of left) if (right.has(word)) common += 1
-  return common / Math.min(left.size, right.size) >= 0.6
-}
-
-function sceneSummary(events: ContentEvent[]): string {
+function orderedSceneEvents(events: ContentEvent[]): ContentEvent[] {
   const severityRank = { low: 1, medium: 2, high: 3 } as const
-  const ordered = [...events].sort((a, b) => {
+  return [...events].sort((a, b) => {
     const relevanceDelta = PARENT_RELEVANCE_RANK[b.parentRelevance] - PARENT_RELEVANCE_RANK[a.parentRelevance]
     if (relevanceDelta !== 0) return relevanceDelta
     return severityRank[b.severity] - severityRank[a.severity]
   })
+}
 
-  const reasons: string[] = []
-  for (const event of ordered) {
-    const reason = event.reason.trim()
-    if (!reason || reasons.some((existing) => existing === reason || reasonsOverlap(existing, reason))) continue
-    reasons.push(reason)
-    if (reasons.length >= 2) break
-  }
-  return reasons.join(' ')
+function sceneSummary(events: ContentEvent[]): string {
+  const ordered = orderedSceneEvents(events)
+  const reviewed = ordered.find((event) => event.review?.parentSummary?.trim())
+  return reviewed?.review?.parentSummary?.trim()
+    || ordered.find((event) => event.reason.trim())?.reason.trim()
+    || ''
+}
+
+function sceneMitigatingContext(events: ContentEvent[]): string | undefined {
+  const summary = sceneSummary(events)
+  return orderedSceneEvents(events)
+    .map((event) => event.review?.mitigatingContext?.trim())
+    .find((value): value is string => Boolean(value && value !== summary))
+}
+
+function scenePriorityReason(events: ContentEvent[]): string | undefined {
+  return orderedSceneEvents(events)
+    .filter((event) => event.parentRelevance === 'high')
+    .map((event) => event.review?.highPriorityReason?.trim())
+    .find((value): value is string => Boolean(value))
 }
 
 function prevalenceLevel(affectedVideos: number, analyzedVideos: number): PrevalenceLevel {
@@ -262,6 +262,8 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
         evidenceRanges: compactEvidence,
         label: sceneLabel(scene.events),
         summary: sceneSummary(scene.events),
+        mitigatingContext: sceneMitigatingContext(scene.events),
+        priorityReason: level === 'high' ? scenePriorityReason(scene.events) : undefined,
         events: scene.events,
       }
     })
