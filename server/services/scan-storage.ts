@@ -1,10 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import type { ChannelCheckResponse, ScanStorageMode } from '../../shared/types/check'
+import type { ChannelCheckResponse, ScanStorageMode, VideoContentReview } from '../../shared/types/check'
 import type { ContentEvent } from '../../shared/types/content'
 import type { ContentValidationAdjustment, ContentValidationRejection } from '../domain/content-validation'
 import type { TranscriptApiExchange } from './transcript-api'
-import type { OpenAIAnalysisError, OpenAIAnalysisResult } from './openai-analysis'
+import type { OpenAIAnalysisError, OpenAIAnalysisResult, OpenAIReviewResult } from './openai-analysis'
 
 interface OpenAIDiagnosticEntry {
   videoId: string
@@ -18,8 +18,18 @@ interface OpenAIDiagnosticEntry {
     normalizedContentEvents?: ContentEvent[]
     validationRejections?: ContentValidationRejection[]
     validationAdjustments?: ContentValidationAdjustment[]
+    reviewedClassifiedEvents?: OpenAIReviewResult['reviewedEvents']
+    reviewDecisions?: OpenAIReviewResult['decisions']
   }
   usage?: OpenAIAnalysisResult['usage']
+  review?: {
+    status: VideoContentReview
+    requestMetadata?: OpenAIReviewResult['requestMetadata']
+    provider?: OpenAIReviewResult['provider']
+    usage?: OpenAIReviewResult['usage']
+    outputText?: string
+    error?: { type: string; status?: number; code?: string; message: string }
+  }
   error?: { type: string; status?: number; code?: string; message: string }
   outputText?: string
 }
@@ -50,6 +60,9 @@ export class ScanStorage {
     normalizedContentEvents: ContentEvent[] = [],
     validationRejections: ContentValidationRejection[] = [],
     validationAdjustments: ContentValidationAdjustment[] = [],
+    reviewStatus?: VideoContentReview,
+    reviewResult?: OpenAIReviewResult,
+    reviewError?: OpenAIAnalysisError,
   ): void {
     if (this.mode !== 'diagnostic') return
     this.openaiEntries.push({
@@ -64,8 +77,27 @@ export class ScanStorage {
         normalizedContentEvents,
         validationRejections,
         validationAdjustments,
+        reviewedClassifiedEvents: reviewResult?.reviewedEvents,
+        reviewDecisions: reviewResult?.decisions,
       },
       usage: result.usage,
+      review: reviewStatus
+        ? {
+            status: reviewStatus,
+            requestMetadata: reviewResult?.requestMetadata,
+            provider: reviewResult?.provider ?? reviewError?.provider,
+            usage: reviewResult?.usage ?? reviewError?.usage,
+            outputText: reviewResult?.outputText ?? reviewError?.outputText,
+            error: reviewError
+              ? {
+                  type: reviewError.type,
+                  status: reviewError.status,
+                  code: reviewError.code,
+                  message: reviewError.message,
+                }
+              : undefined,
+          }
+        : undefined,
     })
   }
 
@@ -139,11 +171,14 @@ export class ScanStorage {
               normalizedContentEvents: entry.parsedResult.normalizedContentEvents ?? [],
               validationRejections: entry.parsedResult.validationRejections ?? [],
               validationAdjustments: entry.parsedResult.validationAdjustments ?? [],
+              reviewedClassifiedEvents: entry.parsedResult.reviewedClassifiedEvents ?? [],
+              reviewDecisions: entry.parsedResult.reviewDecisions ?? [],
+              reviewTrace: entry.review,
             }
           : video
       }),
       diagnostic: {
-        note: 'Diagnostic storage retains transcript, LLM output, backend semantic-validation rejections/adjustments, normalized ContentEvents, policy decisions and aggregation outputs for traceability. Storage mode does not change classifier output.',
+        note: 'Diagnostic storage retains transcript, first-pass classifications, contextual-review decisions/errors, backend semantic-validation rejections/adjustments, normalized ContentEvents, policy decisions and aggregation outputs for traceability. Storage mode does not change classifier output.',
       },
     }
   }
