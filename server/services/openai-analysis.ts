@@ -342,7 +342,7 @@ export class OpenAIAnalysisProvider {
       } else {
         safeError.provider = {
           requestId: error instanceof OpenAI.APIError
-            ? (error as OpenAI.APIError & { request_id?: string }).request_id
+            ? (error as unknown as { request_id?: string }).request_id
             : undefined,
           latencyMs: Math.round((performance.now() - started) * 100) / 100,
         }
