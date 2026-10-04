@@ -90,9 +90,10 @@ export function buildVideoCategoryReports(
     const displayed = raw.filter((event) => event.displayLevel !== 'hidden')
     const highlights = displayed.filter((event) => event.displayLevel === 'highlight')
     const policy = policyFor(category)
+    const presentationEvents = displayed.length > 0 ? displayed : raw
     return {
       category,
-      label: policy.getLabel(raw),
+      label: policy.getLabel(presentationEvents),
       level: maxReportLevel(displayed.map(eventLevel)),
       rawEventCount: raw.length,
       displayedEventCount: displayed.length,
@@ -124,18 +125,18 @@ export function buildChannelCategoryReports(
     const highlightedVideos = perVideo.filter((item) =>
       item.events.some((event) => event.displayLevel === 'highlight'),
     ).length
-    const maxRelevance = raw.reduce<ParentRelevance>(
+    const maxDisplayedRelevance = displayed.reduce<ParentRelevance>(
       (max, event) => PARENT_RELEVANCE_RANK[event.parentRelevance] > PARENT_RELEVANCE_RANK[max]
         ? event.parentRelevance
         : max,
       'minimal',
     )
 
-    let level: ReportLevel = displayed.length === 0 ? 'none' : relevanceToReportLevel(maxRelevance)
+    let level: ReportLevel = displayed.length === 0 ? 'none' : relevanceToReportLevel(maxDisplayedRelevance)
     const affectedRatio = analyzedVideos > 0 ? affectedVideos / analyzedVideos : 0
     if (level === 'low' && affectedRatio >= 0.6 && displayed.length >= 3) level = 'moderate'
     else if (level === 'moderate' && affectedRatio >= 0.8 && displayed.length >= 5) level = 'high'
-    if (raw.some((event) => event.parentRelevance === 'high')) level = 'high'
+    if (displayed.some((event) => event.parentRelevance === 'high')) level = 'high'
 
     const subtypeMap = new Map<string, { eventCount: number; videoIds: Set<string> }>()
     for (const item of perVideo) {
@@ -148,9 +149,10 @@ export function buildChannelCategoryReports(
     }
 
     const policy = policyFor(category)
+    const presentationEvents = displayed.length > 0 ? displayed : raw
     return {
       category,
-      label: policy.getLabel(raw),
+      label: policy.getLabel(presentationEvents),
       level,
       analyzedVideos,
       rawAffectedVideos,
