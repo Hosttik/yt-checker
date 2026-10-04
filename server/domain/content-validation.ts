@@ -33,32 +33,47 @@ function looksLikeCurrentReportedThreat(text: string): boolean {
 function normalizeEvent(
   event: ClassifiedContentEvent,
 ): { event: ClassifiedContentEvent; reason?: string } {
-  if (event.category === 'violence'
-    && event.subtype === 'dangerous_situation'
-    && event.assertionStatus === 'hypothetical'
-    && event.details.harmLevel === 'threatened'
-    && event.evidenceStrength === 'explicit'
-    && event.confidence >= 0.9
-    && event.engagementLevel === 'depiction'
-    && looksLikeCurrentReportedThreat(event.text)) {
-    return {
-      event: { ...event, assertionStatus: 'reported' },
-      reason: 'current reported danger normalized from hypothetical to reported',
+  let normalized = event
+  const reasons: string[] = []
+
+  if (normalized.review
+    && (normalized.review.status === 'confirmed' || normalized.review.status === 'corrected')
+    && normalized.review.evidenceSufficiency !== 'sufficient') {
+    normalized = {
+      ...normalized,
+      review: {
+        ...normalized.review,
+        status: 'uncertain',
+      },
     }
+    reasons.push('review downgraded to uncertain because direct evidence was not sufficient')
   }
 
-  if (event.category === 'violence'
-    && event.subtype === 'violent_threat'
-    && event.assertionStatus === 'hypothetical'
-    && event.details.harmLevel === 'threatened'
-    && event.details.actionPurpose === 'threat') {
-    return {
-      event: { ...event, assertionStatus: 'threatened' },
-      reason: 'conditional coercive threat normalized from hypothetical to threatened',
-    }
+  if (normalized.category === 'violence'
+    && normalized.subtype === 'dangerous_situation'
+    && normalized.assertionStatus === 'hypothetical'
+    && normalized.details.harmLevel === 'threatened'
+    && normalized.evidenceStrength === 'explicit'
+    && normalized.confidence >= 0.9
+    && normalized.engagementLevel === 'depiction'
+    && looksLikeCurrentReportedThreat(normalized.text)) {
+    normalized = { ...normalized, assertionStatus: 'reported' }
+    reasons.push('current reported danger normalized from hypothetical to reported')
   }
 
-  return { event }
+  if (normalized.category === 'violence'
+    && normalized.subtype === 'violent_threat'
+    && normalized.assertionStatus === 'hypothetical'
+    && normalized.details.harmLevel === 'threatened'
+    && normalized.details.actionPurpose === 'threat') {
+    normalized = { ...normalized, assertionStatus: 'threatened' }
+    reasons.push('conditional coercive threat normalized from hypothetical to threatened')
+  }
+
+  return {
+    event: normalized,
+    reason: reasons.length > 0 ? reasons.join('; ') : undefined,
+  }
 }
 
 function validationReason(event: ClassifiedContentEvent): string | undefined {
