@@ -19,10 +19,12 @@ const base: Extract<ClassifiedContentEvent, { category: 'violence' }> = {
   engagementLevel: 'depiction',
   portrayal: 'neutral',
   explicitness: 'mild',
+  assertionStatus: 'actual',
   details: {
     harmLevel: 'none',
     targetType: 'object',
     weaponRole: 'possessed',
+    actionPurpose: 'unknown',
   },
 }
 
@@ -49,6 +51,7 @@ describe('content classification normalization', () => {
           harmLevel: 'threatened',
           targetType: 'human_like_character',
           weaponRole: 'none',
+          actionPurpose: 'threat',
         },
       },
     ])

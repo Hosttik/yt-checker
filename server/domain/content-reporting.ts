@@ -5,6 +5,7 @@ import type {
   ContentEvent,
   ParentRelevance,
   PresentationScene,
+  PrevalenceLevel,
   ReportLevel,
   VideoCategoryReport,
 } from '../../shared/types/content'
@@ -47,6 +48,15 @@ function sceneSummary(events: ContentEvent[]): string {
   return reasons.join(' ')
 }
 
+function prevalenceLevel(affectedVideos: number, analyzedVideos: number): PrevalenceLevel {
+  if (affectedVideos === 0 || analyzedVideos === 0) return 'none'
+  const ratio = affectedVideos / analyzedVideos
+  if (ratio <= 0.2) return 'rare'
+  if (ratio <= 0.5) return 'occasional'
+  if (ratio <= 0.8) return 'common'
+  return 'pervasive'
+}
+
 function sceneLabel(events: ContentEvent[]): string {
   if (events.some((event) => event.category === 'violence')
     && events.some((event) => event.category === 'scary_and_disturbing')) {
@@ -67,18 +77,39 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
     groups.set(key, group)
   }
 
-  return [...groups.entries()]
-    .map(([sceneId, sceneEvents]) => ({
-      sceneId,
-      startMs: Math.min(...sceneEvents.map((event) => event.startMs)),
-      endMs: Math.max(...sceneEvents.map((event) => event.endMs)),
-      level: maxReportLevel(sceneEvents.map(eventLevel)),
-      categories: unique(sceneEvents.map((event) => event.category)),
-      label: sceneLabel(sceneEvents),
-      summary: sceneSummary(sceneEvents),
-      events: sceneEvents,
-    }))
-    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+  const MAX_SCENE_GAP_MS = 45_000
+  const scenes: PresentationScene[] = []
+
+  for (const [baseSceneId, groupedEvents] of groups.entries()) {
+    const sorted = [...groupedEvents].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+    const clusters: ContentEvent[][] = []
+
+    for (const event of sorted) {
+      const current = clusters.at(-1)
+      if (!current) {
+        clusters.push([event])
+        continue
+      }
+      const currentEnd = Math.max(...current.map((item) => item.endMs))
+      if (event.startMs <= currentEnd + MAX_SCENE_GAP_MS) current.push(event)
+      else clusters.push([event])
+    }
+
+    clusters.forEach((sceneEvents, index) => {
+      scenes.push({
+        sceneId: clusters.length === 1 ? baseSceneId : `${baseSceneId}:${index + 1}`,
+        startMs: Math.min(...sceneEvents.map((event) => event.startMs)),
+        endMs: Math.max(...sceneEvents.map((event) => event.endMs)),
+        level: maxReportLevel(sceneEvents.map(eventLevel)),
+        categories: unique(sceneEvents.map((event) => event.category)),
+        label: sceneLabel(sceneEvents),
+        summary: sceneSummary(sceneEvents),
+        events: sceneEvents,
+      })
+    })
+  }
+
+  return scenes.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
 }
 
 export function buildVideoCategoryReports(
@@ -132,11 +163,15 @@ export function buildChannelCategoryReports(
       'minimal',
     )
 
-    let level: ReportLevel = displayed.length === 0 ? 'none' : relevanceToReportLevel(maxDisplayedRelevance)
+    const peakConcern: ReportLevel = displayed.length === 0
+      ? 'none'
+      : relevanceToReportLevel(maxDisplayedRelevance)
+    let level: ReportLevel = peakConcern
     const affectedRatio = analyzedVideos > 0 ? affectedVideos / analyzedVideos : 0
     if (level === 'low' && affectedRatio >= 0.6 && displayed.length >= 3) level = 'moderate'
     else if (level === 'moderate' && affectedRatio >= 0.8 && displayed.length >= 5) level = 'high'
     if (displayed.some((event) => event.parentRelevance === 'high')) level = 'high'
+    const prevalence = prevalenceLevel(affectedVideos, analyzedVideos)
 
     const subtypeMap = new Map<string, { eventCount: number; videoIds: Set<string> }>()
     for (const item of perVideo) {
@@ -154,6 +189,9 @@ export function buildChannelCategoryReports(
       category,
       label: policy.getLabel(presentationEvents),
       level,
+      peakConcern,
+      prevalence,
+      affectedRatio,
       analyzedVideos,
       rawAffectedVideos,
       affectedVideos,

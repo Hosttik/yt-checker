@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import type { ChannelCheckResponse, ScanStorageMode } from '../../shared/types/check'
 import type { ContentEvent } from '../../shared/types/content'
+import type { ContentValidationRejection } from '../domain/content-validation'
 import type { TranscriptApiExchange } from './transcript-api'
 import type { OpenAIAnalysisError, OpenAIAnalysisResult } from './openai-analysis'
 
@@ -15,6 +16,7 @@ interface OpenAIDiagnosticEntry {
     classifiedEvents: OpenAIAnalysisResult['classifiedEvents']
     rejectedCandidates?: OpenAIAnalysisResult['rejectedCandidates']
     normalizedContentEvents?: ContentEvent[]
+    validationRejections?: ContentValidationRejection[]
   }
   usage?: OpenAIAnalysisResult['usage']
   error?: { type: string; status?: number; code?: string; message: string }
@@ -45,6 +47,7 @@ export class ScanStorage {
     result: OpenAIAnalysisResult,
     normalizedTranscript: string,
     normalizedContentEvents: ContentEvent[] = [],
+    validationRejections: ContentValidationRejection[] = [],
   ): void {
     if (this.mode !== 'diagnostic') return
     this.openaiEntries.push({
@@ -57,6 +60,7 @@ export class ScanStorage {
         classifiedEvents: result.classifiedEvents,
         rejectedCandidates: result.rejectedCandidates,
         normalizedContentEvents,
+        validationRejections,
       },
       usage: result.usage,
     })
@@ -130,11 +134,12 @@ export class ScanStorage {
               rejectedCandidates: entry.parsedResult.rejectedCandidates ?? [],
               classifiedEvents: entry.parsedResult.classifiedEvents,
               normalizedContentEvents: entry.parsedResult.normalizedContentEvents ?? [],
+              validationRejections: entry.parsedResult.validationRejections ?? [],
             }
           : video
       }),
       diagnostic: {
-        note: 'Diagnostic mode retains transcript, LLM classifications/rejections, normalized ContentEvents, policy decisions and aggregation outputs for traceability.',
+        note: 'Diagnostic storage retains transcript, LLM output, backend semantic-validation rejections, normalized ContentEvents, policy decisions and aggregation outputs for traceability. Storage mode does not change classifier output.',
       },
     }
   }

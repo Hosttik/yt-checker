@@ -20,18 +20,21 @@ const base = {
   engagementLevel: 'depiction',
   portrayal: 'neutral',
   explicitness: 'mild',
+  assertionStatus: 'actual',
 } as const
 
 function violence(
   subtype: Extract<ClassifiedContentEvent, { category: 'violence' }>['subtype'],
-  details: Extract<ClassifiedContentEvent, { category: 'violence' }>['details'],
+  details: Omit<Extract<ClassifiedContentEvent, { category: 'violence' }>['details'], 'actionPurpose'> & {
+    actionPurpose?: Extract<ClassifiedContentEvent, { category: 'violence' }>['details']['actionPurpose']
+  },
   overrides: Partial<Extract<ClassifiedContentEvent, { category: 'violence' }>> = {},
 ): Extract<ClassifiedContentEvent, { category: 'violence' }> {
   return {
     ...base,
     category: 'violence',
     subtype,
-    details,
+    details: { actionPurpose: 'unknown', ...details },
     ...overrides,
   }
 }
@@ -168,6 +171,39 @@ describe('deterministic content policy', () => {
   })
 })
 
+describe('calibration regressions', () => {
+  it('hides rescue-oriented weapon use in normal mode', () => {
+    const event = applyContentPolicy(violence('weapon_use', {
+      harmLevel: 'none', targetType: 'object', weaponRole: 'used', actionPurpose: 'rescue',
+    }), 'event_rescue', 'normal')
+
+    expect(event.parentRelevance).toBe('minimal')
+    expect(event.displayLevel).toBe('hidden')
+  })
+
+  it('does not turn a low-severity degrading statement into high relevance', () => {
+    const event = applyContentPolicy({
+      ...base,
+      category: 'insults',
+      subtype: 'degrading_statement',
+      details: { targetType: 'character' },
+    }, 'event_reproach', 'normal')
+
+    expect(event.parentRelevance).toBe('low')
+    expect(event.displayLevel).toBe('summary')
+  })
+
+  it('keeps moderate game peril moderate unless fear is strong or severity is high', () => {
+    const event = applyContentPolicy(scary('intense_peril', {
+      severity: 'medium',
+      context: 'game',
+      details: { fearIntensity: 'moderate', threatPresent: true, supernatural: true },
+    }), 'event_zombie_fear', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    expect(event.displayLevel).toBe('summary')
+  })
+})
 describe('multi-label presentation and aggregation', () => {
   it('groups violence and scary labels from one scene into one user-visible scene', () => {
     const violenceEvent = applyContentPolicy(violence('dangerous_situation', {

@@ -13,8 +13,8 @@ import type {
 import { CONTENT_CATEGORIES } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
-export const OPENAI_PROMPT_VERSION = '2026-10-04.content-events-v1'
-export const OPENAI_SCHEMA_VERSION = '4'
+export const OPENAI_PROMPT_VERSION = '2026-10-04.content-events-v2'
+export const OPENAI_SCHEMA_VERSION = '5'
 
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
@@ -24,6 +24,7 @@ const portrayalSchema = z.enum([
   'neutral', 'normalized', 'glamorized', 'discouraged', 'educational', 'humorous', 'unknown',
 ]).nullable()
 const explicitnessSchema = z.enum(['none', 'mild', 'explicit', 'graphic']).nullable()
+const assertionStatusSchema = z.enum(['actual', 'threatened', 'hypothetical', 'negated', 'reported'])
 
 const commonEventFields = {
   candidateId: z.string().min(1).max(80),
@@ -35,6 +36,7 @@ const commonEventFields = {
   engagementLevel: engagementSchema,
   portrayal: portrayalSchema,
   explicitness: explicitnessSchema,
+  assertionStatus: assertionStatusSchema,
   startSegment: z.number().int().nonnegative(),
   endSegment: z.number().int().nonnegative(),
   reason: z.string().min(1).max(400),
@@ -91,6 +93,7 @@ const violenceEventSchema = z.object({
       'unknown',
     ]),
     weaponRole: z.enum(['none', 'mentioned', 'possessed', 'threatened_use', 'used']),
+    actionPurpose: z.enum(['attack', 'threat', 'defense', 'rescue', 'utility', 'sport', 'destruction', 'unknown']),
   }),
 })
 
@@ -228,6 +231,7 @@ For every accepted event determine:
 - confidence: 0..1 confidence that this classification is correct, not danger;
 - context: game, fiction, real_world, educational, or unknown;
 - evidenceStrength: explicit, strong_context, or weak_context;
+- assertionStatus: actual if the event/action really occurs in the transcript; threatened for a real threat; hypothetical for a merely imagined/conditional possibility; negated when the surrounding context explicitly denies that the event is happening/will happen; reported when speakers report a past/off-screen event without directly depicting it;
 - engagementLevel, portrayal, explicitness when semantically useful; otherwise null;
 - category-specific details;
 - short factual reason in Russian.
@@ -251,7 +255,7 @@ toilet_humor:
 
 violence:
 - weapon_presence: weapon present/received/held without threatened or actual use.
-- weapon_use: weapon actively used, even if no target is harmed.
+- weapon_use: weapon actively used, even if no target is harmed. Fill actionPurpose: attack, threat, defense, rescue, utility, sport, destruction, or unknown. Cutting a rope to rescue someone is rescue; target practice is sport; using a tool-like weapon on an object can be utility.
 - violent_threat: explicit or strongly implied threat to harm a target.
 - physical_attack: attack on a target.
 - fantasy_combat: combat with fantasy/game creatures or characters.
@@ -259,7 +263,7 @@ violence:
 - life_threatening_situation: a target is intentionally or clearly placed in potentially lethal danger.
 - destruction: destruction of environment/objects; do not call it a physical attack by itself.
 - injury, death, graphic_violence as appropriate.
-Fill harmLevel, targetType and weaponRole independently.
+Fill harmLevel, targetType, weaponRole and actionPurpose independently. A denied fear is not a threat: e.g. "вы хотите скинуть меня в лаву?" followed by "да какую лаву" is negated and must not become a life_threatening_situation. A prison escape, arrest, theft or property crime without physical danger is not violence by itself.
 
 scary_and_disturbing:
 - threatening_character, pursuit, horror_theme, jump_scare, disturbing_theme, death_related_theme, confinement, intense_peril, other.
@@ -411,6 +415,7 @@ function materializeEvents(
         engagementLevel: item.engagementLevel ?? undefined,
         portrayal: item.portrayal ?? undefined,
         explicitness: item.explicitness ?? undefined,
+        assertionStatus: item.assertionStatus,
       }
 
       return {

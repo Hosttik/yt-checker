@@ -21,6 +21,7 @@ const violenceEvent = {
   engagementLevel: 'depiction' as const,
   portrayal: 'neutral' as const,
   explicitness: 'mild' as const,
+  assertionStatus: 'actual' as const,
   startSegment: 0,
   endSegment: 0,
   reason: 'Персонажу подарили меч.',
@@ -28,6 +29,7 @@ const violenceEvent = {
     harmLevel: 'none' as const,
     targetType: 'object' as const,
     weaponRole: 'possessed' as const,
+    actionPurpose: 'unknown' as const,
   },
 }
 
@@ -96,6 +98,8 @@ describe('OpenAI content-event classifier', () => {
     expect(schema).toContain('sceneId')
     expect(schema).toContain('confidence')
     expect(schema).toContain('harmLevel')
+    expect(schema).toContain('assertionStatus')
+    expect(schema).toContain('actionPurpose')
     expect(schema).toContain('fearIntensity')
     expect(schema).toContain('intentionality')
     expect(schema).not.toContain('parentRelevance')
@@ -126,6 +130,7 @@ describe('OpenAI content-event classifier', () => {
         harmLevel: 'none',
         targetType: 'object',
         weaponRole: 'possessed',
+        actionPurpose: 'unknown',
       },
     })])
   })
@@ -152,6 +157,7 @@ describe('OpenAI content-event classifier', () => {
         engagementLevel: 'mention',
         portrayal: 'neutral',
         explicitness: 'none',
+        assertionStatus: 'actual',
         startSegment: 0,
         endSegment: 0,
         reason: 'Упоминание сигареты.',

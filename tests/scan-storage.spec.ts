@@ -24,7 +24,8 @@ const event: ContentEvent = {
   engagementLevel: 'depiction',
   portrayal: 'neutral',
   explicitness: 'mild',
-  details: { harmLevel: 'none', targetType: 'object', weaponRole: 'possessed' },
+  assertionStatus: 'actual',
+  details: { harmLevel: 'none', targetType: 'object', weaponRole: 'possessed', actionPurpose: 'unknown' },
   parentRelevance: 'minimal',
   displayLevel: 'hidden',
 }
@@ -200,6 +201,7 @@ describe('ScanStorage', () => {
         engagementLevel: 'depiction',
         portrayal: 'neutral',
         explicitness: 'mild',
+        assertionStatus: 'actual',
         details: { harmLevel: 'none', targetType: 'object', weaponRole: 'possessed' },
       }],
       rejectedCandidates: [{

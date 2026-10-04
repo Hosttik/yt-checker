@@ -14,6 +14,7 @@ import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../dom
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
 import { normalizeClassifiedEvents } from '../domain/content-normalization'
+import { validateClassifiedEvents } from '../domain/content-validation'
 import {
   buildChannelCategoryReports,
   buildPresentationScenes,
@@ -156,7 +157,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const enabledRuleIds = request.ruleIds as RuleId[]
   const enabledCategories = normalizeRequestedCategories(enabledRuleIds)
   const profile = request.profile as AnalysisProfile
-  const diagnosticAnalysis = profile === 'diagnostic' || storageMode === 'diagnostic'
+  const diagnosticAnalysis = profile === 'diagnostic'
 
   logger.info('scan.started', {
     storageMode,
@@ -304,11 +305,24 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         enabledCategories,
         diagnosticAnalysis,
       )
-      const policyEvents = normalizeClassifiedEvents(
+      const semanticValidation = validateClassifiedEvents(
         analysis.classifiedEvents.filter((classifiedEvent) =>
           enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
         ),
-      ).map((classifiedEvent, eventIndex) => {
+      )
+      for (const rejected of semanticValidation.rejected) {
+        logger.debug('content.validation_rejected', {
+          videoId: video.id,
+          candidateId: rejected.event.sourceCandidateId ?? null,
+          sceneId: rejected.event.sceneId ?? null,
+          category: rejected.event.category,
+          subtype: rejected.event.subtype,
+          assertionStatus: rejected.event.assertionStatus,
+          reason: rejected.reason,
+        })
+      }
+      const policyEvents = normalizeClassifiedEvents(semanticValidation.accepted)
+        .map((classifiedEvent, eventIndex) => {
         const candidateId = classifiedEvent.sourceCandidateId
           ? `${video.id}:${classifiedEvent.sourceCandidateId}`
           : undefined
@@ -368,7 +382,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       }
       contentEventsByVideo.set(video.id, policyEvents)
       rejectedCandidatesByVideo.set(video.id, rejectedCandidates)
-      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents)
+      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents, semanticValidation.rejected)
       addUsage(openaiUsage, analysis.usage)
       const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
@@ -389,6 +403,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         videoId: video.id,
         classifiedEventCount: analysis.classifiedEvents.length,
         normalizedEventCount: policyEvents.length,
+        validationRejectedCount: semanticValidation.rejected.length,
         inputTokens: analysis.usage.inputTokens,
         outputTokens: analysis.usage.outputTokens,
         reasoningTokens: analysis.usage.reasoningTokens,
@@ -537,7 +552,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions. Absence of transcript evidence is not a claim about unseen visuals.',
       'Speech-quality metrics are local heuristics, not safety violations or an overall quality score.',
       storageMode === 'diagnostic'
-        ? 'Diagnostic mode stores normalized transcripts and redacted provider diagnostics on the server.'
+        ? 'Diagnostic storage stores normalized transcripts and provider diagnostics on the server without changing classifier behavior.'
         : 'Normalized and raw transcript text is not persisted in this storage mode.',
     ],
   }

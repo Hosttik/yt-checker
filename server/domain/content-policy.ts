@@ -90,7 +90,10 @@ const profanityPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category
 
 const insultsPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'insults' }>> = {
   getParentRelevance(event) {
-    if (event.subtype === 'degrading_statement' || event.severity === 'high') return 'high'
+    if (event.severity === 'high') return 'high'
+    if (event.subtype === 'degrading_statement') {
+      return event.severity === 'medium' ? 'moderate' : 'low'
+    }
     if (event.subtype === 'direct_insult' && event.severity === 'medium') return 'moderate'
     return event.severity === 'low' ? 'low' : 'moderate'
   },
@@ -114,12 +117,18 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
   getParentRelevance(event) {
     const details = event.details
     if (event.subtype === 'graphic_violence') return 'high'
-    if (event.subtype === 'life_threatening_situation') return 'high'
+    if (event.subtype === 'life_threatening_situation') {
+      return event.assertionStatus === 'reported' && event.severity !== 'high' ? 'moderate' : 'high'
+    }
     if (event.subtype === 'violent_threat') {
       return event.severity === 'high' || details.weaponRole === 'threatened_use' ? 'high' : 'moderate'
     }
     if (event.subtype === 'weapon_presence' && details.harmLevel === 'none') return 'minimal'
-    if (event.subtype === 'weapon_use' && details.harmLevel === 'none') return 'low'
+    if (event.subtype === 'weapon_use') {
+      if (details.actionPurpose === 'rescue' || details.actionPurpose === 'utility') return 'minimal'
+      if (details.actionPurpose === 'sport' && details.harmLevel === 'none') return 'low'
+      if (details.harmLevel === 'none') return 'low'
+    }
     if (event.subtype === 'fantasy_combat') return event.severity === 'high' ? 'high' : 'moderate'
     if (event.subtype === 'dangerous_situation' || event.subtype === 'destruction') {
       return event.severity === 'low' && details.harmLevel === 'none' ? 'low' : 'moderate'
@@ -143,7 +152,11 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
 
 const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'scary_and_disturbing' }>> = {
   getParentRelevance(event) {
-    if (event.details.fearIntensity === 'strong' || event.subtype === 'intense_peril') return 'high'
+    if (event.details.fearIntensity === 'strong') return 'high'
+    if (event.subtype === 'intense_peril') {
+      if (event.severity === 'high' && event.details.threatPresent) return 'high'
+      return event.details.threatPresent ? 'moderate' : 'low'
+    }
     if (event.details.fearIntensity === 'moderate' || event.details.threatPresent) return 'moderate'
     if (event.subtype === 'death_related_theme' && event.severity !== 'low') return 'moderate'
     return 'minimal'
