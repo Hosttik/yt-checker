@@ -13,7 +13,7 @@ TranscriptAPI → normalizeTranscript → один OpenAI Responses API request
 
 Regex/JEV prefilter, отдельные запросы по категориям, второй AI-pass и fallback на другой AI-провайдер не используются. Автоповторы SDK отключены: максимум один HTTP request на transcript, включая временные ошибки.
 
-Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка, и стремится получить до 10 успешно проанализированных видео. Если transcript у выбранного видео неожиданно недоступен, берётся следующий caption-eligible кандидат; платный fallback `/youtube/channel/videos` загружается только когда он реально нужен. При системной ошибке OpenAI scan останавливается, чтобы не расходовать лишние TranscriptAPI credits.
+Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка. Платные transcript credits имеют жёсткий бюджет, равный `videoLimit`: при лимите 10 приложение не может потратить больше 10 credits на `/youtube/transcript`. Если transcript неожиданно недоступен и не был списан credit, берётся следующий caption-eligible кандидат. Любая ошибка OpenAI после платного transcript останавливает scan, чтобы не расходовать дополнительные TranscriptAPI credits. Платный fallback `/youtube/channel/videos` загружается только когда он нужен и добавляет максимум 1 credit в текущей реализации.
 
 ## Настройка
 
@@ -123,7 +123,9 @@ Minimal `result.json` содержит evidence и агрегированный 
 }
 ```
 
-Usage хранится в `video.openaiUsage`, включая полученный usage отказов, неполных и невалидных ответов. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость не хардкодится.
+Usage хранится в `video.openaiUsage`, включая полученный usage отказов, неполных и невалидных ответов. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость OpenAI не хардкодится.
+
+TranscriptAPI credit accounting берётся из официального `X-Credits-Charged` response header; если header отсутствует (например, в mock-тестах), используется документированная стоимость endpoint. Поэтому `creditUsage` в результате должен совпадать с фактическим списанием провайдера.
 
 Unit tests с подставленными ответами проверяют контракт и обработку evidence, но не качество классификации модели. Для оценки false positives нужны реальные вызовы выбранной модели на размеченных примерах.
 
