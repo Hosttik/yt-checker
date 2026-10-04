@@ -117,7 +117,10 @@ export function buildChannelCategoryReports(
     }))
     const raw = perVideo.flatMap((item) => item.events)
     const displayed = raw.filter((event) => event.displayLevel !== 'hidden')
-    const affectedVideos = perVideo.filter((item) => item.events.length > 0).length
+    const rawAffectedVideos = perVideo.filter((item) => item.events.length > 0).length
+    const affectedVideos = perVideo.filter((item) =>
+      item.events.some((event) => event.displayLevel !== 'hidden'),
+    ).length
     const highlightedVideos = perVideo.filter((item) =>
       item.events.some((event) => event.displayLevel === 'highlight'),
     ).length
@@ -150,6 +153,7 @@ export function buildChannelCategoryReports(
       label: policy.getLabel(raw),
       level,
       analyzedVideos,
+      rawAffectedVideos,
       affectedVideos,
       highlightedVideos,
       rawEventCount: raw.length,
