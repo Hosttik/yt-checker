@@ -11,7 +11,7 @@ TranscriptAPI → normalizeTranscript → один OpenAI Responses API request
               → strict Structured Output → evidence/result.json
 ```
 
-Regex/JEV prefilter, отдельные запросы по категориям, второй AI-pass и fallback на другой AI-провайдер не используются. Автоповторы SDK отключены: максимум один HTTP request на transcript, включая временные ошибки.
+Regex/JEV prefilter, отдельные запросы по категориям, второй AI-pass и fallback на другой AI-провайдер не используются. На каждый успешно полученный transcript выполняется ровно один OpenAI request; OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
 
 Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка. Платные transcript credits имеют жёсткий бюджет, равный `videoLimit`: при лимите 10 приложение не может потратить больше 10 credits на `/youtube/transcript`. Если transcript неожиданно недоступен и не был списан credit, берётся следующий caption-eligible кандидат. Любая ошибка OpenAI после платного transcript останавливает scan, чтобы не расходовать дополнительные TranscriptAPI credits. Платный fallback `/youtube/channel/videos` загружается только когда он нужен и добавляет максимум 1 credit в текущей реализации.
 
@@ -21,7 +21,7 @@ Regex/JEV prefilter, отдельные запросы по категориям
 
 ```bash
 cp .env.example .env
-npm install
+npm ci
 npm run dev
 ```
 
@@ -40,39 +40,25 @@ OPENAI_REASONING_EFFORT=low
 
 Статический system prompt экспортируется как `OPENAI_SYSTEM_PROMPT` из `server/services/openai-analysis.ts` и отправляется через `instructions` до динамического transcript. Пользовательский input содержит только язык, выбранные категории и компактный transcript с timestamps. Tools отключены (`tools: []`), `store: false`.
 
-Structured Output строится SDK helper `zodTextFormat` со strict JSON Schema. Production schema:
+Structured Output строится через официальный SDK helper `zodTextFormat` и `responses.parse` со strict JSON Schema. Модель не вычисляет timestamps и не возвращает transcript text. Она выбирает только диапазон нормализованных сегментов:
 
 ```json
 {
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["violations"],
-  "properties": {
-    "violations": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["category", "severity", "context", "type", "startMs", "endMs", "text", "reason"],
-        "properties": {
-          "category": { "enum": ["profanity_and_rude_language", "insults", "toilet_humor", "gambling", "sexual_content", "violence", "alcohol_and_drugs"] },
-          "severity": { "enum": ["low", "medium", "high"] },
-          "context": { "enum": ["realistic", "game", "fantasy", "cartoon", "verbal", "educational", "idiom", "other"] },
-          "type": { "enum": ["profanity", "rude_language", "not_applicable"] },
-          "startMs": { "type": "integer", "minimum": 0 },
-          "endMs": { "type": "integer", "minimum": 0 },
-          "text": { "type": "string" },
-          "reason": { "type": "string" }
-        }
-      }
-    }
-  }
+  "violations": [{
+    "category": "violence",
+    "severity": "low",
+    "context": "fantasy",
+    "type": "not_applicable",
+    "startSegment": 120,
+    "endSegment": 123,
+    "reason": "Фантастические существа атакуют персонажей."
+  }]
 }
 ```
 
 Diagnostic mode добавляет только `rejectedCandidates`. В compact/minimal режиме это поле не запрашивается, чтобы не тратить output tokens.
 
-После Structured Output приложение дополнительно проверяет, что evidence text дословно присутствует в нормализованном transcript и timestamps лежат в его диапазоне. Нарушение этой инварианты становится `provider_error`, а видео не помечается безопасным.
+После ответа OpenAI сервер проверяет segment indexes и сам детерминированно строит `startMs`, `endMs` и точный `text` из нормализованного transcript. Поэтому модель не может ошибиться при переводе `00:08:31.840` в миллисекунды или придумать evidence text.
 
 ## Нормализация
 
@@ -86,9 +72,9 @@ Diagnostic mode добавляет только `rejectedCandidates`. В compact
 Пример:
 
 ```text
-[00:00:00.199] Меня и моего друга заточили внутри
-[00:00:02.760] красного круга посреди луны.
-[00:01:49.960] Лёня дурёня.
+[0|00:00:00.199] Меня и моего друга заточили внутри
+[1|00:00:02.760] красного круга посреди луны.
+[2|00:01:49.960] Лёня дурёня.
 ```
 
 ## Результат и usage
@@ -127,7 +113,7 @@ Usage хранится в `video.openaiUsage`, включая полученны
 
 TranscriptAPI credit accounting берётся из официального `X-Credits-Charged` response header; если header отсутствует (например, в mock-тестах), используется документированная стоимость endpoint. Поэтому `creditUsage` в результате должен совпадать с фактическим списанием провайдера.
 
-Unit tests с подставленными ответами проверяют контракт и обработку evidence, но не качество классификации модели. Для оценки false positives нужны реальные вызовы выбранной модели на размеченных примерах.
+Unit tests с подставленными ответами проверяют контракт, segment-derived evidence, billing/error handling и нормализацию, но не качество классификации модели. Для оценки false positives/false negatives нужны реальные вызовы выбранной модели на размеченном validation dataset.
 
 ## Storage и безопасность
 
