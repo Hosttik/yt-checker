@@ -3,30 +3,43 @@ import type {
   ChannelCheckResponse,
   ContextFilterStatus,
   RuleId,
+  ScanStorageMode,
   TranscriptUnavailableReason,
+  VideoMetadata,
   VideoScanResult,
 } from '../../shared/types/check'
-import { RULE_IDS } from '../../shared/types/check'
+import { RULE_IDS, SCAN_STORAGE_MODES } from '../../shared/types/check'
 import {
   buildDetections,
   buildRuleSummary,
   findTranscriptCandidates,
 } from '../domain/analyze-transcript'
 import { JevContextFilter } from '../services/jev-context-filter'
+import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
   TranscriptApiError,
 } from '../services/transcript-api'
-import { mapWithConcurrency } from '../utils/concurrency'
 
 const checkRequestSchema = z.object({
   channelUrl: z.string().trim().min(1).max(500),
-  videoLimit: z.number().int().min(1).max(15).default(10),
+  videoLimit: z.number().int().min(1).max(10).default(10),
   ruleIds: z.array(z.enum(RULE_IDS)).min(1).default([...RULE_IDS]),
+  storageMode: z.enum(SCAN_STORAGE_MODES).default('minimal'),
 })
 
 function providerReason(error: unknown): TranscriptUnavailableReason {
   return error instanceof TranscriptApiError ? error.reason : 'provider_error'
+}
+
+function mergeMetadata(video: VideoMetadata, info: {
+  metadata?: { title?: string; thumbnailUrl?: string }
+}): VideoMetadata {
+  return {
+    ...video,
+    title: info.metadata?.title ?? video.title,
+    thumbnailUrl: info.metadata?.thumbnailUrl ?? video.thumbnailUrl,
+  }
 }
 
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
@@ -40,7 +53,6 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const config = useRuntimeConfig(event)
-
   if (!config.transcriptApiKey) {
     throw createError({
       statusCode: 503,
@@ -48,9 +60,25 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     })
   }
 
+  const storageMode = parsed.data.storageMode as ScanStorageMode
+  let storage: ScanStorage
+  try {
+    storage = new ScanStorage(
+      storageMode,
+      config.scanStorageDir,
+      Boolean(config.allowDiagnosticStorage),
+    )
+  } catch (error) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: error instanceof Error ? error.message : 'Storage mode is not allowed.',
+    })
+  }
+
   const provider = new TranscriptApiClient(
     config.transcriptApiKey,
     config.transcriptApiBaseUrl,
+    storage.recordProvider,
   )
 
   const contextFilter = config.typesafeApiKey
@@ -59,87 +87,138 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         config.typesafeBaseUrl,
         config.typesafeModel,
         Number(config.typesafeBenignDropProbability),
+        storage.recordJev,
       )
     : null
 
-  let source
-
+  const targetVideos = parsed.data.videoLimit
+  let latest
   try {
-    source = await provider.getRecentVideos(parsed.data.channelUrl, parsed.data.videoLimit)
+    latest = await provider.getLatestVideos(parsed.data.channelUrl)
   } catch {
-    // Do not return or log upstream response bodies: they may contain provider/raw content.
     throw createError({
       statusCode: 502,
       statusMessage: 'Could not load this YouTube channel.',
     })
   }
 
-  const enabledRuleIds = parsed.data.ruleIds as RuleId[]
-  let contextualFallbackVideos = 0
+  const inspectedIds = new Set<string>()
+  const eligibleVideos: VideoMetadata[] = []
 
-  const videoResults = await mapWithConcurrency(
-    source.videos,
-    3,
-    async (video): Promise<VideoScanResult> => {
+  async function inspectVideos(videos: VideoMetadata[]): Promise<void> {
+    for (const video of videos) {
+      if (inspectedIds.has(video.id)) continue
+      inspectedIds.add(video.id)
+
       try {
-        // Raw transcript text exists only in this scope and server-only intermediate candidates.
-        const transcript = await provider.getTranscript(video.id)
-        const candidates = findTranscriptCandidates(transcript.segments, enabledRuleIds)
+        const info = await provider.getVideoInfo(video.id)
+        if (info.available) eligibleVideos.push(mergeMetadata(video, info))
+      } catch {
+        // A failed free preflight is skipped; raw details are available in diagnostic mode.
+      }
+    }
+  }
 
-        let filteredCandidates = candidates
-        let contextFilterStatus: ContextFilterStatus = contextFilter ? 'not_needed' : 'disabled'
+  await inspectVideos(latest.videos)
 
-        if (contextFilter && candidates.length > 0) {
-          try {
-            filteredCandidates = await contextFilter.filter(candidates)
-            contextFilterStatus = 'applied'
-          } catch {
-            // Availability beats silent data loss: if Jev fails, keep conservative regex candidates.
-            // Never log the exception because request state contains raw transcript context.
-            contextualFallbackVideos += 1
-            contextFilterStatus = 'fallback'
-          }
-        }
+  let usedChannelVideosFallback = false
+  if (eligibleVideos.length < targetVideos) {
+    usedChannelVideosFallback = true
+    try {
+      const page = await provider.getChannelVideos(parsed.data.channelUrl)
+      await inspectVideos(page.videos)
+    } catch {
+      // Keep whatever the free latest feed provided. Paid page errors cost no credits.
+    }
+  }
 
-        const detections = buildDetections(filteredCandidates, enabledRuleIds)
+  const enabledRuleIds = parsed.data.ruleIds as RuleId[]
+  const videoResults: VideoScanResult[] = []
+  let contextualFallbackVideos = 0
+  let transcriptAttempts = 0
 
-        return {
-          ...video,
-          status: 'analyzed',
-          transcriptLanguage: transcript.language,
-          contextFilterStatus,
-          detections,
-        }
-      } catch (error) {
-        return {
-          ...video,
-          status: 'transcript_unavailable',
-          unavailableReason: providerReason(error),
-          contextFilterStatus: contextFilter ? 'not_needed' : 'disabled',
-          detections: [],
+  for (const video of eligibleVideos) {
+    if (videoResults.filter((item) => item.status === 'analyzed').length >= targetVideos) break
+    transcriptAttempts += 1
+
+    try {
+      const transcript = await provider.getTranscript(video.id)
+      const candidates = findTranscriptCandidates(transcript.segments, enabledRuleIds)
+
+      let filteredCandidates = candidates
+      let contextFilterStatus: ContextFilterStatus = contextFilter ? 'not_needed' : 'disabled'
+
+      if (contextFilter && candidates.length > 0) {
+        try {
+          filteredCandidates = await contextFilter.filter(candidates)
+          contextFilterStatus = 'applied'
+        } catch {
+          contextualFallbackVideos += 1
+          contextFilterStatus = 'fallback'
         }
       }
-    },
-  )
+
+      videoResults.push({
+        ...video,
+        status: 'analyzed',
+        transcriptLanguage: transcript.language,
+        contextFilterStatus,
+        detections: buildDetections(filteredCandidates, enabledRuleIds),
+      })
+    } catch (error) {
+      videoResults.push({
+        ...video,
+        status: 'transcript_unavailable',
+        unavailableReason: providerReason(error),
+        contextFilterStatus: contextFilter ? 'not_needed' : 'disabled',
+        detections: [],
+      })
+    }
+  }
 
   const analyzedVideos = videoResults.filter((video) => video.status === 'analyzed').length
-
-  return {
-    channel: source.channel,
-    requestedVideos: source.videos.length,
+  const result: ChannelCheckResponse = {
+    scanId: storageMode === 'none' ? undefined : storage.scanId,
+    storageMode,
+    channel: latest.channel,
+    requestedVideos: targetVideos,
     analyzedVideos,
     failedVideos: videoResults.length - analyzedVideos,
     analysisMode: contextFilter ? 'regex_jev' : 'regex_only',
     contextualFallbackVideos,
+    creditUsage: provider.getCreditUsage(),
+    selection: {
+      targetVideos,
+      inspectedVideos: inspectedIds.size,
+      captionEligibleVideos: eligibleVideos.length,
+      transcriptAttempts,
+      usedChannelVideosFallback,
+    },
     summary: buildRuleSummary(videoResults, enabledRuleIds),
     videos: videoResults,
     limitations: [
-      'Current checks analyze speech transcripts, not visual content.',
+      'The scan targets the latest videos with available captions, not simply the latest videos regardless of transcript availability.',
+      usedChannelVideosFallback
+        ? 'The latest 15 videos did not contain enough captioned videos, so one paid /youtube/channel/videos page was used to find replacements.'
+        : 'The scan was satisfied from the free /youtube/channel/latest feed and free /youtube/info preflights.',
       contextFilter
         ? 'Regex finds candidates; Jev removes only high-confidence contextual false positives. Ambiguous cases are kept for parental review.'
         : 'Contextual Jev filtering is disabled because NUXT_TYPESAFE_API_KEY is not configured.',
-      'Filler speech, shouting, editing pace, and speech quality are not scored in this MVP.',
-      'Raw transcript text is not included in results; use the YouTube timeline links to verify context.',
+      storageMode === 'diagnostic'
+        ? 'Diagnostic mode stores raw TranscriptAPI/Jev exchanges on the server for debugging and must not be used as the production default.'
+        : 'Raw transcript text is not persisted in this storage mode.',
+      'Current checks analyze speech transcripts, not visual content.',
     ],
   }
+
+  try {
+    await storage.save(result)
+  } catch {
+    throw createError({
+      statusCode: 500,
+      statusMessage: 'Scan completed but its requested result could not be stored.',
+    })
+  }
+
+  return result
 })
