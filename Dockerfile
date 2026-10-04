@@ -10,11 +10,11 @@ ENV NPM_CONFIG_AUDIT=false \
 
 RUN chown node:node /app
 
-COPY --chown=node:node package.json ./
+COPY --chown=node:node package.json package-lock.json ./
 
 USER node
 
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 FROM deps AS source
 
