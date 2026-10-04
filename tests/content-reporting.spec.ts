@@ -162,4 +162,70 @@ describe('content reporting', () => {
     expect(scene.evidenceRanges).toEqual([{ startMs: 200_000, endMs: 205_000 }])
   })
 
+  it('preserves sparse evidence ranges instead of expanding them to the whole envelope', () => {
+    const event = violenceEvent({
+      startMs: 10_000,
+      endMs: 80_000,
+      evidenceRanges: [
+        { startMs: 10_000, endMs: 12_000 },
+        { startMs: 30_000, endMs: 34_000 },
+        { startMs: 78_000, endMs: 80_000 },
+      ],
+    })
+
+    const scene = buildPresentationScenes([event])[0]!
+    expect(scene.evidenceRanges).toEqual([
+      { startMs: 10_000, endMs: 12_000 },
+      { startMs: 30_000, endMs: 34_000 },
+      { startMs: 78_000, endMs: 80_000 },
+    ])
+  })
+
+  it('splits one oversized model scene when displayed evidence is far apart', () => {
+    const early = violenceEvent({
+      id: 'train-early',
+      sceneId: 'train-thread',
+      startMs: 75_000,
+      endMs: 127_000,
+      evidenceRanges: [{ startMs: 75_000, endMs: 127_000 }],
+      sceneStartMs: 75_000,
+      sceneEndMs: 579_000,
+    })
+    const late = violenceEvent({
+      id: 'train-late',
+      sceneId: 'train-thread',
+      startMs: 290_000,
+      endMs: 306_000,
+      evidenceRanges: [{ startMs: 290_000, endMs: 306_000 }],
+      sceneStartMs: 75_000,
+      sceneEndMs: 579_000,
+    })
+
+    const scenes = buildPresentationScenes([early, late])
+    expect(scenes).toHaveLength(2)
+    expect(scenes[0]?.evidenceRanges).toEqual([{ startMs: 75_000, endMs: 127_000 }])
+    expect(scenes[1]?.evidenceRanges).toEqual([{ startMs: 290_000, endMs: 306_000 }])
+  })
+
+  it('limits a scene summary to the strongest non-duplicate reasons', () => {
+    const first = violenceEvent({
+      id: 'summary-1',
+      parentRelevance: 'high',
+      displayLevel: 'highlight',
+      reason: 'Чёрная дыра затягивает персонажей; они пытаются спастись.',
+    })
+    const second = violenceEvent({
+      id: 'summary-2',
+      reason: 'Чёрная дыра затягивает персонажей и создаёт непосредственную опасность.',
+    })
+    const third = violenceEvent({
+      id: 'summary-3',
+      subtype: 'destruction',
+      reason: 'Чёрная дыра разрушает дома и поглощает деревню.',
+    })
+
+    const scene = buildPresentationScenes([first, second, third])[0]!
+    expect(scene.summary.split('.').filter(Boolean).length).toBeLessThanOrEqual(2)
+  })
+
 })
