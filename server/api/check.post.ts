@@ -80,6 +80,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       statusMessage: parsed.error.issues.map((issue) => issue.message).join('; '),
     })
   }
+  const request = parsed.data
 
   const config = useRuntimeConfig(event)
   const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey
@@ -95,7 +96,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     throw createError({ statusCode: 503, statusMessage: 'OPENAI_REASONING_EFFORT must be low.' })
   }
 
-  const storageMode = parsed.data.storageMode as ScanStorageMode
+  const storageMode = request.storageMode as ScanStorageMode
   let storage: ScanStorage
   try {
     storage = new ScanStorage(
@@ -127,9 +128,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
   )
   const analyzer = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
-  const languagePriority = parsed.data.language
-  const targetVideos = parsed.data.videoLimit
-  const enabledRuleIds = parsed.data.ruleIds as RuleId[]
+  const languagePriority = request.language
+  const targetVideos = request.videoLimit
+  const enabledRuleIds = request.ruleIds as RuleId[]
 
   logger.info('scan.started', {
     storageMode,
@@ -143,7 +144,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   let latest
   try {
-    latest = await transcriptProvider.getLatestVideos(parsed.data.channelUrl)
+    latest = await transcriptProvider.getLatestVideos(request.channelUrl)
   } catch (error) {
     logger.error('channel.latest.failed', { reason: transcriptReason(error) })
     throw createError({ statusCode: 502, statusMessage: 'Could not load this YouTube channel.' })
@@ -172,14 +173,19 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   await inspectVideos(latest.videos, 'latest')
   let usedChannelVideosFallback = false
-  if (eligibleVideos.length < targetVideos) {
+  async function loadFallbackVideos(): Promise<void> {
+    if (usedChannelVideosFallback) return
     usedChannelVideosFallback = true
     try {
-      const page = await transcriptProvider.getChannelVideos(parsed.data.channelUrl)
+      const page = await transcriptProvider.getChannelVideos(request.channelUrl)
       await inspectVideos(page.videos, 'fallback')
     } catch (error) {
       logger.warn('channel.fallback.failed', { reason: transcriptReason(error) })
     }
+  }
+
+  if (eligibleVideos.length < targetVideos) {
+    await loadFallbackVideos()
   }
 
   const videoResults: VideoScanResult[] = []
@@ -191,9 +197,18 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     totalTokens: 0,
   }
   let transcriptAttempts = 0
+  let successfulAnalyses = 0
+  let candidateIndex = 0
+  let stoppedForOpenAIProviderError = false
 
-  const selectedVideos = eligibleVideos.slice(0, targetVideos)
-  for (const video of selectedVideos) {
+  while (successfulAnalyses < targetVideos) {
+    if (candidateIndex >= eligibleVideos.length) {
+      await loadFallbackVideos()
+      if (candidateIndex >= eligibleVideos.length) break
+    }
+
+    const video = eligibleVideos[candidateIndex]!
+    candidateIndex += 1
     transcriptAttempts += 1
     const url = `https://www.youtube.com/watch?v=${video.id}`
     let transcript
@@ -234,6 +249,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         violations: analysis.violations,
         detections,
       })
+      successfulAnalyses += 1
       logger.info('video.analysis.completed', {
         videoId: video.id,
         violationCount: analysis.violations.length,
@@ -274,6 +290,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         status: analysisError.status ?? null,
         code: analysisError.code ?? null,
       })
+
+      // A provider/auth/rate-limit/server failure is likely systemic. Stop here instead of
+      // spending TranscriptAPI credits on more videos that cannot be analyzed anyway.
+      // Schema/evidence failures may be content-specific, so replacement videos are allowed.
+      if (analysisError.type !== 'schema') {
+        stoppedForOpenAIProviderError = true
+        break
+      }
     }
   }
 
@@ -303,6 +327,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     videos: videoResults,
     limitations: [
       'Each transcript is normalized and analyzed by one OpenAI Responses API request.',
+      'Transcript retrieval failures are replaced with the next caption-eligible video when available.',
+      stoppedForOpenAIProviderError
+        ? 'The scan stopped after a non-schema OpenAI provider error to avoid consuming extra TranscriptAPI credits.'
+        : 'OpenAI analysis completed without a scan-stopping provider error.',
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions.',
       storageMode === 'diagnostic'
         ? 'Diagnostic mode stores normalized transcripts and redacted provider diagnostics on the server.'
