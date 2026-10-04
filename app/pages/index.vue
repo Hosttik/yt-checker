@@ -4,7 +4,7 @@ import type {
   ScanStorageMode,
   TranscriptUnavailableReason,
 } from '../../shared/types/check'
-import type { AnalysisProfile, ContentCategory, ReportLevel } from '../../shared/types/content'
+import type { AnalysisProfile, ContentCategory, PrevalenceLevel, ReportLevel } from '../../shared/types/content'
 
 const availableRules: Array<{ id: ContentCategory; label: string }> = [
   { id: 'profanity_and_rude_language', label: 'Мат и грубая лексика' },
@@ -97,6 +97,14 @@ function levelText(level: ReportLevel): string {
   return 'Не обнаружено'
 }
 
+function prevalenceText(level: PrevalenceLevel): string {
+  if (level === 'rare') return 'редко'
+  if (level === 'occasional') return 'иногда'
+  if (level === 'common') return 'часто'
+  if (level === 'pervasive') return 'почти во всех видео'
+  return 'не обнаружено'
+}
+
 function unavailableText(reason?: TranscriptUnavailableReason): string {
   if (reason === 'rate_limited') return 'Провайдер временно ограничил запросы.'
   if (reason === 'billing') return 'Закончились credits у TranscriptAPI.'
@@ -168,10 +176,10 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <select v-model="storageMode">
             <option value="none">Не сохранять</option>
             <option value="minimal">Minimal — только результат</option>
-            <option value="diagnostic">Diagnostic — расширенный debug</option>
+            <option value="diagnostic">Diagnostic — сохранять расширенный debug</option>
           </select>
           <small v-if="storageMode === 'diagnostic'" class="warning">
-            Diagnostic сохраняет transcript и компактные provider diagnostics на сервере.
+            Diagnostic сохраняет transcript и расширенный trace на сервере, но не меняет классификацию.
           </small>
         </label>
 
@@ -245,7 +253,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             Значимых элементов для выбранного профиля не показано
           </small>
           <small v-else>
-            {{ item.affectedVideos }}/{{ item.analyzedVideos }} видео ·
+            Пиковая выраженность: {{ levelText(item.peakConcern) }} ·
+            встречается {{ prevalenceText(item.prevalence) }} ({{ item.affectedVideos }}/{{ item.analyzedVideos }} видео) ·
             {{ item.displayedEventCount }} отображаемых событий
           </small>
           <p>{{ item.summary }}</p>
