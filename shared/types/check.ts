@@ -105,6 +105,7 @@ export interface VideoMetadata {
   title: string
   publishedAt: string
   thumbnailUrl?: string
+  expectedCaptionLanguage?: string
 }
 
 export interface ChannelMetadata { id: string; title: string; thumbnailUrl?: string }
@@ -114,7 +115,6 @@ export type CaptionSource = 'manual' | 'asr' | 'unknown'
 export interface VideoScanResult extends VideoMetadata {
   status: 'analyzed' | 'transcript_unavailable' | 'provider_error'
   url: string
-  expectedCaptionLanguage?: string
   transcriptLanguage?: string
   captionSource?: CaptionSource
   captionSourceMismatch?: boolean
