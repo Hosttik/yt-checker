@@ -13,6 +13,7 @@ import type { AnalysisProfile, ContentEvent, RejectedContentCandidate } from '..
 import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../domain/analyze-transcript'
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
+import { normalizeClassifiedEvents } from '../domain/content-normalization'
 import {
   buildChannelCategoryReports,
   buildPresentationScenes,
@@ -302,11 +303,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         enabledCategories,
         diagnosticAnalysis,
       )
-      const policyEvents = analysis.classifiedEvents
-        .filter((classifiedEvent) =>
+      const policyEvents = normalizeClassifiedEvents(
+        analysis.classifiedEvents.filter((classifiedEvent) =>
           enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
-        )
-        .map((classifiedEvent, eventIndex) => {
+        ),
+      ).map((classifiedEvent, eventIndex) => {
         const candidateId = classifiedEvent.sourceCandidateId
           ? `${video.id}:${classifiedEvent.sourceCandidateId}`
           : undefined
@@ -326,7 +327,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           startMs: classifiedEvent.startMs,
           endMs: classifiedEvent.endMs,
         })
-        const eventId = `${video.id}:event:${eventIndex}`
+        const eventId = `${video.id}:${classifiedEvent.sourceCandidateId ?? `event_${eventIndex}`}:${classifiedEvent.category}:${classifiedEvent.subtype}`
         const contentEvent = applyContentPolicy(normalizedEvent, eventId, profile)
         logger.debug('content.classified', {
           videoId: video.id,
@@ -386,6 +387,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       logger.info('video.analysis.completed', {
         videoId: video.id,
         classifiedEventCount: analysis.classifiedEvents.length,
+        normalizedEventCount: policyEvents.length,
         inputTokens: analysis.usage.inputTokens,
         outputTokens: analysis.usage.outputTokens,
         reasoningTokens: analysis.usage.reasoningTokens,
