@@ -10,6 +10,7 @@ import type {
 } from '../../shared/types/check'
 import { RULE_IDS, SCAN_STORAGE_MODES } from '../../shared/types/check'
 import { buildDetections, buildRuleSummary } from '../domain/analyze-transcript'
+import { captionLanguageMismatch, captionSource } from '../domain/caption-language'
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
 import {
@@ -60,16 +61,6 @@ function mergeMetadata(video: VideoMetadata, info: {
     thumbnailUrl: info.metadata?.thumbnailUrl ?? video.thumbnailUrl,
     expectedCaptionLanguage: info.matchedLanguage,
   }
-}
-
-function captionSource(language?: string): 'manual' | 'asr' | 'unknown' {
-  if (!language) return 'unknown'
-  return language.toLowerCase().startsWith('asr-') || language.toLowerCase() === 'asr' ? 'asr' : 'manual'
-}
-
-function captionLanguageMismatch(expected?: string, resolved?: string): boolean {
-  if (!expected || !resolved) return false
-  return expected.toLowerCase().replace(/_/g, '-') !== resolved.toLowerCase().replace(/_/g, '-')
 }
 
 function providerLogFields(exchange: TranscriptApiExchange): Record<string, unknown> {
