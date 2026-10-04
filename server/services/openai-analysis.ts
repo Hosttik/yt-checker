@@ -394,6 +394,9 @@ function materializeEvents(
   return items
     .filter((item) => enabledCategories.includes(item.category))
     .map((item) => {
+      if (item.category === 'substances' && item.subtype !== item.details.substance) {
+        throw new OpenAIAnalysisError('schema', 'OpenAI returned inconsistent substance subtype/details.')
+      }
       const range = materializeRange(item.startSegment, item.endSegment, transcript)
       const common = {
         sourceCandidateId: item.candidateId,
