@@ -14,20 +14,17 @@ const insult: ViolationEvidence = {
 }
 
 describe('OpenAI-derived detections', () => {
-  it('keeps complete evidence in the public result', () => {
+  it('keeps evidence canonical in violations instead of duplicating it in detections', () => {
     expect(buildDetections([insult], ['insults'])).toEqual([{
       ruleId: 'insults',
       label: 'Оскорбления',
       severity: 'low',
       count: 1,
-      confirmedCount: 1,
-      reviewCount: 0,
       ranges: [{ startMs: 109_000, endMs: 111_000 }],
-      evidence: [insult],
     }])
   })
 
-  it('aggregates the highest severity and affected video count', () => {
+  it('aggregates violation count, affected videos and highest severity', () => {
     const videos: VideoScanResult[] = [{
       id: 'video-one11', title: 'One', publishedAt: '',
       url: 'https://www.youtube.com/watch?v=video-one11',
@@ -38,10 +35,18 @@ describe('OpenAI-derived detections', () => {
       ruleId: 'insults',
       label: 'Оскорбления',
       severity: 'low',
-      hitCount: 1,
-      confirmedCount: 1,
-      reviewCount: 0,
-      videoCount: 1,
+      violationCount: 1,
+      affectedVideoCount: 1,
+    }])
+  })
+
+  it('uses null severity when a rule has zero violations', () => {
+    expect(buildRuleSummary([], ['gambling'])).toEqual([{
+      ruleId: 'gambling',
+      label: 'Азартные игры и ставки',
+      severity: null,
+      violationCount: 0,
+      affectedVideoCount: 0,
     }])
   })
 })

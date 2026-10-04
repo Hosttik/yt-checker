@@ -17,7 +17,7 @@ describe('normalizeTranscript', () => {
       { text: 'мат', startMs: 1000, endMs: 3000 },
     ]).sourceText).toBe('автомат мат')
   })
-  it('formats timestamps, removes music/empty captions, and deduplicates overlaps', () => {
+  it('uses compact segment ids, removes music/empty captions, and deduplicates overlaps', () => {
     const result = normalizeTranscript([
       { text: '  [музыка] ', startMs: 0, endMs: 100 },
       { text: 'Меня и моего друга заточили внутри', startMs: 199, endMs: 2_700 },
@@ -27,9 +27,9 @@ describe('normalizeTranscript', () => {
       { text: ' ', startMs: 7_000, endMs: 8_000 },
     ])
     expect(result.text).toBe([
-      '[0|00:00:00.199] Меня и моего друга заточили внутри',
-      '[1|00:00:02.000] красного круга',
-      '[2|00:00:03.500] посреди луны.',
+      '[0] Меня и моего друга заточили внутри',
+      '[1] красного круга',
+      '[2] посреди луны.',
     ].join('\n'))
     expect(result.sourceText).toBe('Меня и моего друга заточили внутри красного круга посреди луны.')
   })

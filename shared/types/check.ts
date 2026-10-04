@@ -6,6 +6,9 @@ export const RULE_IDS = [
   'sexual_content',
   'violence',
   'alcohol_and_drugs',
+  'scary_and_disturbing',
+  'tobacco_and_nicotine',
+  'self_harm',
 ] as const
 
 export const SCAN_STORAGE_MODES = ['none', 'minimal', 'diagnostic'] as const
@@ -45,6 +48,8 @@ export interface OpenAIUsage {
   inputTokens: number
   outputTokens: number
   reasoningTokens: number
+  cachedTokens: number
+  cacheWriteTokens: number
   totalTokens: number
 }
 
@@ -59,10 +64,40 @@ export interface RuleDetection {
   label: string
   severity: RuleSeverity
   count: number
-  confirmedCount: number
-  reviewCount: number
   ranges: TimelineRange[]
-  evidence: ViolationEvidence[]
+}
+
+export interface SpeechQualityMarkerCount {
+  marker: string
+  count: number
+}
+
+export interface SpeechQualityExample {
+  marker: string
+  startMs: number
+  endMs: number
+  text: string
+}
+
+export interface SpeechQualityMetrics {
+  method: 'heuristic_ru_v1' | 'repetition_only_v1'
+  language: string
+  totalWords: number
+  fillerWordCount: number
+  fillersPer1000Words: number
+  repeatedWordCount: number
+  repeatedWordsPer1000Words: number
+  fillerBreakdown: SpeechQualityMarkerCount[]
+  examples: SpeechQualityExample[]
+}
+
+export interface ChannelSpeechQualitySummary {
+  totalWords: number
+  fillerWordCount: number
+  fillersPer1000Words: number
+  repeatedWordCount: number
+  repeatedWordsPer1000Words: number
+  fillerBreakdown: SpeechQualityMarkerCount[]
 }
 
 export interface VideoMetadata {
@@ -70,17 +105,23 @@ export interface VideoMetadata {
   title: string
   publishedAt: string
   thumbnailUrl?: string
+  expectedCaptionLanguage?: string
 }
 
 export interface ChannelMetadata { id: string; title: string; thumbnailUrl?: string }
+
+export type CaptionSource = 'manual' | 'asr' | 'unknown'
 
 export interface VideoScanResult extends VideoMetadata {
   status: 'analyzed' | 'transcript_unavailable' | 'provider_error'
   url: string
   transcriptLanguage?: string
+  captionSource?: CaptionSource
+  captionSourceMismatch?: boolean
   unavailableReason?: TranscriptUnavailableReason
   analysisError?: { type: AnalysisErrorType; status?: number; code?: string; message: string }
   openaiUsage?: OpenAIUsage
+  speechQuality?: SpeechQualityMetrics
   violations: ViolationEvidence[]
   detections: RuleDetection[]
 }
@@ -88,11 +129,9 @@ export interface VideoScanResult extends VideoMetadata {
 export interface RuleSummary {
   ruleId: RuleId
   label: string
-  severity: RuleSeverity
-  hitCount: number
-  confirmedCount: number
-  reviewCount: number
-  videoCount: number
+  severity: RuleSeverity | null
+  violationCount: number
+  affectedVideoCount: number
 }
 
 export interface ScanCreditUsage {
@@ -121,9 +160,9 @@ export interface ChannelCheckResponse {
   analyzedVideos: number
   failedVideos: number
   analysisMode: 'openai'
-  contextualFallbackVideos: number
   creditUsage: ScanCreditUsage
   openaiUsage: AggregateOpenAIUsage
+  speechQuality: ChannelSpeechQualitySummary
   selection: ScanSelection
   summary: RuleSummary[]
   videos: VideoScanResult[]

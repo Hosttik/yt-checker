@@ -21,10 +21,7 @@ export function buildDetections(
       label: RULE_LABELS[ruleId],
       severity,
       count: evidence.length,
-      confirmedCount: evidence.length,
-      reviewCount: 0,
       ranges: evidence.map(({ startMs, endMs }) => ({ startMs, endMs })),
-      evidence,
     }]
   })
 }
@@ -36,17 +33,18 @@ export function buildRuleSummary(
   return enabledRuleIds.map((ruleId) => {
     const detections = videos.flatMap((video) => video.detections)
       .filter((detection) => detection.ruleId === ruleId)
+    const severities = detections.map((item) => item.severity)
     return {
       ruleId,
       label: RULE_LABELS[ruleId],
-      severity: detections.map((item) => item.severity).reduce<RuleSeverity>(
-        (highest, severity) => severityRank[severity] > severityRank[highest] ? severity : highest,
-        'low',
-      ),
-      hitCount: detections.reduce((sum, item) => sum + item.count, 0),
-      confirmedCount: detections.reduce((sum, item) => sum + item.confirmedCount, 0),
-      reviewCount: 0,
-      videoCount: detections.length,
+      severity: severities.length > 0
+        ? severities.reduce<RuleSeverity>(
+          (highest, severity) => severityRank[severity] > severityRank[highest] ? severity : highest,
+          severities[0]!,
+        )
+        : null,
+      violationCount: detections.reduce((sum, item) => sum + item.count, 0),
+      affectedVideoCount: detections.length,
     }
   })
 }
