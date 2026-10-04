@@ -1,5 +1,123 @@
 {
   "annotationSource": "automatic_proposal",
-  "note": "Automatically proposed cases must be reviewed and moved into parental-quality-manual.json before they count toward quality metrics.",
-  "cases": []
+  "note": "Scene-level calibration proposals extracted from saved scan outputs. They are provisional and do not affect quality metrics until explicitly confirmed by a human.",
+  "cases": [
+    {
+      "id": "directed-armed-confrontation",
+      "sourceVideo": "_xR7fZ24O4g",
+      "sceneId": "_xR7fZ24O4g:scene_258_1",
+      "proposedPlacement": "main",
+      "proposedLevel": "high",
+      "why": "A specific character is cornered and directly threatened with carried objects; stronger than an ordinary game chase.",
+      "calibrationTarget": "directed_threat_positive_control"
+    },
+    {
+      "id": "brief-rebuke-with-dangerous-object-mention",
+      "sourceVideo": "wiuuBaYC8B8",
+      "sceneId": "wiuuBaYC8B8:scene_31_1",
+      "proposedPlacement": "details",
+      "proposedLevel": "low",
+      "why": "A short insulting rebuke; the dangerous object is rejected rather than used against anyone.",
+      "calibrationTarget": "mild_insult"
+    },
+    {
+      "id": "black-hole-active-peril",
+      "sourceVideo": "wiuuBaYC8B8",
+      "sceneId": "wiuuBaYC8B8:scene_187_1",
+      "proposedPlacement": "main",
+      "proposedLevel": "high",
+      "why": "Characters are actively pulled by a sustained game hazard and try to hold on or escape.",
+      "calibrationTarget": "sustained_game_peril"
+    },
+    {
+      "id": "black-hole-continuation",
+      "sourceVideo": "wiuuBaYC8B8",
+      "sceneId": "wiuuBaYC8B8:scene_204_1",
+      "proposedPlacement": "hidden",
+      "proposedLevel": "moderate",
+      "why": "Continuation of the same hazard should not become a second repetitive parent card.",
+      "calibrationTarget": "scene_deduplication"
+    },
+    {
+      "id": "single-crazy-insult",
+      "sourceVideo": "wiuuBaYC8B8",
+      "sceneId": "wiuuBaYC8B8:scene_240_1",
+      "proposedPlacement": "details",
+      "proposedLevel": "low",
+      "why": "One mild insult without sustained humiliation.",
+      "calibrationTarget": "mild_insult"
+    },
+    {
+      "id": "single-dumb-insult",
+      "sourceVideo": "wiuuBaYC8B8",
+      "sceneId": "wiuuBaYC8B8:scene_314_1",
+      "proposedPlacement": "details",
+      "proposedLevel": "low",
+      "why": "One dismissive word, useful only as a light detail.",
+      "calibrationTarget": "mild_insult"
+    },
+    {
+      "id": "tool-used-for-rescue",
+      "sourceVideo": "kQCshtG4DOw",
+      "sceneId": "kQCshtG4DOw:scene_75_1",
+      "proposedPlacement": "hidden",
+      "proposedLevel": "low",
+      "why": "The object is used as a rescue tool rather than against a character.",
+      "calibrationTarget": "utility_negative_control"
+    },
+    {
+      "id": "brief-serious-verbal-threat",
+      "sourceVideo": "kQCshtG4DOw",
+      "sceneId": "kQCshtG4DOw:scene_230_1",
+      "proposedPlacement": "main",
+      "proposedLevel": "moderate",
+      "why": "The threat is parent-relevant but is quickly stopped and is weaker than immediate physical peril.",
+      "calibrationTarget": "high_vs_moderate"
+    },
+    {
+      "id": "railway-near-miss-rescue",
+      "sourceVideo": "kQCshtG4DOw",
+      "sceneId": "kQCshtG4DOw:scene_259_1",
+      "proposedPlacement": "main",
+      "proposedLevel": "high",
+      "why": "Characters are freed immediately before the fast-moving hazard passes; the safe resolution is mitigating context, not a reason to hide the peril.",
+      "calibrationTarget": "immediate_peril_with_mitigation"
+    },
+    {
+      "id": "zombies-around-shelter",
+      "sourceVideo": "7_bCIsH-XEc",
+      "sceneId": "7_bCIsH-XEc:scene_80_1",
+      "proposedPlacement": "main",
+      "proposedLevel": "moderate",
+      "why": "Active game danger and fear deserve the main screen, but without confirmed severe harm high priority is excessive.",
+      "calibrationTarget": "monster_game_threat"
+    },
+    {
+      "id": "ambiguous-zombie-encounter",
+      "sourceVideo": "7_bCIsH-XEc",
+      "sceneId": "7_bCIsH-XEc:scene_242_1",
+      "proposedPlacement": "details",
+      "proposedLevel": "low",
+      "why": "Fear is clear but the transcript does not establish what physical action actually occurred.",
+      "calibrationTarget": "evidence_sufficiency"
+    },
+    {
+      "id": "humorous-supernatural-fright",
+      "sourceVideo": "MmdIhSW5B7Q",
+      "sceneId": "MmdIhSW5B7Q:scene_238_1",
+      "proposedPlacement": "details",
+      "proposedLevel": "low",
+      "why": "Brief game fright is framed humorously and no physical harm is described.",
+      "calibrationTarget": "brief_fright"
+    },
+    {
+      "id": "property-only-destruction-threat",
+      "sourceVideo": "MmdIhSW5B7Q",
+      "sceneId": "MmdIhSW5B7Q:scene_38_1",
+      "proposedPlacement": "details",
+      "proposedLevel": "low",
+      "why": "The threatened outcome concerns the game environment rather than harm to a character.",
+      "calibrationTarget": "property_only_threat"
+    }
+  ]
 }
