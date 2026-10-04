@@ -4,21 +4,22 @@
 
 ## Pipeline
 
-Для каждого видео выполняется один OpenAI request, но классификация больше не равна пользовательскому отчёту:
+Классификация события и решение «полезно ли это родителю» разделены:
 
 ```text
 TranscriptAPI
   → normalizeTranscript
-  → OpenAI candidate detection + contextual classification
-  → ClassifiedContentEvent
-  → deterministic category policy
+  → OpenAI detector: factual candidates on the full transcript
+  → batched OpenAI reviewer over the same original full transcript
+  → semantic validation
+  → deterministic parent policy
   → ContentEvent
-  → video aggregation
+  → scene aggregation (main / details)
   → channel aggregation
   → presentation
 ```
 
-Regex/JEV prefilter, отдельные запросы по категориям, второй AI-pass и fallback на другой AI-провайдер не используются. На каждый успешно полученный transcript выполняется ровно один OpenAI request; OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
+Detector выполняет один full-transcript request. Второй request выполняется только если detector нашёл кандидаты; reviewer проверяет их одним батчем, а не отдельным запросом на каждую находку. При сбое reviewer первый проход сохраняется как неперепроверенный и UI явно показывает неполный review. После первой review-ошибки оставшиеся review-запросы в текущем scan отключаются. OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
 
 Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка. Платные transcript credits имеют жёсткий бюджет, равный `videoLimit`: при лимите 10 приложение не может потратить больше 10 credits на `/youtube/transcript`. Если transcript неожиданно недоступен и не был списан credit, берётся следующий caption-eligible кандидат. Любая ошибка OpenAI после платного transcript останавливает scan, чтобы не расходовать дополнительные TranscriptAPI credits. Платный fallback `/youtube/channel/videos` загружается только когда он нужен и добавляет максимум 1 credit в текущей реализации.
 
@@ -39,6 +40,7 @@ npm run dev
 NUXT_TRANSCRIPT_API_KEY=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-6-luna
+OPENAI_REVIEW_MODEL=gpt-6-luna
 OPENAI_REASONING_EFFORT=low
 ```
 
@@ -48,7 +50,9 @@ OPENAI_REASONING_EFFORT=low
 
 Статический prompt экспортируется как `OPENAI_SYSTEM_PROMPT` из `server/services/openai-analysis.ts` и отправляется отдельным developer message с explicit prompt-cache breakpoint. Динамический transcript идёт отдельным user message. Model input содержит только segment id (`[123] текст`) без timestamps; миллисекунды остаются локально в `transcript.segments`. Tools отключены (`tools: []`), `store: false`.
 
-Structured Output строится через официальный SDK helper `zodTextFormat` и `responses.parse` со strict JSON Schema. Модель описывает фактическую семантику: category/subtype, severity, confidence, context, evidence strength, generic semantic dimensions и category-specific details. Она не получает полей `parentRelevance` или `displayLevel`.
+Первый Structured Output строится через официальный SDK helper `zodTextFormat` и `responses.parse` со strict JSON Schema. Detector описывает фактическую семантику: category/subtype, severity, confidence, context, evidence strength, generic semantic dimensions и category-specific details. Он не получает полей `parentRelevance` или `displayLevel`.
+
+Если есть кандидаты, reviewer получает полный исходный transcript и компактный список first-pass гипотез. Он возвращает `confirmed/corrected/rejected/uncertain`, заново выбирает прямые evidence-сегменты, отдельно указывает context-сегменты и оценивает родительскую полезность. Для сцены учитываются направление агрессии, намерение/принуждение, последствия, выраженный страх/страдание, длительность, повторяемость и подтверждённое отношение повествования. Reviewer не имеет права выводить визуальные/звуковые факты из отсутствующих данных.
 
 ```json
 {
@@ -78,13 +82,13 @@ Structured Output строится через официальный SDK helper 
 
 Diagnostic analysis добавляет `rejectedCandidates`. Он включается только профилем `diagnostic`. Режим хранения не меняет запрос к модели: `storageMode=diagnostic` сохраняет расширенный trace, но rejected candidates доступны только для диагностического профиля. Для accepted events модель отдельно возвращает до 6 коротких `evidenceSegments`, которые непосредственно доказывают классификацию, и более широкий `sceneStartSegment`/`sceneEndSegment` для сюжетного контекста.
 
-После ответа OpenAI сервер проверяет segment indexes и сам детерминированно строит точный `text` и `evidenceRanges[]`: только соседние выбранные segment indexes объединяются в один диапазон. Legacy `startMs/endMs` остаются общей оболочкой для совместимости, но UI использует именно `evidenceRanges[]`. Широкий scene range хранится отдельно. Presentation разрезает ошибочно растянутый `sceneId` по большим промежуткам между фактическими evidence и дополнительно объединяет действительно перекрывающиеся сцены с разными `sceneId`.
+После каждого ответа OpenAI сервер проверяет segment indexes и сам детерминированно строит точный `text` и `evidenceRanges[]`: только соседние выбранные direct-evidence segment indexes объединяются в один диапазон. Reviewer context сохраняется отдельно в `review.contextRanges` и не используется как доказательство фактических утверждений. Legacy `startMs/endMs` остаются общей оболочкой для совместимости, но UI использует именно `evidenceRanges[]`. Широкий scene range хранится отдельно. Presentation разрезает ошибочно растянутый `sceneId` по большим промежуткам между фактическими evidence и дополнительно объединяет действительно перекрывающиеся сцены с разными `sceneId`.
 
 ## ContentEvent architecture
 
 Подробная схема ответственности, policy registry, analysis profiles, multi-label scenes, legacy migration и regression examples описаны в [docs/content-event-architecture.md](docs/content-event-architecture.md).
 
-Ключевой принцип: `severity`, `confidence`, `parentRelevance` и prevalence — разные показатели. LLM определяет первые фактические свойства события; `parentRelevance` и `displayLevel` рассчитываются backend-кодом детерминированно.
+Ключевой принцип: `severity`, `confidence`, `parentRelevance`, частота и evidence sufficiency — разные показатели. Detector определяет фактические свойства события; reviewer независимо проверяет смысл и рекомендует родительскую значимость; backend policy окончательно рассчитывает `parentRelevance` и `displayLevel`. Неопределённый review не может понизить серьёзную first-pass находку.
 
 ## Нормализация
 
@@ -146,7 +150,7 @@ Canonical результат теперь — `contentEvents`, `videoReports` и
 }
 ```
 
-Usage хранится в `video.openaiUsage`, включая `cachedTokens` и `cacheWriteTokens`. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость OpenAI не хардкодится. Для GPT-5.6+ используется explicit-only prompt caching: стабильный developer prompt кэшируется, изменяющийся transcript остаётся после breakpoint.
+Usage хранится в `video.openaiUsage`, включая detector+reviewer, а `openaiStages.detection` и `openaiStages.review` позволяют измерять их отдельно. Поля включают `cachedTokens` и `cacheWriteTokens`. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость OpenAI не хардкодится. Для GPT-5.6+ используется explicit-only prompt caching: стабильный developer prompt кэшируется, изменяющийся transcript остаётся после breakpoint.
 
 TranscriptAPI credit accounting берётся из официального `X-Credits-Charged` response header; если header отсутствует (например, в mock-тестах), используется документированная стоимость endpoint. Поэтому `creditUsage` в результате должен совпадать с фактическим списанием провайдера.
 
@@ -156,7 +160,7 @@ Unit tests с подставленными ответами проверяют �
 
 - `none`: ничего не записывает.
 - `minimal`: только производный `result.json`; точный transcript/evidence text и diagnostic candidate trace не сохраняются.
-- `diagnostic`: дополнительно `transcriptapi-exchanges.json` и `openai-analysis.json` с нормализованным transcript, компактными provider metadata (`requestId`, latency, cache diagnostics/usage), parsed result или безопасной ошибкой. Дубли raw JSON/text, повторяющиеся prompt/schema и encrypted reasoning blobs не сохраняются.
+- `diagnostic`: дополнительно `transcriptapi-exchanges.json` и `openai-analysis.json` с нормализованным transcript, first-pass output, review decisions/failures, версиями prompt/schema, validation adjustments/rejections и компактными provider metadata (`requestId`, latency, cache diagnostics/usage). Дубли raw JSON/text, повторяющиеся prompt/schema и encrypted reasoning blobs не сохраняются.
 
 Diagnostic требует `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`. API-ключ OpenAI никогда не попадает в request metadata, логи или файлы.
 
@@ -177,10 +181,31 @@ npm run build
 ```
 
 
-## Проверка качества классификатора
+## Проверка качества
 
-`npm run eval:classifier` запускает шесть размеченных случаев из скана 2026-10-04 через реальный OpenAI API: обычное восклицание, самокритика, условная угроза, ошибочное предположение о смерти, строительный демонтаж и прямое оскорбление. Нужен `OPENAI_API_KEY` (или `NUXT_OPENAI_API_KEY`); `.env` загружается локально. Это платные запросы. Обычный `npm test` пропускает эти проверки и работает без сети.
+Короткий `npm run eval:classifier` остаётся дешёвым регрессионным smoke-test для отдельных semantic edge cases. Он не считается оценкой общей точности.
 
-Корпус `evals/content-cases.json` содержит исходные фрагменты и ожидаемые/запрещённые находки. Проверяются обнаружение обязательных событий моделью и итог после серверной политики. Это небольшой регрессионный набор, а не измерение общей точности: для такой оценки нужен отдельный размеченный корпус и полные транскрипты.
+Основной eval использует сохранённые diagnostic scans и **не вызывает TranscriptAPI**:
 
-Схема 8 добавляет точное `details.expression` для лексики и `details.themePresent` для пугающих тем. Сервер проверяет наличие выражения в evidence, отсеивает нейтральные религиозные восклицания и самокритику. Отрицание фактической смерти не отменяет явно установленную тему похорон. Строительный демонтаж с `actionPurpose=utility` и низкой интенсивностью скрывается в normal-профиле. Проверка индексов также требует, чтобы evidence находились внутри сцены; смысловая полнота объяснения пока обеспечивается инструкцией модели, а не независимым верификатором.
+```bash
+npm run eval:parental-quality
+```
+
+По умолчанию читаются:
+
+- `scan-results/2026-10-04T17-30-28-729Z_c382e104-a47f-48cf-b223-75b76b2faf86/`
+- `scan-results/2026-10-04T17-59-39-308Z_6b4f06d4-0322-43e3-8eb0-6c0ce24185c8/`
+
+Команда платная только по OpenAI: она повторно анализирует сохранённые **полные** нормализованные transcripts текущим detector, затем тем же входом запускает reviewer и сравнивает saved baseline, current one-pass и current two-pass. Исходные scan-файлы не изменяются; отчёт пишется в `benchmark-results/parental-quality/`.
+
+Разметка `evals/parental-quality-manual.json` — ручной инженерный gold set с `tuning` и `holdout` случаями. `evals/parental-quality-auto-proposals.json` отделён и не участвует в метриках, пока человек не перенесёт подтверждённый кейс в manual set. Метрики включают долю полезных предупреждений среди показанных на размеченной части, пропуски main-сцен, низкоценные карточки, machine-checkable запрещённые интерпретации, полноту первого прохода, requests/tokens/latency. Малый набор не называется доказательством общей точности.
+
+Для повторяемости можно явно сделать два полных прогона:
+
+```bash
+npm run eval:parental-quality:stability
+```
+
+Ограничения задаются `QUALITY_MAX_VIDEOS` (1–20) и `QUALITY_RUNS` (1–3). Другие сохранённые каталоги передаются через comma-separated `QUALITY_SCAN_DIRS`. Более дорогую reviewer-модель можно проверять через `OPENAI_REVIEW_MODEL`; production default остаётся равным `OPENAI_MODEL`, пока eval не покажет измеримое улучшение.
+
+Обычные `npm test`, `npm run typecheck` и `npm run build` не требуют сети и не запускают платные evals.
