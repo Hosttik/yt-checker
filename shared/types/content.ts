@@ -182,6 +182,13 @@ export type ContentEvent = {
   }
 }[ContentCategory]
 
+export type ClassifiedContentEvent = {
+  [C in ContentCategory]: Omit<
+    Extract<ContentEvent, { category: C }>,
+    'id' | 'parentRelevance' | 'displayLevel'
+  >
+}[ContentCategory]
+
 export interface ContentCandidate {
   candidateId: string
   sceneId?: string
