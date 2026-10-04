@@ -9,7 +9,11 @@ import type {
   VideoCategoryReport,
 } from '../../shared/types/content'
 import { CONTENT_CATEGORY_LABELS } from './content-categories'
-import { PARENT_RELEVANCE_RANK } from './content-policy'
+import {
+  categoryPolicies,
+  PARENT_RELEVANCE_RANK,
+  type CategoryPolicy,
+} from './content-policy'
 
 const reportRank: Record<ReportLevel, number> = { none: 0, low: 1, moderate: 2, high: 3 }
 
@@ -34,41 +38,8 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)]
 }
 
-function dynamicLabel(category: ContentCategory, events: ContentEvent[]): string {
-  if (category === 'violence' && events.length > 0) {
-    const fictional = events.every((event) => event.context === 'game' || event.context === 'fiction')
-    if (fictional) return 'Игровое насилие и опасные сцены'
-  }
-  if (category === 'substances') {
-    const subtypes = new Set(events.map((event) => event.subtype))
-    if (subtypes.size === 1 && subtypes.has('nicotine')) return 'Табак и никотин'
-    if (subtypes.size === 1 && subtypes.has('alcohol')) return 'Алкоголь'
-  }
-  return CONTENT_CATEGORY_LABELS[category]
-}
-
-function categorySummary(category: ContentCategory, events: ContentEvent[], displayed: ContentEvent[]): string {
-  if (events.length === 0) return 'В проанализированных субтитрах релевантных элементов не обнаружено.'
-
-  const subtypes = unique(events.map((event) => event.subtype))
-  const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
-    ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
-    : ''
-
-  if (displayed.length === 0) {
-    return 'Найдены только минимально значимые элементы, скрытые в обычном родительском отчёте.' + contextText
-  }
-
-  if (category === 'violence') {
-    return `Обнаружены: ${subtypes.join(', ')}.${contextText}`
-  }
-  if (category === 'scary_and_disturbing') {
-    return `Обнаружены пугающие или тревожные элементы: ${subtypes.join(', ')}.${contextText}`
-  }
-  if (category === 'substances') {
-    return `Обнаружены упоминания или действия, связанные с веществами: ${subtypes.join(', ')}.`
-  }
-  return `Обнаружены элементы: ${subtypes.join(', ')}.${contextText}`
+function policyFor(category: ContentCategory): CategoryPolicy {
+  return categoryPolicies[category] as CategoryPolicy
 }
 
 function sceneSummary(events: ContentEvent[]): string {
@@ -83,7 +54,7 @@ function sceneLabel(events: ContentEvent[]): string {
   }
   const categories = unique(events.map((event) => event.category))
   return categories.length === 1
-    ? dynamicLabel(categories[0]!, events)
+    ? policyFor(categories[0]!).getLabel(events)
     : categories.map((category) => CONTENT_CATEGORY_LABELS[category]).join(' · ')
 }
 
@@ -118,14 +89,15 @@ export function buildVideoCategoryReports(
     const raw = events.filter((event) => event.category === category)
     const displayed = raw.filter((event) => event.displayLevel !== 'hidden')
     const highlights = displayed.filter((event) => event.displayLevel === 'highlight')
+    const policy = policyFor(category)
     return {
       category,
-      label: dynamicLabel(category, raw),
+      label: policy.getLabel(raw),
       level: maxReportLevel(displayed.map(eventLevel)),
       rawEventCount: raw.length,
       displayedEventCount: displayed.length,
       subtypes: unique(raw.map((event) => event.subtype)),
-      summary: categorySummary(category, raw, displayed),
+      summary: policy.summarize(raw, displayed),
       highlights,
       details: displayed,
     }
@@ -172,9 +144,10 @@ export function buildChannelCategoryReports(
       }
     }
 
+    const policy = policyFor(category)
     return {
       category,
-      label: dynamicLabel(category, raw),
+      label: policy.getLabel(raw),
       level,
       analyzedVideos,
       affectedVideos,
@@ -188,7 +161,7 @@ export function buildChannelCategoryReports(
           videoCount: value.videoIds.size,
         }))
         .sort((a, b) => b.eventCount - a.eventCount || a.subtype.localeCompare(b.subtype)),
-      summary: categorySummary(category, raw, displayed),
+      summary: policy.summarize(raw, displayed),
     }
   })
 }
