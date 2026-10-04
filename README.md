@@ -267,3 +267,36 @@ NUXT_PUBLIC_DEFAULT_TRANSCRIPT_LANGUAGE=ru
 ```
 
 Raw candidate logging is intentionally not enabled by normal production configuration.
+
+
+### Diagnostic result.json evidence
+
+When a scan uses `storageMode: diagnostic`, the file written to disk at
+`scan-results/<scan-id>/result.json` is enriched with raw evidence for each final violation.
+
+Each video can contain:
+
+```json
+{
+  "diagnosticViolations": [
+    {
+      "candidateId": "c7",
+      "ruleId": "insults",
+      "ruleLabel": "Оскорбления",
+      "hitCount": 1,
+      "matchedTerms": ["дебил"],
+      "phrase": "да ты дебил вообще",
+      "context": "предыдущая фраза [CANDIDATE] да ты дебил вообще следующая фраза",
+      "startMs": 12400,
+      "endMs": 14400,
+      "youtubeUrl": "https://www.youtube.com/watch?v=VIDEO_ID&t=12s",
+      "resolution": "kept_after_jev"
+    }
+  ]
+}
+```
+
+Only final violations that remain after Jev are included in `diagnosticViolations`.
+All regex/Jev intermediate decisions remain available in `analysis-trace.json`.
+
+This enrichment applies only to the diagnostic file persisted on disk. The public API response remains derived-only and does not expose raw transcript phrases.
