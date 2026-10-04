@@ -179,6 +179,18 @@ function headersToObject(headers: Headers): Record<string, string> {
   return Object.fromEntries(headers.entries())
 }
 
+function chargedCreditsFromResponse(
+  response: Response,
+  billing: 'free' | 'transcript' | 'channel_videos',
+): number {
+  const header = response.headers.get('x-credits-charged')
+  if (header !== null) {
+    const parsed = Number(header)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return response.ok && billing !== 'free' ? 1 : 0
+}
+
 function parseLanguagePriority(languagePriority: string): string[] {
   return languagePriority
     .split(',')
@@ -517,12 +529,13 @@ export class TranscriptApiClient {
       )
     }
 
-    // Account for a successful paid HTTP response even if its body is interrupted.
-    const chargedCredits = response.ok && billing !== 'free' ? 1 : 0
+    // Prefer the provider's authoritative billing header. Fall back to the documented
+    // endpoint cost when the header is absent (for example in tests/mocks).
+    const chargedCredits = chargedCreditsFromResponse(response, billing)
     if (response.ok) {
       if (billing === 'free') this.usage.freeRequests += 1
-      if (billing === 'transcript') this.usage.transcriptCredits += 1
-      if (billing === 'channel_videos') this.usage.channelVideosCredits += 1
+      if (billing === 'transcript') this.usage.transcriptCredits += chargedCredits
+      if (billing === 'channel_videos') this.usage.channelVideosCredits += chargedCredits
       this.usage.totalCredits += chargedCredits
     }
     let bodyText = ''
