@@ -11,7 +11,9 @@
     "typecheck": "nuxi typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run test && npm run build"
+    "benchmark:transcripts": "node scripts/benchmark-transcript-providers.mjs",
+    "benchmark:check": "node --check scripts/benchmark-transcript-providers.mjs",
+    "check": "npm run benchmark:check && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "nuxt": "^4.0.0",

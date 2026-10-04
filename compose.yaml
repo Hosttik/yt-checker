@@ -35,6 +35,37 @@ services:
     mem_limit: 2g
     cpus: 2.0
 
+  benchmark:
+    profiles:
+      - benchmark
+    build:
+      context: .
+      target: dev
+    init: true
+    env_file:
+      - .env
+    command: ["npm", "run", "benchmark:transcripts"]
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+        read_only: true
+      - type: bind
+        source: ./benchmark-results
+        target: /benchmark-output
+    environment:
+      BENCHMARK_OUTPUT_DIR: /benchmark-output
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+
 volumes:
   node_modules:
   nuxt:
