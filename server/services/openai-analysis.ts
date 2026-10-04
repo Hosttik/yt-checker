@@ -300,6 +300,7 @@ export interface OpenAIProviderMetadata {
 export interface OpenAIAnalysisResult {
   classifiedEvents: ClassifiedContentEvent[]
   rejectedCandidates?: RejectedContentCandidate[]
+  outputText?: string
   usage: OpenAIUsage
   provider: OpenAIProviderMetadata
   requestMetadata: {
@@ -548,6 +549,7 @@ export class OpenAIAnalysisProvider {
             transcript,
             enabledCategories,
           ),
+          outputText: response.output_text,
           usage: usageOf(response),
           provider: providerMetadata(response, started),
           requestMetadata: metadata,
@@ -569,6 +571,7 @@ export class OpenAIAnalysisProvider {
       }
       const result: OpenAIAnalysisResult = {
         classifiedEvents: materializeEvents(response.output_parsed.events, transcript, enabledCategories),
+        outputText: response.output_text,
         usage: usageOf(response),
         provider: providerMetadata(response, started),
         requestMetadata: metadata,
