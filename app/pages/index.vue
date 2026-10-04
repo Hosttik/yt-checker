@@ -271,7 +271,9 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           </small>
           <small v-else>
             Пиковая выраженность: {{ levelText(item.peakConcern) }} ·
-            встречается {{ prevalenceText(item.prevalence) }} ({{ item.affectedVideos }}/{{ item.analyzedVideos }} видео) ·
+            заметные эпизоды встречаются {{ prevalenceText(item.moderatePlusPrevalence) }}
+            ({{ item.moderatePlusAffectedVideos }}/{{ item.analyzedVideos }} видео) ·
+            любые показанные сигналы: {{ item.affectedVideos }}/{{ item.analyzedVideos }} ·
             {{ item.displayedEventCount }} отображаемых событий
           </small>
           <p>{{ item.summary }}</p>
