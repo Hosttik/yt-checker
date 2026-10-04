@@ -200,6 +200,36 @@ describe('multi-label presentation and aggregation', () => {
     expect(report?.summary).toBe('Для выбранного профиля значимых элементов не показано.')
   })
 
+  it('does not let hidden findings inflate displayed-video prevalence', () => {
+    const displayed = Array.from({ length: 3 }, (_, index) =>
+      applyContentPolicy(violence('weapon_use', {
+        harmLevel: 'none', targetType: 'object', weaponRole: 'used',
+      }, {
+        startMs: index * 10_000,
+        endMs: index * 10_000 + 1_000,
+      }), `displayed_${index}`, 'normal'),
+    )
+    const hidden = Array.from({ length: 7 }, (_, index) =>
+      applyContentPolicy(violence('weapon_presence', {
+        harmLevel: 'none', targetType: 'object', weaponRole: 'possessed',
+      }, {
+        startMs: (index + 3) * 10_000,
+        endMs: (index + 3) * 10_000 + 1_000,
+      }), `hidden_${index}`, 'normal'),
+    )
+
+    const channel = buildChannelCategoryReports(
+      [...displayed, ...hidden].map((event, index) => ({ videoId: `v${index}`, events: [event] })),
+      ['violence'],
+      10,
+      'normal',
+    )[0]
+
+    expect(channel?.rawAffectedVideos).toBe(10)
+    expect(channel?.affectedVideos).toBe(3)
+    expect(channel?.level).toBe('low')
+  })
+
   it('does not escalate many hidden minimal weapon mentions into a worse normal report', () => {
     const events: ContentEvent[] = Array.from({ length: 10 }, (_, index) =>
       applyContentPolicy(violence('weapon_presence', {
