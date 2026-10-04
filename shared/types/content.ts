@@ -227,6 +227,7 @@ export interface ChannelCategoryReport {
   label: string
   level: ReportLevel
   analyzedVideos: number
+  rawAffectedVideos: number
   affectedVideos: number
   highlightedVideos: number
   rawEventCount: number
