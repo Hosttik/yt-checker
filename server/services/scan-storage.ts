@@ -85,6 +85,13 @@ export class ScanStorage {
     })
   }
 
+  private buildMinimalResult(result: ChannelCheckResponse): ChannelCheckResponse {
+    return {
+      ...result,
+      videoReports: result.videoReports.map(({ candidates: _candidates, rejectedCandidates: _rejected, ...report }) => report),
+    }
+  }
+
   private buildDiagnosticResult(result: ChannelCheckResponse): unknown {
     return {
       ...result,
@@ -111,7 +118,11 @@ export class ScanStorage {
     await mkdir(directory, { recursive: true })
     await writeFile(
       `${directory}/result.json`,
-      JSON.stringify(this.mode === 'diagnostic' ? this.buildDiagnosticResult(result) : result, null, 2) + '\n',
+      JSON.stringify(
+        this.mode === 'diagnostic' ? this.buildDiagnosticResult(result) : this.buildMinimalResult(result),
+        null,
+        2,
+      ) + '\n',
       'utf8',
     )
     if (this.mode === 'diagnostic') {
