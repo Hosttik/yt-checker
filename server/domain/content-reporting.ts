@@ -441,7 +441,7 @@ export function buildVideoContentSummary(scenes: PresentationScene[]): string {
     return 'В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено.'
   }
   if (main.length === 0) {
-    return `Существенных сцен в проанализированных субтитрах не обнаружено; ${detailCountText(details.length)}.`
+    return `Существенных сцен в проанализированных субтитрах не обнаружено; лёгких или спорных находок: ${details.length}.`
   }
 
   const mainNoun = russianCountForm(main.length, 'сцена', 'сцены', 'сцен')
