@@ -469,4 +469,146 @@ describe('parent relevance calibration', () => {
     )
   })
 
+  it('prefers the stronger reviewed summary inside one merged moderate scene', () => {
+    const nearbyDanger = applyContentPolicy(violence('dangerous_situation', {
+      sceneId: 'bunker-scene',
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      startMs: 458_000,
+      endMs: 482_000,
+      sceneStartMs: 458_000,
+      sceneEndMs: 508_000,
+      details: {
+        harmLevel: 'threatened',
+        targetType: 'human_like_character',
+        weaponRole: 'none',
+        actionPurpose: 'unknown',
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        actor: 'зомби',
+        target: 'рассказчик',
+        intent: 'unclear',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        repetition: 'single',
+        highPriorityReason: undefined,
+        parentSummary: 'Рассказчик слышит рядом зомби и закрывает дверь бункера.',
+        mitigatingContext: 'Рассказчик находится за закрытой дверью бункера.',
+      }),
+    }), 'bunker-danger', 'normal')
+
+    const strongerPeril = applyContentPolicy(scary('intense_peril', {
+      sceneId: 'bunker-scene',
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      startMs: 492_000,
+      endMs: 508_000,
+      sceneStartMs: 458_000,
+      sceneEndMs: 508_000,
+      details: {
+        fearIntensity: 'strong',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: true,
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        actor: 'зомби',
+        target: 'рассказчик',
+        intent: 'aggressive',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        repetition: 'repeated',
+        highPriorityReason: undefined,
+        parentSummary: 'Рассказчик слышит, как зомби скребутся и стучат по двери бункера.',
+        mitigatingContext: 'Позже рассказчик говорит, что дверь выдержала.',
+      }),
+    }), 'bunker-peril', 'normal')
+
+    const scene = buildPresentationScenes([nearbyDanger, strongerPeril])[0]!
+    expect(scene.summary).toBe('Рассказчик слышит, как зомби скребутся и стучат по двери бункера.')
+    expect(scene.mitigatingContext).toBe('Позже рассказчик говорит, что дверь выдержала.')
+  })
+
+  it('keeps unreviewed fictional moderate threats in details unless direct facts are hard-risk', () => {
+    const unreviewedCloneThreat = applyContentPolicy(violence('violent_threat', {
+      sceneId: 'clone-threat',
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      text: 'Вы больше никогда не покинете деревню.',
+      reason: 'Клон говорит, что жители больше никогда не покинут деревню.',
+      details: {
+        harmLevel: 'threatened',
+        targetType: 'human_like_character',
+        weaponRole: 'none',
+        actionPurpose: 'threat',
+      },
+      review: review({
+        status: 'not_reviewed',
+        recommendedParentRelevance: 'low',
+        evidenceSufficiency: 'insufficient',
+        contextRanges: [],
+        actor: undefined,
+        target: undefined,
+        aggressionDirection: 'unclear',
+        intent: 'unclear',
+        distress: 'unclear',
+        consequence: 'unclear',
+        duration: 'unclear',
+        repetition: 'unclear',
+        narrativeFraming: 'unclear',
+        parentSummary: undefined,
+        mitigatingContext: undefined,
+        highPriorityReason: undefined,
+        rationale: 'Contextual review omitted this candidate.',
+      }),
+    }), 'clone-unreviewed', 'normal')
+
+    const unreviewedWeaponAttack = applyContentPolicy(violence('physical_attack', {
+      sceneId: 'weapon-attack',
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      startMs: 200_000,
+      endMs: 205_000,
+      sceneStartMs: 200_000,
+      sceneEndMs: 205_000,
+      details: {
+        harmLevel: 'attempted',
+        targetType: 'human_like_character',
+        weaponRole: 'threatened_use',
+        actionPurpose: 'attack',
+      },
+      review: review({
+        status: 'not_reviewed',
+        recommendedParentRelevance: 'low',
+        evidenceSufficiency: 'insufficient',
+        contextRanges: [],
+        actor: undefined,
+        target: undefined,
+        aggressionDirection: 'unclear',
+        intent: 'unclear',
+        distress: 'unclear',
+        consequence: 'unclear',
+        duration: 'unclear',
+        repetition: 'unclear',
+        narrativeFraming: 'unclear',
+        parentSummary: undefined,
+        mitigatingContext: undefined,
+        highPriorityReason: undefined,
+        rationale: 'Contextual review omitted this candidate.',
+      }),
+    }), 'weapon-unreviewed', 'normal')
+
+    expect(unreviewedCloneThreat.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([unreviewedCloneThreat])[0]?.attention).toBe('details')
+    expect(buildPresentationScenes([unreviewedWeaponAttack])[0]?.attention).toBe('main')
+  })
+
 })
