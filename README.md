@@ -1,169 +1,133 @@
 # YT Checker
 
-A parent-oriented YouTube channel checker. The service scans recent videos and reports derived content detections with YouTube timeline ranges instead of publishing transcript text or producing an opaque "safe / unsafe" score.
+Parent-oriented YouTube channel checker. The application uses **TranscriptAPI.com as the only YouTube data gateway**; it does not call the official YouTube Data API directly.
 
-## MVP scope
+## Channel scan flow
 
-- Fetch the latest public channel uploads through TranscriptAPI's `/youtube/channel/latest` endpoint.
-- Fetch timestamped transcripts through a replaceable provider adapter.
-- Use deterministic regex rules to cheaply locate candidate timeline ranges.
-- Optionally pass only small candidate context windows to TypeSafe Jev for contextual false-positive filtering.
-- Return only derived categories, counts, severity, and YouTube timeline ranges.
-- Return per-video failures without failing the entire channel scan.
-- Do **not** persist, cache, log, or return raw transcript text.
-- Do **not** require a YouTube Data API key.
+A normal scan targets **10 successfully analyzed videos with captions**.
 
-Jev is deliberately used as a conservative second layer, not as the sole detector. A regex candidate is removed only when Jev classifies it as benign with a high configured probability. Ambiguous or low-confidence cases stay visible so a parent can verify the original YouTube moment.
+1. `GET /youtube/channel/latest` — fetch the latest 15 videos. Free.
+2. `GET /youtube/info` — preflight candidate videos and keep only videos with available transcript languages. Free.
+3. If the latest 15 do not contain enough captioned videos, fetch one `GET /youtube/channel/videos` page and continue the free `/youtube/info` preflights. A successful page costs 1 credit.
+4. Request `GET /youtube/transcript` only for caption-eligible videos.
+5. A successful transcript costs 1 credit. Failed transcript requests do not consume a credit.
+6. Continue through eligible replacement videos until the requested number of successful transcript analyses is reached or the candidate pool is exhausted.
+7. Run local regex candidate detection.
+8. Optionally pass only bounded candidate context to TypeSafe Jev for contextual false-positive filtering.
+9. Return derived categories, counts, severity and YouTube timeline ranges.
+
+Typical 10-video scan:
+
+```text
+/channel/latest       0 credits
+/youtube/info         0 credits
+10 successful
+/youtube/transcript  10 credits
+-------------------------------
+total                10 credits
+```
+
+If a `/youtube/channel/videos` fallback page is required, the usual total is 11 credits.
+
+TranscriptAPI charges paid endpoints only on successful HTTP 200 responses. Cached successful paid responses are also charged.
+
+## Storage modes
+
+The request supports three explicit modes.
+
+### `none`
+
+Nothing is persisted. Raw transcript exists only in process memory while the scan runs.
+
+### `minimal` — default
+
+Writes only:
+
+```text
+scan-results/<scan-id>/result.json
+```
+
+The result contains:
+
+- channel/video metadata needed by the product;
+- scan selection statistics;
+- actual TranscriptAPI credit usage;
+- transcript language;
+- Jev status;
+- derived rule categories/counts/severity;
+- YouTube timeline ranges.
+
+It does **not** contain transcript text or Jev candidate context.
+
+### `diagnostic`
+
+Writes the same derived `result.json` plus:
+
+```text
+transcriptapi-exchanges.json
+jev-exchanges.json
+```
+
+These files contain the complete diagnostic exchange needed to understand provider/classifier behavior, including raw response bodies and candidate context. Authorization headers are redacted.
+
+Diagnostic mode is disabled unless:
+
+```env
+NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
+```
+
+Do not enable it as the production default.
 
 ## Docker-only local setup
 
-You do not need Node.js or npm installed on the host. The intended local workflow requires only Docker Desktop / Docker Compose.
-
-Create the local environment file:
+Only Docker Desktop / Docker Compose is required on the host.
 
 ```bash
 cp .env.example .env
-```
-
-Set:
-
-- `NUXT_TRANSCRIPT_API_KEY` — TranscriptAPI server-side API key.
-- `NUXT_TYPESAFE_API_KEY` — TypeSafe API key. Optional: without it, the service runs regex-only.
-
-Start development:
-
-```bash
+mkdir -p scan-results
 docker compose up --build
 ```
 
-Then open `http://localhost:3000`.
+Required:
 
-The source tree is mounted read-only into the container. Dependencies and Nuxt-generated files live in Docker-managed volumes rather than in host `node_modules`.
-
-Stop the stack:
-
-```bash
-docker compose down
+```env
+NUXT_TRANSCRIPT_API_KEY=...
 ```
 
-Remove generated Docker volumes too:
+Optional Jev layer:
 
-```bash
-docker compose down -v
+```env
+NUXT_TYPESAFE_API_KEY=...
 ```
+
+To use diagnostic storage locally:
+
+```env
+NUXT_ALLOW_DIAGNOSTIC_STORAGE=true
+```
+
+Open `http://localhost:3000`.
+
+Local scan artifacts appear under:
+
+```text
+scan-results/<scan-id>/
+```
+
+The directory is ignored by Git and excluded from Docker build contexts.
 
 ## Checks
-
-Run all type checks, tests, and the production build inside Docker:
 
 ```bash
 docker build --target verify .
 ```
 
-CI uses the same Docker verification target, so local and CI environments stay aligned.
+CI runs type checking, Vitest and the production Nuxt build inside Docker, then smoke-tests the hardened runtime image.
 
-## Production image
+## Production privacy boundary
 
-Build the minimal runtime image:
+The production default should remain `minimal` or `none`.
 
-```bash
-docker build --target runtime -t yt-checker:local .
-```
+Raw transcript content must not be persisted, cached, logged, returned from our API or displayed in the UI. Only bounded candidate context may be sent to Jev. Persistent product data should remain derived analysis plus the minimum channel/video metadata needed to render the result.
 
-Or run the hardened production compose definition locally:
-
-```bash
-docker compose -f compose.prod.yaml up --build -d
-```
-
-Both compose definitions bind port 3000 only to `127.0.0.1`. Put a properly configured reverse proxy in front when deploying publicly rather than changing the application container to privileged mode.
-
-See [SECURITY.md](./SECURITY.md) for the container threat model and remaining risks.
-
-## Data flow
-
-```text
-Channel URL
-   |
-   v
-TranscriptAPI /channel/latest
-   |
-   v
-recent video metadata
-   |
-   v
-TranscriptAPI /youtube/transcript
-   |
-   | raw transcript: server memory only
-   v
-regex candidate finder
-   |
-   | only short local context windows
-   v
-TypeSafe Jev (optional)
-   |
-   | confident benign -> drop
-   | violation/uncertain/low confidence -> keep
-   v
-derived detections only:
-category + count + severity + timeline ranges
-```
-
-If Jev is unavailable for a video, the service falls back to the conservative regex candidates rather than silently losing detections.
-
-## Raw content policy
-
-Raw transcript content is transient processing input.
-
-It must never be:
-
-- written to the database;
-- written to application logs;
-- cached;
-- sent to analytics/error tracking;
-- included in API responses;
-- displayed in the UI.
-
-When Jev contextual filtering is enabled, only a bounded local window around a regex candidate (the matched segment plus at most one neighboring segment on each side, capped in length) is sent to TypeSafe. The full transcript is not sent to Jev.
-
-Persistent/output data is limited to video/channel identifiers and metadata plus our own derived classification: category, count, severity, time ranges, and classifier/rule version when versioning is added.
-
-The transcript provider is isolated behind `VideoSource` and `TranscriptProvider`; contextual filtering is isolated behind `ContextFilter`, so either upstream dependency can be replaced independently.
-
-## Transcript provider benchmark
-
-The repository includes a Docker-only benchmark for comparing `transcriptapi.com` and `transcriptapi.io` on exactly the same 50 videos.
-
-Add both provider keys to `.env`:
-
-```env
-BENCHMARK_TRANSCRIPT_COM_KEY=...
-BENCHMARK_TRANSCRIPT_IO_KEY=...
-```
-
-By default the benchmark discovers the latest 50 videos from `@TED` through the `.io` channel-list endpoint, then sends those exact 50 IDs to both transcript providers. Override the dataset with:
-
-```env
-BENCHMARK_CHANNEL=@someChannel
-BENCHMARK_LANGUAGE=ru
-```
-
-Or freeze an exact list:
-
-```env
-BENCHMARK_VIDEO_IDS=id1,id2,...,id50
-```
-
-Run:
-
-```bash
-mkdir -p benchmark-results
-docker compose --profile benchmark run --rm benchmark
-```
-
-The report compares success rate, observed latency (average/p50/p95), segment counts, transcript length, final timestamp coverage, normalized-text equality, and token-set similarity.
-
-Raw transcript text is never written to disk or printed. It exists only in benchmark process memory long enough to calculate aggregate comparison metrics. Results are written to `benchmark-results/latest.md` and `benchmark-results/latest.json`, which are ignored by Git.
-
-Provider billing note: successful `.com` transcript requests cost one credit. `.io` also prices a transcript fetch at one credit, but documented cache hits are free, so the benchmark's actual `.io` credit consumption can be below the number of successful requests.
-\n### Detailed diagnostic benchmark artifacts\n\nThe provider benchmark is intentionally more permissive than production data handling. It saves complete provider responses locally under benchmark-results/ so we can inspect exactly what each API returned. That directory is ignored by Git and must never be committed.\n\nThe default benchmark scans up to 100 channel videos with the free transcriptapi.com /youtube/info endpoint, then builds a 50-video main dataset while trying to include up to 10 no-caption candidates. Both providers receive exactly the same main 50 IDs.\n\nOptional benchmark settings:\n\n    BENCHMARK_VIDEO_COUNT=50\n    BENCHMARK_DISCOVERY_POOL=100\n    BENCHMARK_NO_CAPTIONS_TARGET=10\n    BENCHMARK_NO_CAPTIONS_VIDEO_IDS=idA,idB,idC\n    BENCHMARK_CAPTURE_RAW=true\n\nThe output includes summary.md/json, details.md, dataset.json, no-captions.md/json, discovery preflight responses, and one directory per video containing com-info.json, com-transcript.json, io-transcript.json, and analysis.json.\n\nRaw transcript responses, response headers, error bodies, provider source/language fields, timestamps, metadata, cache/credit headers when present, previews, hashes, timing metrics and cross-provider similarity data are retained for the diagnostic run. API authorization values are always redacted.\n\nThe no-captions report explicitly records whether either provider failed, whether transcriptapi.io recovered a transcript, and the exact io source field. A successful response with source=asr after the caption preflight failed is treated as direct evidence of ASR fallback for that tested video.\n\nBecause these files may contain complete third-party transcript text, delete benchmark-results/ after analysis. They are not application storage and do not change the production raw-content policy.\n
+See [SECURITY.md](./SECURITY.md) for the container and diagnostic-storage threat model.
