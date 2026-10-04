@@ -285,7 +285,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
 
       <div class="summary-grid">
         <article v-for="item in result.channelReport" :key="item.category" class="summary-card">
-          <strong>{{ levelText(item.level) }}</strong>
+          <strong>Уровень по выборке: {{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
           <small v-if="result.profile === 'diagnostic'">
             shown in {{ item.affectedVideos }}/{{ item.analyzedVideos }} videos ·
@@ -297,6 +297,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           </small>
           <small v-else>
             Пиковая выраженность: {{ levelText(item.peakConcern) }} ·
+            высокий приоритет: {{ item.highlightedVideos }}/{{ item.analyzedVideos }} видео ·
             заметные эпизоды встречаются {{ prevalenceText(item.moderatePlusPrevalence) }}
             ({{ item.moderatePlusAffectedVideos }}/{{ item.analyzedVideos }} видео) ·
             любые показанные сигналы: {{ item.affectedVideos }}/{{ item.analyzedVideos }} ·
