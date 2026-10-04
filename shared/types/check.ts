@@ -1,25 +1,28 @@
-export const RULE_IDS = [
-  'profanity_and_rude_language',
-  'insults',
-  'toilet_humor',
-  'gambling',
-  'sexual_content',
-  'violence',
-  'alcohol_and_drugs',
-  'scary_and_disturbing',
-  'tobacco_and_nicotine',
-  'self_harm',
-] as const
+import type {
+  AnalysisProfile,
+  ChannelCategoryReport,
+  ContentCategory,
+  ContentEvent,
+  LegacyRuleId,
+  PresentationScene,
+  RuleSeverity,
+  VideoCategoryReport,
+} from './content'
+import { ANALYSIS_PROFILES, CONTENT_CATEGORIES, LEGACY_RULE_IDS } from './content'
 
+export {
+  ANALYSIS_PROFILES,
+  CONTENT_CATEGORIES,
+  LEGACY_RULE_IDS,
+}
+export type * from './content'
+
+export const RULE_IDS = [...CONTENT_CATEGORIES, ...LEGACY_RULE_IDS] as const
+export const SELECTABLE_RULE_IDS = CONTENT_CATEGORIES
 export const SCAN_STORAGE_MODES = ['none', 'minimal', 'diagnostic'] as const
-export const VIOLATION_CONTEXTS = [
-  'realistic', 'game', 'fantasy', 'cartoon', 'verbal', 'educational', 'idiom', 'other',
-] as const
 
-export type RuleId = (typeof RULE_IDS)[number]
+export type RuleId = ContentCategory | LegacyRuleId
 export type ScanStorageMode = (typeof SCAN_STORAGE_MODES)[number]
-export type RuleSeverity = 'low' | 'medium' | 'high'
-export type ViolationContext = (typeof VIOLATION_CONTEXTS)[number]
 export type TranscriptUnavailableReason =
   | 'not_available' | 'rate_limited' | 'billing' | 'provider_timeout' | 'provider_error'
 export type AnalysisErrorType =
@@ -28,7 +31,7 @@ export type AnalysisErrorType =
 export interface ViolationEvidence {
   category: RuleId
   severity: RuleSeverity
-  context: ViolationContext
+  context: 'realistic' | 'game' | 'fantasy' | 'cartoon' | 'verbal' | 'educational' | 'idiom' | 'other'
   type: 'profanity' | 'rude_language' | 'not_applicable'
   startMs: number
   endMs: number
@@ -122,6 +125,8 @@ export interface VideoScanResult extends VideoMetadata {
   analysisError?: { type: AnalysisErrorType; status?: number; code?: string; message: string }
   openaiUsage?: OpenAIUsage
   speechQuality?: SpeechQualityMetrics
+
+  // Legacy compatibility. New consumers should use contentEvents/videoReports.
   violations: ViolationEvidence[]
   detections: RuleDetection[]
 }
@@ -152,9 +157,16 @@ export interface ScanSelection {
   requestedLanguage: string
 }
 
+export interface VideoContentReport {
+  videoId: string
+  categoryReports: VideoCategoryReport[]
+  scenes: PresentationScene[]
+}
+
 export interface ChannelCheckResponse {
   scanId?: string
   storageMode: ScanStorageMode
+  profile: AnalysisProfile
   channel: ChannelMetadata
   requestedVideos: number
   analyzedVideos: number
@@ -162,9 +174,20 @@ export interface ChannelCheckResponse {
   analysisMode: 'openai'
   creditUsage: ScanCreditUsage
   openaiUsage: AggregateOpenAIUsage
+
+  // Separate secondary analysis dimension; never part of content-safety categories.
   speechQuality: ChannelSpeechQualitySummary
+
   selection: ScanSelection
+
+  // New canonical content-safety architecture.
+  contentEvents: ContentEvent[]
+  videoReports: VideoContentReport[]
+  channelReport: ChannelCategoryReport[]
+
+  // Legacy compatibility. Derived from contentEvents.
   summary: RuleSummary[]
   videos: VideoScanResult[]
+
   limitations: string[]
 }
