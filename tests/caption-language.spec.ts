@@ -1,24 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { captionLanguageMismatch, captionSource } from '../server/domain/caption-language'
+import { captionLanguageResolution, captionSource } from '../server/domain/caption-language'
 
 describe('caption language metadata', () => {
-  it('distinguishes manual and ASR tracks', () => {
+  it('derives source only from the actual transcript language', () => {
     expect(captionSource('ru')).toBe('manual')
     expect(captionSource('ru-RU')).toBe('manual')
     expect(captionSource('asr-ru')).toBe('asr')
     expect(captionSource()).toBe('unknown')
   })
 
-  it('flags a manual-to-ASR fallback even for the same base language', () => {
-    expect(captionLanguageMismatch('ru', 'asr-ru')).toBe(true)
+  it('treats plain preflight ru resolving to asr-ru as a supported same-language ASR resolution', () => {
+    expect(captionLanguageResolution('ru', 'asr-ru')).toBe('same_language_asr')
   })
 
-  it('does not flag harmless regional variants of the same source type', () => {
-    expect(captionLanguageMismatch('ru', 'ru-RU')).toBe(false)
-    expect(captionLanguageMismatch('asr-ru', 'asr-ru-RU')).toBe(false)
+  it('distinguishes exact and harmless regional resolutions', () => {
+    expect(captionLanguageResolution('ru', 'ru')).toBe('exact')
+    expect(captionLanguageResolution('ru', 'ru-RU')).toBe('same_language_variant')
+    expect(captionLanguageResolution('asr-ru', 'asr-ru')).toBe('exact')
+    expect(captionLanguageResolution('asr-ru', 'asr-ru-RU')).toBe('same_language_asr')
   })
 
-  it('flags a different base language', () => {
-    expect(captionLanguageMismatch('ru', 'en')).toBe(true)
+  it('flags only an actual base-language change as different_language', () => {
+    expect(captionLanguageResolution('ru', 'en')).toBe('different_language')
+  })
+
+  it('returns unknown when either side is unavailable', () => {
+    expect(captionLanguageResolution(undefined, 'ru')).toBe('unknown')
+    expect(captionLanguageResolution('ru', undefined)).toBe('unknown')
   })
 })
