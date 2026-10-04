@@ -39,8 +39,9 @@ The model describes facts only:
 - evidence strength;
 - engagement / portrayal / explicitness;
 - category-specific details;
-- minimal transcript evidence;
-- candidate / scene ids.
+- compact transcript evidence anchors (up to 6 segments);
+- broader scene range and candidate / scene ids;
+- assertion status (`actual`, `threatened`, `hypothetical`, `negated`, `reported`).
 
 The LLM does **not** decide:
 
@@ -123,7 +124,7 @@ scene_55
  └─ scary_and_disturbing / threatening_character
 ```
 
-The UI groups them by `sceneId`, so the parent sees one human-readable scene rather than two duplicate cards.
+The UI first groups by `sceneId`, splits obviously distant reuse of one id, and then merges substantially overlapping compatible narrative scenes even if the model emitted different ids. Scene context and evidence are separate: the parent gets compact evidence timestamps rather than one oversized narrative interval.
 
 ## Old result vs new result
 
@@ -255,4 +256,6 @@ Relevant structured log events:
 
 Speech quality remains a separate analysis dimension and is not mixed into ContentEvent taxonomy or safety aggregation.
 
-The existing transcript heuristic can evolve independently toward a dedicated `SpeechQualityReport` or a future audio-based pipeline.
+Raw counts/rates are retained for diagnostics, while the parent-facing report explains them as approximate frequencies (for example, «примерно 1 раз на 80 слов») and shows common markers. Frequency bands are product heuristics, not normative language-quality thresholds. Auto-generated captions are explicitly marked because ASR duplication can inflate repetition counts.
+
+The transcript heuristic can evolve independently toward a dedicated audio-based pipeline.
