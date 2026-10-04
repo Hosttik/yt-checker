@@ -129,6 +129,7 @@ describe('ScanStorage', () => {
         text: 'Я сейчас умру со смеху.',
         reason: 'Эмоциональная идиома без self-directed intent.',
       }],
+      outputText: '{"events":[{"category":"violence"}]}',
       usage: {
         inputTokens: 10,
         outputTokens: 5,
@@ -163,6 +164,7 @@ describe('ScanStorage', () => {
     ])
     const diagnostic = await readFile(join(root, storage.scanId, 'openai-analysis.json'), 'utf8')
     expect(diagnostic).toContain('Нормализованный transcript')
+    expect(diagnostic).toContain('modelOutputText')
     expect(diagnostic).toContain('classifiedEvents')
     expect(diagnostic).toContain('normalizedContentEvents')
     expect(diagnostic).toContain('parentRelevance')
