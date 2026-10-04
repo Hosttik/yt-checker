@@ -373,7 +373,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       successfulAnalyses += 1
       logger.info('video.analysis.completed', {
         videoId: video.id,
-        violationCount: analysis.violations.length,
+        classifiedEventCount: analysis.classifiedEvents.length,
         inputTokens: analysis.usage.inputTokens,
         outputTokens: analysis.usage.outputTokens,
         reasoningTokens: analysis.usage.reasoningTokens,
