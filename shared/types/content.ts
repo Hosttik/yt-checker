@@ -26,6 +26,9 @@ export type ContentContext = 'game' | 'fiction' | 'real_world' | 'educational' |
 export type EngagementLevel = 'mention' | 'depiction' | 'participation' | 'encouragement' | 'instruction'
 export type Portrayal = 'neutral' | 'normalized' | 'glamorized' | 'discouraged' | 'educational' | 'humorous' | 'unknown'
 export type Explicitness = 'none' | 'mild' | 'explicit' | 'graphic'
+export type AssertionStatus = 'actual' | 'threatened' | 'hypothetical' | 'negated' | 'reported'
+export type ViolenceActionPurpose = 'attack' | 'threat' | 'defense' | 'rescue' | 'utility' | 'sport' | 'destruction' | 'unknown'
+export type PrevalenceLevel = 'none' | 'rare' | 'occasional' | 'common' | 'pervasive'
 
 export type ProfanitySubtype = 'profanity' | 'rude_language' | 'slur' | 'obscene_expression'
 export type InsultSubtype = 'direct_insult' | 'mockery' | 'humiliating_name' | 'degrading_statement'
@@ -101,6 +104,7 @@ export interface ViolenceDetails {
     | 'object'
     | 'unknown'
   weaponRole: 'none' | 'mentioned' | 'possessed' | 'threatened_use' | 'used'
+  actionPurpose: ViolenceActionPurpose
 }
 
 export interface ScaryDetails {
@@ -160,6 +164,7 @@ export interface BaseContentEvent {
   engagementLevel?: EngagementLevel
   portrayal?: Portrayal
   explicitness?: Explicitness
+  assertionStatus: AssertionStatus
   parentRelevance: ParentRelevance
   displayLevel: DisplayLevel
 }
@@ -226,6 +231,9 @@ export interface ChannelCategoryReport {
   category: ContentCategory
   label: string
   level: ReportLevel
+  peakConcern: ReportLevel
+  prevalence: PrevalenceLevel
+  affectedRatio: number
   analyzedVideos: number
   rawAffectedVideos: number
   affectedVideos: number
