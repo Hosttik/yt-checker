@@ -213,6 +213,35 @@ describe('TranscriptApiClient', () => {
     expect(requestUrl).toContain('language=ru%2Cen')
   })
 
+  it('stores successful JSON diagnostics once and keeps only relevant response headers', async () => {
+    const exchanges: any[] = []
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      video_id: 'video-one11',
+      language: 'ru',
+      transcript: [{ text: 'тест', start: 0, duration: 1 }],
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-credits-charged': '1',
+        'x-cache-status': 'HIT',
+        'cf-ray': 'noise',
+      },
+    })))
+
+    const client = new TranscriptApiClient('secret', undefined, (exchange) => exchanges.push(exchange))
+    await client.getTranscript('video-one11', 'ru')
+
+    expect(exchanges).toHaveLength(1)
+    expect(exchanges[0].response.bodyJson).toBeTruthy()
+    expect(exchanges[0].response.bodyText).toBeUndefined()
+    expect(exchanges[0].response.headers).toEqual({
+      'content-type': 'application/json',
+      'x-cache-status': 'HIT',
+      'x-credits-charged': '1',
+    })
+  })
+
   it('captures raw diagnostic exchange with a redacted auth header without leaking it through errors', async () => {
     const secretUpstreamBody = 'DO NOT LEAK THIS TRANSCRIPT-LIKE BODY'
     const exchanges: unknown[] = []
