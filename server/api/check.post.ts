@@ -2,14 +2,18 @@ import { z } from 'zod'
 import type {
   AggregateOpenAIUsage,
   ChannelCheckResponse,
+  ContentReviewSummary,
+  OpenAIStageUsage,
+  OpenAIUsage,
   RuleId,
   ScanStorageMode,
   TranscriptUnavailableReason,
+  VideoContentReview,
   VideoMetadata,
   VideoScanResult,
 } from '../../shared/types/check'
 import { ANALYSIS_PROFILES, RULE_IDS, SCAN_STORAGE_MODES, SELECTABLE_RULE_IDS } from '../../shared/types/check'
-import type { AnalysisProfile, ContentEvent, RejectedContentCandidate } from '../../shared/types/content'
+import type { AnalysisProfile, ClassifiedContentEvent, ContentEvent, RejectedContentCandidate } from '../../shared/types/content'
 import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../domain/analyze-transcript'
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
@@ -19,15 +23,19 @@ import {
   buildChannelCategoryReports,
   buildPresentationScenes,
   buildVideoCategoryReports,
+  buildVideoContentSummary,
 } from '../domain/content-reporting'
 import { captionLanguageResolution, captionSource } from '../domain/caption-language'
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
 import {
   OPENAI_PROMPT_VERSION,
+  OPENAI_REVIEW_PROMPT_VERSION,
+  OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisError,
   OpenAIAnalysisProvider,
+  type OpenAIReviewResult,
 } from '../services/openai-analysis'
 import { ScanStorage } from '../services/scan-storage'
 import {
@@ -96,6 +104,29 @@ function addUsage(total: AggregateOpenAIUsage, usage: VideoScanResult['openaiUsa
   total.totalTokens += usage.totalTokens
 }
 
+function aggregateUsage(): AggregateOpenAIUsage {
+  return {
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cachedTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+  }
+}
+
+function combinedUsage(...items: Array<OpenAIUsage | undefined>): OpenAIUsage {
+  const total = aggregateUsage()
+  for (const item of items) addUsage(total, item)
+  const { requests: _requests, ...usage } = total
+  return usage
+}
+
+function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEvent[] {
+  return events.map((event) => ({ ...event, review: undefined }))
+}
+
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
   const parsed = checkRequestSchema.safeParse(await readBody(event))
   if (!parsed.success) {
@@ -109,6 +140,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const config = useRuntimeConfig(event)
   const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey
   const openaiModel = process.env.OPENAI_MODEL || config.openaiModel
+  const openaiReviewModel = process.env.OPENAI_REVIEW_MODEL || config.openaiReviewModel || openaiModel
   const openaiReasoningEffort = process.env.OPENAI_REASONING_EFFORT || config.openaiReasoningEffort
   if (!config.transcriptApiKey) {
     throw createError({ statusCode: 503, statusMessage: 'Server is missing NUXT_TRANSCRIPT_API_KEY.' })
@@ -152,6 +184,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
   )
   const analyzer = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
+  const reviewer = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
@@ -168,6 +201,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     profile,
     analysisProvider: 'openai',
     model: openaiModel,
+    reviewModel: openaiReviewModel,
     reasoningEffort: 'low',
   })
 
