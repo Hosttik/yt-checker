@@ -3,6 +3,61 @@ import type { ClassifiedContentEvent } from '../shared/types/content'
 import { normalizeTranscript } from '../server/domain/normalize-transcript'
 import { OpenAIAnalysisProvider } from '../server/services/openai-analysis'
 
+function confirmedReviewItem(reviewItemId: string, parentSummary = 'Подтверждённая сцена.') {
+  return {
+    reviewItemId,
+    verdict: 'confirmed' as const,
+    event: null,
+    parentRelevance: 'moderate' as const,
+    evidenceSufficiency: 'sufficient' as const,
+    contextSegments: [],
+    actor: null,
+    target: null,
+    aggressionDirection: 'unclear' as const,
+    intent: 'unclear' as const,
+    distress: 'clear' as const,
+    consequence: 'threatened_harm' as const,
+    duration: 'brief' as const,
+    repetition: 'single' as const,
+    narrativeFraming: 'neutral' as const,
+    parentSummary,
+    mitigatingContext: null,
+    highPriorityReason: null,
+    rationale: 'Сцена подтверждена по исходному транскрипту.',
+  }
+}
+
+function violentThreat(candidateId: string, startMs: number): ClassifiedContentEvent {
+  return {
+    sourceCandidateId: candidateId,
+    sceneId: `scene_${candidateId}`,
+    category: 'violence',
+    subtype: 'violent_threat',
+    severity: 'medium',
+    context: 'game',
+    confidence: 0.98,
+    startMs,
+    endMs: startMs + 1_000,
+    evidenceRanges: [{ startMs, endMs: startMs + 1_000 }],
+    sceneStartMs: startMs,
+    sceneEndMs: startMs + 1_000,
+    text: 'Если не сделаешь это, жителям конец.',
+    reason: 'Персонаж угрожает жителям вредом, чтобы добиться выполнения условия.',
+    evidenceStrength: 'explicit',
+    evidenceSource: 'transcript',
+    engagementLevel: 'depiction',
+    portrayal: 'discouraged',
+    explicitness: 'mild',
+    assertionStatus: 'threatened',
+    details: {
+      harmLevel: 'threatened',
+      targetType: 'human_like_character',
+      weaponRole: 'none',
+      actionPurpose: 'threat',
+    },
+  }
+}
+
 describe('OpenAI contextual reviewer', () => {
   it('reviews a candidate against the original full transcript and separates direct evidence from context', async () => {
     const transcript = normalizeTranscript([
@@ -107,57 +162,123 @@ describe('OpenAI contextual reviewer', () => {
     expect(userText).toContain('[2] Теперь выход из деревни вам запрещён.')
   })
 
-  it('retains a first-pass candidate as not reviewed when a batch response omits it', async () => {
+  it('retries only omitted review items and recovers a partial batch', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Первый эпизод.', startMs: 10_000, endMs: 11_000 },
+      { text: 'Второй эпизод.', startMs: 20_000, endMs: 21_000 },
+    ])
+    const events = [
+      violentThreat('candidate_0_1', 10_000),
+      violentThreat('candidate_1_1', 20_000),
+    ]
+
+    const parse = vi.fn()
+      .mockResolvedValueOnce({
+        id: 'resp_review_partial',
+        status: 'completed',
+        output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+        output_parsed: { reviews: [confirmedReviewItem('review_0', 'Первый эпизод подтверждён.')] },
+        usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+      })
+      .mockResolvedValueOnce({
+        id: 'resp_review_retry',
+        status: 'completed',
+        output_text: '{"reviews":[{"reviewItemId":"review_1"}]}',
+        output_parsed: { reviews: [confirmedReviewItem('review_1', 'Второй эпизод подтверждён.')] },
+        usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 },
+      })
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], events)
+
+    expect(result.complete).toBe(true)
+    expect(result.requestCount).toBe(2)
+    expect(result.reviewedCandidates).toBe(2)
+    expect(result.reviewedEvents).toHaveLength(2)
+    expect(result.usage.totalTokens).toBe(220)
+    expect(parse).toHaveBeenCalledTimes(2)
+
+    const retryRequest = parse.mock.calls[1]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
+    const retryText = retryRequest.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
+    expect(retryText).toContain('review_1')
+    expect(retryText).not.toContain('"reviewItemId":"review_0"')
+    expect(retryText).toContain('retry ONLY for reviewItemIds omitted')
+  })
+
+  it('retains a first-pass candidate as not reviewed after one targeted retry also omits it', async () => {
     const transcript = normalizeTranscript([
       { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
     ])
-    const event: ClassifiedContentEvent = {
-      sourceCandidateId: 'candidate_0_1',
-      sceneId: 'scene_0_1',
-      category: 'violence',
-      subtype: 'violent_threat',
-      severity: 'high',
-      context: 'game',
-      confidence: 0.98,
-      startMs: 10_000,
-      endMs: 11_000,
-      evidenceRanges: [{ startMs: 10_000, endMs: 11_000 }],
-      sceneStartMs: 10_000,
-      sceneEndMs: 11_000,
-      text: 'Если не сделаешь это, жителям конец.',
-      reason: 'Персонаж угрожает жителям вредом, чтобы добиться выполнения условия.',
-      evidenceStrength: 'explicit',
-      evidenceSource: 'transcript',
-      engagementLevel: 'depiction',
-      portrayal: 'discouraged',
-      explicitness: 'mild',
-      assertionStatus: 'threatened',
-      details: {
-        harmLevel: 'threatened',
-        targetType: 'human_like_character',
-        weaponRole: 'none',
-        actionPurpose: 'threat',
-      },
-    }
+    const event = violentThreat('candidate_0_1', 10_000)
 
-    const fakeClient = {
-      responses: {
-        parse: vi.fn(async () => ({
-          id: 'resp_review_partial',
-          status: 'completed',
-          output_text: '{"reviews":[]}',
-          output_parsed: { reviews: [] },
-          usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-        })),
-      },
-    }
-    const provider = new OpenAIAnalysisProvider('test-key', 'gpt-test', undefined, fakeClient as never)
+    const parse = vi.fn()
+      .mockResolvedValueOnce({
+        id: 'resp_review_partial',
+        status: 'completed',
+        output_text: '{"reviews":[]}',
+        output_parsed: { reviews: [] },
+        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      })
+      .mockResolvedValueOnce({
+        id: 'resp_review_retry_partial',
+        status: 'completed',
+        output_text: '{"reviews":[]}',
+        output_parsed: { reviews: [] },
+        usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 },
+      })
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
     const result = await provider.review(transcript, 'ru', ['violence'], [event])
 
     expect(result.complete).toBe(false)
+    expect(result.requestCount).toBe(2)
     expect(result.reviewedCandidates).toBe(0)
     expect(result.reviewedEvents).toHaveLength(1)
     expect(result.reviewedEvents[0]?.review?.status).toBe('not_reviewed')
-    expect(result.reviewedEvents[0]?.subtype).toBe('violent_threat')
+    expect(result.reviewedEvents[0]?.review?.rationale).toContain('one targeted retry')
   })
+
+  it('marks duplicate or unknown review ids incomplete instead of silently accepting them', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event = violentThreat('candidate_0_1', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_bad_ids',
+      status: 'completed',
+      output_text: '{"reviews":[]}',
+      output_parsed: {
+        reviews: [
+          confirmedReviewItem('review_0'),
+          confirmedReviewItem('review_0'),
+          confirmedReviewItem('review_unknown'),
+        ],
+      },
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(false)
+    expect(result.requestCount).toBe(1)
+    expect(result.reviewedCandidates).toBe(1)
+    expect(parse).toHaveBeenCalledTimes(1)
+  })
+
 })

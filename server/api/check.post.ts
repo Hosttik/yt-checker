@@ -382,6 +382,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             enabledCategories,
             firstPassEvents,
           )
+          if (reviewResult.requestCount > 1) {
+            openaiUsage.requests += reviewResult.requestCount - 1
+            openaiStages.review.requests += reviewResult.requestCount - 1
+          }
           addUsage(openaiUsage, reviewResult.usage)
           addUsage(openaiStages.review, reviewResult.usage)
           reviewedEvents = reviewResult.reviewedEvents.filter((classifiedEvent) =>
