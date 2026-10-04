@@ -14,6 +14,9 @@ const availableRules: Array<{ id: RuleId; label: string }> = [
   { id: 'sexual_content', label: 'Сексуальные темы' },
   { id: 'violence', label: 'Насилие' },
   { id: 'alcohol_and_drugs', label: 'Алкоголь и наркотики' },
+  { id: 'scary_and_disturbing', label: 'Пугающие и тревожные темы' },
+  { id: 'tobacco_and_nicotine', label: 'Табак и никотин' },
+  { id: 'self_harm', label: 'Самоповреждение' },
 ]
 
 const runtimeConfig = useRuntimeConfig()
@@ -80,6 +83,10 @@ function formatRange(startMs: number, endMs: number): string {
 function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
   const seconds = Math.floor(timestampMs / 1000)
   return `https://www.youtube.com/watch?v=${videoId}&t=${seconds}s`
+}
+
+function violationsFor(video: ChannelCheckResponse['videos'][number], ruleId: RuleId) {
+  return video.violations.filter((item) => item.category === ruleId)
 }
 
 function unavailableText(reason?: TranscriptUnavailableReason): string {
@@ -197,18 +204,26 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             OpenAI: {{ result.openaiUsage.requests }} запросов,
             {{ result.openaiUsage.totalTokens }} tokens
             (input {{ result.openaiUsage.inputTokens }}, output {{ result.openaiUsage.outputTokens }},
-            reasoning {{ result.openaiUsage.reasoningTokens }}).
+            reasoning {{ result.openaiUsage.reasoningTokens }},
+            cached {{ result.openaiUsage.cachedTokens }},
+            cache writes {{ result.openaiUsage.cacheWriteTokens }}).
+          </p>
+          <p class="muted">
+            Речь: {{ result.speechQuality.fillerWordCount }} маркеров /
+            {{ result.speechQuality.fillersPer1000Words }} на 1000 слов,
+            непосредственных повторов {{ result.speechQuality.repeatedWordCount }} /
+            {{ result.speechQuality.repeatedWordsPer1000Words }} на 1000 слов.
           </p>
         </div>
       </div>
 
       <div class="summary-grid">
         <article v-for="item in result.summary" :key="item.ruleId" class="summary-card">
-          <strong>{{ item.hitCount }}</strong>
+          <strong>{{ item.violationCount }}</strong>
           <span>{{ item.label }}</span>
           <small>
-            Подтверждено: {{ item.confirmedCount }},
-            на проверку: {{ item.reviewCount }} · {{ item.videoCount }} видео
+            {{ item.affectedVideoCount }} видео
+            <template v-if="item.severity"> · максимум {{ item.severity }}</template>
           </small>
         </article>
       </div>
@@ -222,7 +237,15 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                 {{ unavailableText(video.unavailableReason) }}
               </p>
               <p v-if="video.status === 'analyzed' && video.transcriptLanguage" class="muted">
-                Transcript track: {{ video.transcriptLanguage }}.
+                Transcript track: expected {{ video.expectedCaptionLanguage || 'unknown' }},
+                resolved {{ video.transcriptLanguage }} · source {{ video.captionSource || 'unknown' }}.
+              </p>
+              <p v-if="video.captionSourceMismatch" class="warning">
+                TranscriptAPI вернул другой caption track, чем был выбран на preflight.
+              </p>
+              <p v-if="video.speechQuality" class="muted">
+                Речь: {{ video.speechQuality.fillersPer1000Words }} маркеров и
+                {{ video.speechQuality.repeatedWordsPer1000Words }} повторов на 1000 слов.
               </p>
               <p v-if="video.status === 'analyzed' && video.detections.length === 0" class="clean">
                 По выбранным правилам совпадений не найдено.
@@ -240,11 +263,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             <li v-for="detection in video.detections" :key="detection.ruleId">
               <div>
                 <strong>{{ detection.label }}</strong>
-                <small>
-                  Всего: {{ detection.count }} ·
-                  подтверждено: {{ detection.confirmedCount }} ·
-                  на проверку: {{ detection.reviewCount }}
-                </small>
+                <small>Всего: {{ detection.count }} · {{ detection.severity }}</small>
               </div>
               <div class="range-list">
                 <a
@@ -258,7 +277,11 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                   ▶ {{ formatRange(range.startMs, range.endMs) }}
                 </a>
               </div>
-              <div v-for="item in detection.evidence" :key="`${item.startMs}-${item.text}`" class="evidence">
+              <div
+                v-for="item in violationsFor(video, detection.ruleId)"
+                :key="`${item.startMs}-${item.text}`"
+                class="evidence"
+              >
                 <p>“{{ item.text }}”</p>
                 <small>{{ item.reason }} · {{ item.context }} · {{ item.severity }}</small>
               </div>
