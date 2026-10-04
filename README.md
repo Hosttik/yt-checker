@@ -39,7 +39,7 @@ OPENAI_REASONING_EFFORT=low
 
 ## OpenAI analyzer
 
-Статический system prompt экспортируется как `OPENAI_SYSTEM_PROMPT` из `server/services/openai-analysis.ts` и отправляется через `instructions` до динамического transcript. Пользовательский input содержит только язык, выбранные категории и компактный transcript с timestamps. Tools отключены (`tools: []`), `store: false`.
+Статический prompt экспортируется как `OPENAI_SYSTEM_PROMPT` из `server/services/openai-analysis.ts` и отправляется отдельным developer message с explicit prompt-cache breakpoint. Динамический transcript идёт отдельным user message. Model input содержит только segment id (`[123] текст`) без timestamps; миллисекунды остаются локально в `transcript.segments`. Tools отключены (`tools: []`), `store: false`.
 
 Structured Output строится через официальный SDK helper `zodTextFormat` и `responses.parse` со strict JSON Schema. Модель не вычисляет timestamps и не возвращает transcript text. Она выбирает только диапазон нормализованных сегментов:
 
@@ -57,7 +57,7 @@ Structured Output строится через официальный SDK helper 
 }
 ```
 
-Diagnostic mode добавляет только `rejectedCandidates`. В compact/minimal режиме это поле не запрашивается, чтобы не тратить output tokens.
+Diagnostic mode добавляет только `rejectedCandidates`. В compact/minimal режиме это поле не запрашивается, чтобы не тратить output tokens. Evidence должен быть минимальным: модель использует весь transcript как контекст, но возвращает самый короткий достаточный contiguous segment range.
 
 После ответа OpenAI сервер проверяет segment indexes и сам детерминированно строит `startMs`, `endMs` и точный `text` из нормализованного transcript. Поэтому модель не может ошибиться при переводе `00:08:31.840` в миллисекунды или придумать evidence text.
 
@@ -73,14 +73,14 @@ Diagnostic mode добавляет только `rejectedCandidates`. В compact
 Пример:
 
 ```text
-[0|00:00:00.199] Меня и моего друга заточили внутри
-[1|00:00:02.760] красного круга посреди луны.
-[2|00:01:49.960] Лёня дурёня.
+[0] Меня и моего друга заточили внутри
+[1] красного круга посреди луны.
+[2] Лёня дурёня.
 ```
 
 ## Результат и usage
 
-Minimal `result.json` содержит evidence и агрегированный OpenAI usage:
+Minimal `result.json` содержит canonical `violations`, компактные `detections`, caption-source metadata, локальные speech-quality метрики и агрегированный OpenAI usage:
 
 ```json
 {
@@ -90,6 +90,8 @@ Minimal `result.json` содержит evidence и агрегированный 
     "inputTokens": 1200,
     "outputTokens": 90,
     "reasoningTokens": 32,
+    "cachedTokens": 0,
+    "cacheWriteTokens": 0,
     "totalTokens": 1322
   },
   "videos": [{
@@ -110,7 +112,7 @@ Minimal `result.json` содержит evidence и агрегированный 
 }
 ```
 
-Usage хранится в `video.openaiUsage`, включая полученный usage отказов, неполных и невалидных ответов. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость OpenAI не хардкодится.
+Usage хранится в `video.openaiUsage`, включая `cachedTokens` и `cacheWriteTokens`. Reasoning tokens входят в outputTokens; totalTokens не складывается с ними повторно. Стоимость OpenAI не хардкодится. Для GPT-5.6+ используется explicit-only prompt caching: стабильный developer prompt кэшируется, изменяющийся transcript остаётся после breakpoint.
 
 TranscriptAPI credit accounting берётся из официального `X-Credits-Charged` response header; если header отсутствует (например, в mock-тестах), используется документированная стоимость endpoint. Поэтому `creditUsage` в результате должен совпадать с фактическим списанием провайдера.
 
@@ -120,9 +122,17 @@ Unit tests с подставленными ответами проверяют �
 
 - `none`: ничего не записывает.
 - `minimal`: только `result.json` с evidence и usage.
-- `diagnostic`: дополнительно `transcriptapi-exchanges.json` и `openai-analysis.json` с нормализованным transcript, metadata без ключа, raw structured response, parsed result, usage или безопасной ошибкой.
+- `diagnostic`: дополнительно `transcriptapi-exchanges.json` и `openai-analysis.json` с нормализованным transcript, компактными provider metadata (`requestId`, latency, cache diagnostics/usage), parsed result или безопасной ошибкой. Дубли raw JSON/text, повторяющиеся prompt/schema и encrypted reasoning blobs не сохраняются.
 
 Diagnostic требует `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`. API-ключ OpenAI никогда не попадает в request metadata, логи или файлы.
+
+## Дополнительные категории и качество речи
+
+Кроме исходных правил поддерживаются `scary_and_disturbing`, `tobacco_and_nicotine` и `self_harm`.
+
+Отдельно от safety-категорий локально и без дополнительного AI-вызова считается `speechQuality`: для русского — частота маркеров «ну», «короче», «типа», «как бы», «значит», «э/ээ», «эм», а для всех языков — непосредственные повторы слов. Это диагностическая метрика, а не оценка «хороший/плохой канал».
+
+Для каждого видео сохраняются `expectedCaptionLanguage` (что выбрал бесплатный `/youtube/info`) и фактический `transcriptLanguage`, а также `captionSource` и `captionSourceMismatch`. Это позволяет видеть случаи, когда провайдер рекламирует manual captions, но возвращает ASR track.
 
 ## Проверка
 
