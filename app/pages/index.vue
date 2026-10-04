@@ -261,11 +261,18 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                 {{ unavailableText(video.unavailableReason) }}
               </p>
               <p v-if="video.status === 'analyzed' && video.transcriptLanguage" class="muted">
-                Transcript track: expected {{ video.expectedCaptionLanguage || 'unknown' }},
-                resolved {{ video.transcriptLanguage }} · source {{ video.captionSource || 'unknown' }}.
+                Caption preflight: {{ video.preflightCaptionLanguage || video.expectedCaptionLanguage || 'unknown' }}.
+                Получен track: {{ video.transcriptLanguage }} · source {{ video.captionSource || 'unknown' }}.
               </p>
-              <p v-if="video.captionSourceMismatch" class="warning">
-                TranscriptAPI вернул другой caption track, чем был выбран на preflight.
+              <p
+                v-if="video.captionLanguageResolution === 'same_language_asr'"
+                class="muted"
+              >
+                TranscriptAPI разрешил выбранный язык в auto-generated track. Plain language в /info пока
+                не гарантирует human-made captions.
+              </p>
+              <p v-if="video.captionLanguageResolution === 'different_language'" class="warning">
+                TranscriptAPI вернул transcript на другом базовом языке, чем preflight hint.
               </p>
               <p v-if="video.status === 'provider_error'" class="error">
                 OpenAI analysis error: {{ video.analysisError?.type }}.
