@@ -68,7 +68,7 @@ function defaultSummary(category: ContentCategory): (events: ContentEvent[], dis
       ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
       : ''
     if (displayed.length === 0) {
-      return 'Найдены только минимально значимые элементы, скрытые в обычном родительском отчёте.' + contextText
+      return 'Для выбранного профиля значимых элементов не показано.'
     }
     return `Обнаружены элементы ${CONTENT_CATEGORY_LABELS[category]}: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
   }
