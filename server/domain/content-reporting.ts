@@ -201,6 +201,169 @@ function mergeOverlappingScenes(scenes: DraftScene[]): DraftScene[] {
   return merged
 }
 
+function normalizedReviewValue(value?: string): string | undefined {
+  const normalized = value?.trim().toLocaleLowerCase('ru-RU')
+  return normalized || undefined
+}
+
+function reviewValues(
+  scene: DraftScene,
+  field: 'actor' | 'target',
+): string[] {
+  return unique(scene.events
+    .map((event) => normalizedReviewValue(event.review?.[field]))
+    .filter((value): value is string => Boolean(value)))
+}
+
+function scenesShareReviewValue(
+  a: DraftScene,
+  b: DraftScene,
+  field: 'actor' | 'target',
+): boolean {
+  const left = reviewValues(a, field)
+  const right = reviewValues(b, field)
+  return left.some((value) => right.includes(value))
+}
+
+function sceneHasDirectedCoercion(scene: DraftScene): boolean {
+  return scene.events.some((event) =>
+    event.review?.intent === 'coercive'
+    && event.review.aggressionDirection === 'actor_to_target',
+  )
+}
+
+function scenesBelongToSameStoryArc(a: DraftScene, b: DraftScene): boolean {
+  const STORY_ARC_GAP_MS = 90_000
+  const gap = b.contextStartMs - a.contextEndMs
+  if (gap < 0 || gap > STORY_ARC_GAP_MS || !scenesAreCompatible(a, b)) return false
+
+  const sameActor = scenesShareReviewValue(a, b, 'actor')
+  const sameTarget = scenesShareReviewValue(a, b, 'target')
+  const leftActors = reviewValues(a, 'actor')
+  const rightActors = reviewValues(b, 'actor')
+  const coerciveContinuation = sceneHasDirectedCoercion(a)
+    && sceneHasDirectedCoercion(b)
+    && (sameActor || leftActors.length === 0 || rightActors.length === 0)
+
+  return (sameActor && sameTarget) || coerciveContinuation
+}
+
+function mergeStoryArcScenes(scenes: DraftScene[]): DraftScene[] {
+  const merged: DraftScene[] = []
+
+  for (const scene of [...scenes].sort((a, b) => a.contextStartMs - b.contextStartMs)) {
+    const previous = merged.at(-1)
+    if (!previous || !scenesBelongToSameStoryArc(previous, scene)) {
+      merged.push({ ...scene, events: [...scene.events] })
+      continue
+    }
+
+    previous.events.push(...scene.events)
+    previous.originSceneIds = unique([...previous.originSceneIds, ...scene.originSceneIds])
+    previous.contextStartMs = Math.min(previous.contextStartMs, scene.contextStartMs)
+    previous.contextEndMs = Math.max(previous.contextEndMs, scene.contextEndMs)
+    previous.sceneId = `${previous.sceneId}+${scene.sceneId}`
+  }
+
+  return merged
+}
+
+function moderateEventBelongsOnMain(event: ContentEvent): boolean {
+  if (event.parentRelevance !== 'moderate') return false
+
+  const review = event.review
+  if (review?.status === 'uncertain' && review.evidenceSufficiency !== 'sufficient') return false
+
+  if (event.category !== 'violence' && event.category !== 'scary_and_disturbing') return true
+
+  const fictional = event.context === 'game' || event.context === 'fiction'
+  if (!fictional) return true
+
+  if (event.assertionStatus === 'reported'
+    || event.assertionStatus === 'hypothetical'
+    || event.assertionStatus === 'negated'
+    || event.engagementLevel === 'mention') {
+    return false
+  }
+
+  if (event.category === 'violence') {
+    if (event.subtype === 'fantasy_combat') return false
+
+    if (event.subtype === 'destruction'
+      && (review?.consequence === 'property_only'
+        || event.details.targetType === 'environment'
+        || event.details.targetType === 'object')) {
+      return false
+    }
+
+    if (review?.intent === 'coercive' && review.aggressionDirection === 'actor_to_target') {
+      return true
+    }
+
+    if (event.subtype === 'violent_threat'
+      || event.subtype === 'life_threatening_situation'
+      || event.subtype === 'physical_attack') {
+      return true
+    }
+
+    if (event.subtype === 'dangerous_situation') {
+      const meaningfulDistress = review?.distress === 'clear' || review?.distress === 'strong'
+      const seriousConsequence = review?.consequence === 'threatened_harm'
+        || review?.consequence === 'injury_or_severe_harm'
+        || review?.consequence === 'death'
+      const sustained = review?.duration === 'sustained'
+        || review?.repetition === 'repeated'
+        || review?.repetition === 'pattern'
+      return Boolean(meaningfulDistress && seriousConsequence && sustained)
+    }
+
+    return false
+  }
+
+  if (review?.intent === 'coercive' && review.aggressionDirection === 'actor_to_target') {
+    return true
+  }
+
+  if (event.subtype === 'threatening_character'
+    || event.subtype === 'pursuit'
+    || event.subtype === 'intense_peril'
+    || event.subtype === 'confinement') {
+    const meaningfulDistress = !review || review.distress === 'clear' || review.distress === 'strong'
+    return event.details.threatPresent && meaningfulDistress
+  }
+
+  return Boolean(
+    review
+    && (review.distress === 'clear' || review.distress === 'strong')
+    && (review.duration === 'sustained'
+      || review.repetition === 'repeated'
+      || review.repetition === 'pattern'),
+  )
+}
+
+function sceneAttention(events: ContentEvent[], level: ReportLevel): 'main' | 'details' {
+  if (level === 'high') return 'main'
+  if (level !== 'moderate') return 'details'
+  return events.some(moderateEventBelongsOnMain) ? 'main' : 'details'
+}
+
+function russianCountForm(count: number, one: string, few: string, many: string): string {
+  const mod100 = count % 100
+  const mod10 = count % 10
+  if (mod100 >= 11 && mod100 <= 14) return many
+  if (mod10 === 1) return one
+  if (mod10 >= 2 && mod10 <= 4) return few
+  return many
+}
+
+function detailCountText(count: number): string {
+  if (count === 1) return '1 лёгкая или спорная находка вынесена в подробности'
+  const noun = russianCountForm(count, 'находка', 'находки', 'находок')
+  const adjective = russianCountForm(count, 'лёгкая или спорная', 'лёгкие или спорные', 'лёгких или спорных')
+  const verb = russianCountForm(count, 'вынесена', 'вынесены', 'вынесено')
+  return `${count} ${adjective} ${noun} ${verb} в подробности`
+}
+
 export function buildPresentationScenes(events: ContentEvent[]): PresentationScene[] {
   const groups = new Map<string, ContentEvent[]>()
   for (const event of events.filter((item) => item.displayLevel !== 'hidden')) {
@@ -239,7 +402,7 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
     })
   }
 
-  return mergeOverlappingScenes(drafts)
+  return mergeStoryArcScenes(mergeOverlappingScenes(drafts))
     .map((scene) => {
       const compactEvidence = evidenceRanges(scene.events)
       const level = maxReportLevel(scene.events.map(eventLevel))
@@ -256,7 +419,7 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
         startMs: compactEvidence[0]?.startMs ?? scene.contextStartMs,
         endMs: compactEvidence.at(-1)?.endMs ?? scene.contextEndMs,
         level,
-        attention: (level === 'moderate' || level === 'high' ? 'main' : 'details') as 'main' | 'details',
+        attention: sceneAttention(scene.events, level),
         reviewStatus,
         categories: sceneCategories(scene.events),
         evidenceRanges: compactEvidence,
@@ -280,10 +443,13 @@ export function buildVideoContentSummary(scenes: PresentationScene[]): string {
   if (main.length === 0) {
     return `Существенных сцен в проанализированных субтитрах не обнаружено; лёгких или спорных находок: ${details.length}.`
   }
+
+  const mainNoun = russianCountForm(main.length, 'сцена', 'сцены', 'сцен')
+  const mainRelative = main.length === 1 ? 'на которую' : 'на которые'
   const detailSuffix = details.length > 0
-    ? ` Ещё ${details.length} лёгких или спорных находок вынесено в подробности.`
+    ? ` Ещё ${detailCountText(details.length)}.`
     : ''
-  return `В проанализированных субтитрах есть ${main.length} сцен, на которые стоит обратить внимание.${detailSuffix}`
+  return `В проанализированных субтитрах есть ${main.length} ${mainNoun}, ${mainRelative} стоит обратить внимание.${detailSuffix}`
 }
 
 export function buildVideoCategoryReports(

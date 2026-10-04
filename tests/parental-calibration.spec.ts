@@ -4,7 +4,7 @@ import type {
   ContentEventReview,
 } from '../shared/types/content'
 import { applyContentPolicy } from '../server/domain/content-policy'
-import { buildPresentationScenes } from '../server/domain/content-reporting'
+import { buildPresentationScenes, buildVideoContentSummary } from '../server/domain/content-reporting'
 
 function review(overrides: Partial<ContentEventReview> = {}): ContentEventReview {
   return {
@@ -133,6 +133,124 @@ describe('parent relevance calibration', () => {
     }), 'monster-news', 'normal')
 
     expect(event.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
+  })
+
+  it('keeps an active fictional threat on the main screen at moderate relevance', () => {
+    const event = applyContentPolicy(scary('threatening_character', {
+      severity: 'medium',
+      assertionStatus: 'actual',
+      engagementLevel: 'depiction',
+      text: 'Зомби скребутся снаружи, быстрее закрываем дверь.',
+      reason: 'Персонаж прячется за дверью, пока зомби находятся прямо снаружи.',
+      details: {
+        fearIntensity: 'moderate',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: true,
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        intent: 'unclear',
+        aggressionDirection: 'actor_to_target',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        highPriorityReason: undefined,
+        parentSummary: 'Зомби находятся у двери, пока герой пытается укрыться внутри.',
+      }),
+    }), 'active-zombie-threat', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('main')
+  })
+
+  it('keeps uncertain partial-evidence moderate scenes in details', () => {
+    const event = applyContentPolicy(scary('threatening_character', {
+      severity: 'medium',
+      assertionStatus: 'actual',
+      text: 'О нет, зомби тут. [стон]',
+      reason: 'Герой говорит, что зомби рядом; дальше слышен звук.',
+      details: {
+        fearIntensity: 'moderate',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: true,
+      },
+      review: review({
+        status: 'uncertain',
+        recommendedParentRelevance: 'moderate',
+        evidenceSufficiency: 'partial',
+        intent: 'unclear',
+        aggressionDirection: 'unclear',
+        distress: 'clear',
+        consequence: 'unclear',
+        duration: 'momentary',
+        highPriorityReason: undefined,
+        parentSummary: 'Герой говорит, что зомби рядом, но дальнейшее действие неясно.',
+      }),
+    }), 'uncertain-zombie', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
+  })
+
+  it('keeps routine fictional fantasy combat in details', () => {
+    const event = applyContentPolicy(violence('fantasy_combat', {
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      engagementLevel: 'participation',
+      text: 'Я раскидал зомби по одному и всех вынес.',
+      reason: 'Герой участвует в обычной игровой драке с зомби.',
+      details: {
+        harmLevel: 'actual',
+        targetType: 'fantasy_creature',
+        weaponRole: 'none',
+        actionPurpose: 'attack',
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        distress: 'none',
+        consequence: 'unclear',
+        duration: 'brief',
+        repetition: 'repeated',
+        highPriorityReason: undefined,
+        parentSummary: 'Герой дерётся с зомби и говорит, что победил их.',
+      }),
+    }), 'routine-fantasy-combat', 'normal')
+
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
+  })
+
+  it('keeps property-only fictional destruction in details', () => {
+    const event = applyContentPolicy(violence('destruction', {
+      severity: 'high',
+      context: 'game',
+      assertionStatus: 'actual',
+      text: 'Чёрная дыра разрушила половину деревни и засасывает дом.',
+      reason: 'Игровая чёрная дыра разрушает здания.',
+      details: {
+        harmLevel: 'actual',
+        targetType: 'environment',
+        weaponRole: 'none',
+        actionPurpose: 'destruction',
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        intent: 'accidental',
+        aggressionDirection: 'none',
+        distress: 'clear',
+        consequence: 'property_only',
+        duration: 'sustained',
+        repetition: 'repeated',
+        highPriorityReason: undefined,
+        parentSummary: 'Чёрная дыра разрушает часть деревни и затягивает дом.',
+      }),
+    }), 'property-destruction', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
   })
 
   it('keeps sustained coercive confinement high', () => {
@@ -236,4 +354,119 @@ describe('parent relevance calibration', () => {
     expect(scene.mitigatingContext).toBe('Сцена происходит в Minecraft и заканчивается без описанной травмы.')
     expect(scene.priorityReason).toBe('Это направленная угроза оружием конкретному персонажу.')
   })
+  it('merges nearby coercive scenes from one story arc into one card', () => {
+    const first = applyContentPolicy(violence('dangerous_situation', {
+      sceneId: 'arc-1',
+      severity: 'medium',
+      context: 'fiction',
+      startMs: 10_000,
+      endMs: 20_000,
+      sceneStartMs: 10_000,
+      sceneEndMs: 20_000,
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        actor: 'клон мэра',
+        target: 'мэр',
+        intent: 'coercive',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        highPriorityReason: undefined,
+        parentSummary: 'Клон удерживает мэра, который просит выпустить его.',
+      }),
+    }), 'arc-first', 'normal')
+    const second = applyContentPolicy(violence('dangerous_situation', {
+      sceneId: 'arc-2',
+      severity: 'medium',
+      context: 'fiction',
+      startMs: 45_000,
+      endMs: 55_000,
+      sceneStartMs: 45_000,
+      sceneEndMs: 55_000,
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        actor: undefined,
+        target: 'жители деревни',
+        intent: 'coercive',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        highPriorityReason: undefined,
+        parentSummary: 'Говорящий угрожает не выпускать жителей из деревни.',
+      }),
+    }), 'arc-second', 'normal')
+    const third = applyContentPolicy(violence('dangerous_situation', {
+      sceneId: 'arc-3',
+      severity: 'high',
+      context: 'fiction',
+      startMs: 85_000,
+      endMs: 95_000,
+      sceneStartMs: 85_000,
+      sceneEndMs: 95_000,
+      review: review({
+        recommendedParentRelevance: 'high',
+        actor: 'клон мэра',
+        target: 'жители деревни',
+        intent: 'coercive',
+        consequence: 'threatened_harm',
+        duration: 'sustained',
+        parentSummary: 'Клон запрещает жителям уходить и требует полного подчинения.',
+        highPriorityReason: 'Жителей принуждают оставаться и выполнять приказы.',
+      }),
+    }), 'arc-third', 'normal')
+
+    const scenes = buildPresentationScenes([first, second, third])
+    expect(scenes).toHaveLength(1)
+    expect(scenes[0]?.level).toBe('high')
+    expect(scenes[0]?.attention).toBe('main')
+    expect(scenes[0]?.events).toHaveLength(3)
+    expect(scenes[0]?.summary).toBe('Клон запрещает жителям уходить и требует полного подчинения.')
+  })
+
+  it('uses correct Russian singular forms in the video summary', () => {
+    const mainEvent = applyContentPolicy(violence('life_threatening_situation', {
+      sceneId: 'summary-main',
+      assertionStatus: 'actual',
+      details: {
+        harmLevel: 'threatened',
+        targetType: 'human_like_character',
+        weaponRole: 'none',
+        actionPurpose: 'threat',
+      },
+      review: review({
+        intent: 'coercive',
+        distress: 'strong',
+        duration: 'sustained',
+        parentSummary: 'Связанные персонажи находятся перед приближающимся поездом.',
+        highPriorityReason: 'Персонажи не могут уйти от непосредственно приближающегося поезда.',
+      }),
+    }), 'summary-main', 'normal')
+    const detailEvent = applyContentPolicy(violence('fantasy_combat', {
+      sceneId: 'summary-detail',
+      severity: 'medium',
+      startMs: 200_000,
+      endMs: 205_000,
+      sceneStartMs: 200_000,
+      sceneEndMs: 205_000,
+      details: {
+        harmLevel: 'actual',
+        targetType: 'fantasy_creature',
+        weaponRole: 'none',
+        actionPurpose: 'attack',
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        actor: 'герой',
+        target: 'зомби',
+        distress: 'none',
+        consequence: 'unclear',
+        highPriorityReason: undefined,
+        parentSummary: 'Герой участвует в обычной игровой драке с зомби.',
+      }),
+    }), 'summary-detail', 'normal')
+
+    const summary = buildVideoContentSummary(buildPresentationScenes([mainEvent, detailEvent]))
+    expect(summary).toBe(
+      'В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание. Ещё 1 лёгкая или спорная находка вынесена в подробности.',
+    )
+  })
+
 })
