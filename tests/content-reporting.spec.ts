@@ -121,4 +121,45 @@ describe('content reporting', () => {
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
   })
+  it('merges overlapping narrative scenes even when the model used different scene ids', () => {
+    const first = violenceEvent({
+      id: 'scene-a-event',
+      sceneId: 'scene-a',
+      startMs: 400_000,
+      endMs: 405_000,
+      sceneStartMs: 357_000,
+      sceneEndMs: 453_000,
+    })
+    const second = violenceEvent({
+      id: 'scene-b-event',
+      sceneId: 'scene-b',
+      startMs: 500_000,
+      endMs: 505_000,
+      sceneStartMs: 403_000,
+      sceneEndMs: 561_000,
+    })
+
+    const scenes = buildPresentationScenes([first, second])
+    expect(scenes).toHaveLength(1)
+    expect(scenes[0]?.events).toHaveLength(2)
+    expect(scenes[0]?.evidenceRanges).toEqual([
+      { startMs: 400_000, endMs: 405_000 },
+      { startMs: 500_000, endMs: 505_000 },
+    ])
+  })
+
+  it('keeps presentation timestamps focused on compact evidence rather than the whole scene', () => {
+    const event = violenceEvent({
+      startMs: 200_000,
+      endMs: 205_000,
+      sceneStartMs: 180_000,
+      sceneEndMs: 360_000,
+    })
+
+    const scene = buildPresentationScenes([event])[0]!
+    expect(scene.startMs).toBe(200_000)
+    expect(scene.endMs).toBe(205_000)
+    expect(scene.evidenceRanges).toEqual([{ startMs: 200_000, endMs: 205_000 }])
+  })
+
 })
