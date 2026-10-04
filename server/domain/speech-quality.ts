@@ -60,8 +60,11 @@ function interpretation(
       : 'Речевые маркеры из поддерживаемого списка не обнаружены.'
     : 'Для этого языка речевые маркеры пока не оцениваются.'
 
+  const repetitionPrefix = options.asrVideos > 0 && options.asrVideos === options.analyzedVideos
+    ? 'В автоматических субтитрах повторы слов подряд встречаются'
+    : 'Повторы слов подряд встречаются'
   const repetitionSummary = repeatedWordCount > 0
-    ? `Повторы слов подряд встречаются ${frequencyText(repetitionFrequency)} — примерно 1 раз на ${repetitionEveryWords} слов.`
+    ? `${repetitionPrefix} ${frequencyText(repetitionFrequency)} — примерно 1 раз на ${repetitionEveryWords} слов.`
     : 'Повторы слов подряд не обнаружены.'
 
   const asrNote = options.asrVideos > 0
