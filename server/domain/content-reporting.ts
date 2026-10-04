@@ -301,6 +301,12 @@ export function buildChannelCategoryReports(
     const highlightedVideos = perVideo.filter((item) =>
       item.events.some((event) => event.displayLevel === 'highlight'),
     ).length
+    const moderatePlusAffectedVideos = perVideo.filter((item) =>
+      item.events.some((event) =>
+        event.displayLevel !== 'hidden'
+        && (event.parentRelevance === 'moderate' || event.parentRelevance === 'high'),
+      ),
+    ).length
     const maxDisplayedRelevance = displayed.reduce<ParentRelevance>(
       (max, event) => PARENT_RELEVANCE_RANK[event.parentRelevance] > PARENT_RELEVANCE_RANK[max]
         ? event.parentRelevance
@@ -317,6 +323,8 @@ export function buildChannelCategoryReports(
     else if (level === 'moderate' && affectedRatio >= 0.8 && displayed.length >= 5) level = 'high'
     if (displayed.some((event) => event.parentRelevance === 'high')) level = 'high'
     const prevalence = prevalenceLevel(affectedVideos, analyzedVideos)
+    const moderatePlusAffectedRatio = analyzedVideos > 0 ? moderatePlusAffectedVideos / analyzedVideos : 0
+    const moderatePlusPrevalence = prevalenceLevel(moderatePlusAffectedVideos, analyzedVideos)
 
     const subtypeMap = new Map<string, { eventCount: number; videoIds: Set<string> }>()
     for (const item of perVideo) {
@@ -337,6 +345,9 @@ export function buildChannelCategoryReports(
       peakConcern,
       prevalence,
       affectedRatio,
+      moderatePlusPrevalence,
+      moderatePlusAffectedRatio,
+      moderatePlusAffectedVideos,
       analyzedVideos,
       rawAffectedVideos,
       affectedVideos,
