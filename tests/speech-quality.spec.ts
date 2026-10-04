@@ -30,7 +30,7 @@ describe('speech quality metrics', () => {
     ]))
     expect(result.examples.length).toBeGreaterThan(0)
     expect(result.interpretation.summary).toContain('Речевые маркеры')
-    expect(result.interpretation.summary).toContain('Повторы слов подряд')
+    expect(result.interpretation.summary.toLocaleLowerCase()).toContain('повторы слов подряд')
   })
 
   it('does not classify Russian-specific fillers for unsupported languages', () => {
@@ -64,6 +64,7 @@ describe('speech quality metrics', () => {
     expect(result.asrVideos).toBe(1)
     expect(result.interpretation.summary).toMatch(/примерно 1 раз на/)
     expect(result.interpretation.note).toContain('auto-generated')
+    expect(result.interpretation.summary).toContain('В автоматических субтитрах')
     expect(result.interpretation.note).toContain('ASR')
   })
 
