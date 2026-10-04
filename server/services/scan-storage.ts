@@ -8,13 +8,14 @@ interface OpenAIDiagnosticEntry {
   videoId: string
   normalizedTranscript: string
   requestMetadata: OpenAIAnalysisResult['requestMetadata']
-  rawStructuredResponse?: unknown
+  provider?: OpenAIAnalysisResult['provider']
   parsedResult?: {
     violations: OpenAIAnalysisResult['violations']
     rejectedCandidates?: OpenAIAnalysisResult['rejectedCandidates']
   }
   usage?: OpenAIAnalysisResult['usage']
   error?: { type: string; status?: number; code?: string; message: string }
+  outputText?: string
 }
 
 export class ScanStorage {
@@ -42,7 +43,7 @@ export class ScanStorage {
       videoId,
       normalizedTranscript,
       requestMetadata: result.requestMetadata,
-      rawStructuredResponse: result.rawResponse,
+      provider: result.provider,
       parsedResult: {
         violations: result.violations,
         rejectedCandidates: result.rejectedCandidates,
@@ -62,8 +63,9 @@ export class ScanStorage {
       videoId,
       normalizedTranscript,
       requestMetadata,
-      rawStructuredResponse: error.rawResponse,
+      provider: error.provider,
       usage: error.usage,
+      outputText: error.outputText,
       error: {
         type: error.type,
         status: error.status,
@@ -83,7 +85,7 @@ export class ScanStorage {
           : video
       }),
       diagnostic: {
-        note: 'Normalized transcripts and OpenAI responses are stored only because diagnostic mode was explicitly enabled.',
+        note: 'Normalized transcripts and compact provider diagnostics are stored only because diagnostic mode was explicitly enabled.',
       },
     }
   }
