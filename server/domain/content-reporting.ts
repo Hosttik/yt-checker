@@ -242,11 +242,22 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
   return mergeOverlappingScenes(drafts)
     .map((scene) => {
       const compactEvidence = evidenceRanges(scene.events)
+      const level = maxReportLevel(scene.events.map(eventLevel))
+      const reviewedCount = scene.events.filter((event) =>
+        event.review && event.review.status !== 'not_reviewed',
+      ).length
+      const reviewStatus = reviewedCount === 0
+        ? 'unreviewed' as const
+        : reviewedCount === scene.events.length
+          ? 'reviewed' as const
+          : 'mixed' as const
       return {
         sceneId: scene.sceneId,
         startMs: compactEvidence[0]?.startMs ?? scene.contextStartMs,
         endMs: compactEvidence.at(-1)?.endMs ?? scene.contextEndMs,
-        level: maxReportLevel(scene.events.map(eventLevel)),
+        level,
+        attention: (level === 'moderate' || level === 'high' ? 'main' : 'details') as 'main' | 'details',
+        reviewStatus,
         categories: sceneCategories(scene.events),
         evidenceRanges: compactEvidence,
         label: sceneLabel(scene.events),
@@ -255,6 +266,22 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
       }
     })
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+}
+
+export function buildVideoContentSummary(scenes: PresentationScene[]): string {
+  const main = scenes.filter((scene) => scene.attention === 'main')
+  const details = scenes.filter((scene) => scene.attention === 'details')
+
+  if (main.length === 0 && details.length === 0) {
+    return 'В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено.'
+  }
+  if (main.length === 0) {
+    return `Существенных сцен в проанализированных субтитрах не обнаружено; лёгких или спорных находок: ${details.length}.`
+  }
+  const detailSuffix = details.length > 0
+    ? ` Ещё ${details.length} лёгких или спорных находок вынесено в подробности.`
+    : ''
+  return `В проанализированных субтитрах есть ${main.length} сцен, на которые стоит обратить внимание.${detailSuffix}`
 }
 
 export function buildVideoCategoryReports(
