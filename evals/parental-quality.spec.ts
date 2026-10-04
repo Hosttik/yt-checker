@@ -93,8 +93,12 @@ interface NewVideoResult {
   videoId: string
   transcriptHash: string
   firstPassEvents: ClassifiedContentEvent[]
+  onePassEvents: ContentEvent[]
   events: ContentEvent[]
+  onePassSceneCount: number
   sceneCount: number
+  detectorTokens: number
+  detectorLatencyMs: number
   requests: number
   tokens: number
   latencyMs: number
@@ -272,6 +276,13 @@ async function runCurrent(
   profile: AnalysisProfile,
 ): Promise<NewVideoResult> {
   const detection = await detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false)
+  const onePassValidation = validateClassifiedEvents(detection.classifiedEvents)
+  const onePassEvents = normalizeClassifiedEvents(onePassValidation.accepted)
+    .map((event, index) => applyContentPolicy(
+      event,
+      `${record.videoId}:one-pass:${index}:${event.category}:${event.subtype}`,
+      profile,
+    ))
   let reviewed = detection.classifiedEvents
   let requests = 1
   let tokens = detection.usage.totalTokens
@@ -296,8 +307,12 @@ async function runCurrent(
     videoId: record.videoId,
     transcriptHash: record.transcriptHash,
     firstPassEvents: detection.classifiedEvents,
+    onePassEvents,
     events,
+    onePassSceneCount: buildPresentationScenes(onePassEvents).length,
     sceneCount: buildPresentationScenes(events).length,
+    detectorTokens: detection.usage.totalTokens,
+    detectorLatencyMs: detection.provider.latencyMs,
     requests,
     tokens,
     latencyMs,
@@ -371,10 +386,14 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     const runOutputs: Array<{
       metrics: MetricSet
+      onePassMetrics: MetricSet
       firstPassSubstantialMisses: number
       requests: number
       tokens: number
       latencyMs: number
+      detectorTokens: number
+      detectorLatencyMs: number
+      onePassSceneCount: number
       sceneCount: number
       priorities: Record<string, Priority>
     }> = []
@@ -389,16 +408,19 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       }
 
       const currentByVideo = new Map<string, ContentEvent[]>()
+      const onePassByVideo = new Map<string, ContentEvent[]>()
       const firstPassByVideo = new Map<string, ClassifiedContentEvent[]>()
       for (const record of selectedRecords) {
         const output = newByKey.get(`${record.videoId}:${record.transcriptHash}`)
         if (!output) continue
         currentByVideo.set(record.videoId, output.events)
+        onePassByVideo.set(record.videoId, output.onePassEvents)
         firstPassByVideo.set(record.videoId, output.firstPassEvents)
       }
       const outputs = [...newByKey.values()]
       runOutputs.push({
         metrics: metricsFor(applicableAnnotations, currentByVideo),
+        onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
         firstPassSubstantialMisses: firstPassMisses(
           applicableAnnotations.filter((item) => item.priority === 'main'),
           firstPassByVideo,
@@ -406,6 +428,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         requests: outputs.reduce((sum, item) => sum + item.requests, 0),
         tokens: outputs.reduce((sum, item) => sum + item.tokens, 0),
         latencyMs: outputs.reduce((sum, item) => sum + item.latencyMs, 0),
+        detectorTokens: outputs.reduce((sum, item) => sum + item.detectorTokens, 0),
+        detectorLatencyMs: outputs.reduce((sum, item) => sum + item.detectorLatencyMs, 0),
+        onePassSceneCount: outputs.reduce((sum, item) => sum + item.onePassSceneCount, 0),
         sceneCount: outputs.reduce((sum, item) => sum + item.sceneCount, 0),
         priorities: priorities(applicableAnnotations, currentByVideo),
       })
@@ -455,6 +480,13 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       },
       baselineByScan,
       baselineCombined,
+      currentOnePass: {
+        metrics: current.onePassMetrics,
+        requests: selected.length,
+        tokens: current.detectorTokens,
+        latencyMs: current.detectorLatencyMs,
+        sceneCount: current.onePassSceneCount,
+      },
       newTwoPass: {
         ...current,
         repeatedRuns: runs,
@@ -484,6 +516,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     console.log(`Saved quality report: ${outputPath}`)
 
     expect(current.metrics.shownCases).toBeGreaterThan(0)
+    expect(current.metrics.substantialMisses).toBeLessThanOrEqual(current.onePassMetrics.substantialMisses)
+    expect(current.metrics.lowValueCards).toBeLessThanOrEqual(current.onePassMetrics.lowValueCards)
+    expect(current.metrics.unsupportedClaims).toBeLessThanOrEqual(current.onePassMetrics.unsupportedClaims)
     expect(current.metrics.substantialMisses).toBeLessThanOrEqual(baselineCombined.substantialMisses)
     expect(current.metrics.lowValueCards).toBeLessThanOrEqual(baselineCombined.lowValueCards)
     expect(current.metrics.unsupportedClaims).toBeLessThanOrEqual(baselineCombined.unsupportedClaims)
