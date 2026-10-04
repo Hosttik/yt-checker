@@ -484,6 +484,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     categories: channelReport.map((item) => ({
       category: item.category,
       level: item.level,
+      rawAffectedVideos: item.rawAffectedVideos,
       affectedVideos: item.affectedVideos,
       rawEventCount: item.rawEventCount,
       displayedEventCount: item.displayedEventCount,
