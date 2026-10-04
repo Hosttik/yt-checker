@@ -30,7 +30,7 @@ npm run dev
 ```dotenv
 NUXT_TRANSCRIPT_API_KEY=
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.6-luna
+OPENAI_MODEL=gpt-6-luna
 OPENAI_REASONING_EFFORT=low
 ```
 
