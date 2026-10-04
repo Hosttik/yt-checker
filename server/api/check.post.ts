@@ -19,7 +19,7 @@ import {
   buildPresentationScenes,
   buildVideoCategoryReports,
 } from '../domain/content-reporting'
-import { captionLanguageMismatch, captionSource } from '../domain/caption-language'
+import { captionLanguageResolution, captionSource } from '../domain/caption-language'
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
 import {
@@ -69,6 +69,7 @@ function mergeMetadata(video: VideoMetadata, info: {
     ...video,
     title: info.metadata?.title ?? video.title,
     thumbnailUrl: info.metadata?.thumbnailUrl ?? video.thumbnailUrl,
+    preflightCaptionLanguage: info.matchedLanguage,
     expectedCaptionLanguage: info.matchedLanguage,
   }
 }
@@ -377,7 +378,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         status: 'analyzed',
         transcriptLanguage: transcript.language,
         captionSource: captionSource(transcript.language),
-        captionSourceMismatch: captionLanguageMismatch(video.expectedCaptionLanguage, transcript.language),
+        captionLanguageResolution: captionLanguageResolution(video.preflightCaptionLanguage, transcript.language),
         openaiUsage: analysis.usage,
         speechQuality,
         violations,
@@ -413,7 +414,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         openaiUsage: analysisError.usage,
         transcriptLanguage: transcript.language,
         captionSource: captionSource(transcript.language),
-        captionSourceMismatch: captionLanguageMismatch(video.expectedCaptionLanguage, transcript.language),
+        captionLanguageResolution: captionLanguageResolution(video.preflightCaptionLanguage, transcript.language),
         speechQuality: normalized ? analyzeSpeechQuality(normalized, transcript.language ?? languagePriority) : undefined,
         analysisError: {
           type: analysisError.type,
