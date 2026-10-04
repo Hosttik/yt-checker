@@ -11,6 +11,7 @@ import type {
 import { RULE_IDS, SCAN_STORAGE_MODES } from '../../shared/types/check'
 import { buildDetections, buildRuleSummary } from '../domain/analyze-transcript'
 import { normalizeTranscript } from '../domain/normalize-transcript'
+import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
 import { OpenAIAnalysisError, OpenAIAnalysisProvider } from '../services/openai-analysis'
 import { ScanStorage } from '../services/scan-storage'
 import {
@@ -19,6 +20,7 @@ import {
   type TranscriptApiExchange,
 } from '../services/transcript-api'
 import { createScanLogger } from '../utils/logger'
+import { mapWithConcurrency } from '../utils/concurrency'
 
 const languageSchema = z.string().trim().max(100).default('').refine((value) => {
   if (!value) return true
@@ -44,13 +46,25 @@ function runtimeBoolean(value: unknown): boolean {
 }
 
 function mergeMetadata(video: VideoMetadata, info: {
+  matchedLanguage?: string
   metadata?: { title?: string; thumbnailUrl?: string }
 }): VideoMetadata {
   return {
     ...video,
     title: info.metadata?.title ?? video.title,
     thumbnailUrl: info.metadata?.thumbnailUrl ?? video.thumbnailUrl,
+    expectedCaptionLanguage: info.matchedLanguage,
   }
+}
+
+function captionSource(language?: string): 'manual' | 'asr' | 'unknown' {
+  if (!language) return 'unknown'
+  return language.toLowerCase().startsWith('asr-') || language.toLowerCase() === 'asr' ? 'asr' : 'manual'
+}
+
+function captionLanguageMismatch(expected?: string, resolved?: string): boolean {
+  if (!expected || !resolved) return false
+  return expected.toLowerCase().replace(/_/g, '-') !== resolved.toLowerCase().replace(/_/g, '-')
 }
 
 function providerLogFields(exchange: TranscriptApiExchange): Record<string, unknown> {
@@ -69,6 +83,8 @@ function addUsage(total: AggregateOpenAIUsage, usage: VideoScanResult['openaiUsa
   total.inputTokens += usage.inputTokens
   total.outputTokens += usage.outputTokens
   total.reasoningTokens += usage.reasoningTokens
+  total.cachedTokens += usage.cachedTokens
+  total.cacheWriteTokens += usage.cacheWriteTokens
   total.totalTokens += usage.totalTokens
 }
 
@@ -152,41 +168,52 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   const inspectedIds = new Set<string>()
   const eligibleVideos: VideoMetadata[] = []
-  async function inspectVideos(videos: VideoMetadata[], source: 'latest' | 'fallback'): Promise<void> {
-    for (const video of videos) {
-      if (inspectedIds.has(video.id)) continue
-      inspectedIds.add(video.id)
-      try {
-        const info = await transcriptProvider.getVideoInfo(video.id, languagePriority)
-        logger.debug('video.preflight.completed', {
-          videoId: video.id,
-          source,
-          captionAvailable: info.available,
-          matchedLanguage: info.matchedLanguage ?? null,
-        })
-        if (info.available) eligibleVideos.push(mergeMetadata(video, info))
-      } catch (error) {
-        logger.warn('video.preflight.failed', { videoId: video.id, reason: transcriptReason(error) })
-        // /youtube/info already converts a normal 404/no-captions case into available=false.
-        // Anything thrown here is a provider/configuration failure and should not be hidden.
-        throw error
-      }
+  async function inspectVideos(
+    videos: VideoMetadata[],
+    source: 'latest' | 'fallback',
+    desiredEligible = Number.POSITIVE_INFINITY,
+  ): Promise<void> {
+    const pending = videos.filter((video) => !inspectedIds.has(video.id))
+    const concurrency = 4
+
+    for (let offset = 0; offset < pending.length && eligibleVideos.length < desiredEligible; offset += concurrency) {
+      const batch = pending.slice(offset, offset + concurrency)
+      const inspected = await mapWithConcurrency(batch, concurrency, async (video) => {
+        inspectedIds.add(video.id)
+        try {
+          const info = await transcriptProvider.getVideoInfo(video.id, languagePriority)
+          logger.debug('video.preflight.completed', {
+            videoId: video.id,
+            source,
+            captionAvailable: info.available,
+            matchedLanguage: info.matchedLanguage ?? null,
+          })
+          return info.available ? mergeMetadata(video, info) : null
+        } catch (error) {
+          logger.warn('video.preflight.failed', { videoId: video.id, reason: transcriptReason(error) })
+          throw error
+        }
+      })
+      eligibleVideos.push(...inspected.filter((video): video is VideoMetadata => Boolean(video)))
     }
   }
 
   try {
-    await inspectVideos(latest.videos, 'latest')
+    await inspectVideos(latest.videos, 'latest', targetVideos + 2)
   } catch (error) {
     logger.error('channel.preflight.failed', { reason: transcriptReason(error) })
     throw createError({ statusCode: 502, statusMessage: 'Could not inspect video captions from TranscriptAPI.' })
   }
   let usedChannelVideosFallback = false
   async function loadFallbackVideos(): Promise<void> {
-    if (usedChannelVideosFallback) return
+    // Inspect any remaining free latest-video candidates before buying a fallback page.
+    await inspectVideos(latest.videos, 'latest')
+    if (eligibleVideos.length > candidateIndex || usedChannelVideosFallback) return
+
     usedChannelVideosFallback = true
     try {
       const page = await transcriptProvider.getChannelVideos(request.channelUrl)
-      await inspectVideos(page.videos, 'fallback')
+      await inspectVideos(page.videos, 'fallback', candidateIndex + targetVideos)
     } catch (error) {
       logger.warn('channel.fallback.failed', { reason: transcriptReason(error) })
     }
@@ -202,6 +229,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     inputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
+    cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
   }
   let transcriptAttempts = 0
@@ -253,9 +282,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       normalized = normalizeTranscript(transcript.segments)
       if (!normalized.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
       openaiUsage.requests += 1
+      const resolvedLanguage = transcript.language ?? languagePriority
+      const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
       const analysis = await analyzer.analyze(
         normalized,
-        transcript.language ?? languagePriority,
+        resolvedLanguage,
         enabledRuleIds,
         storageMode === 'diagnostic',
       )
@@ -267,7 +298,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         url,
         status: 'analyzed',
         transcriptLanguage: transcript.language,
+        captionSource: captionSource(transcript.language),
+        captionSourceMismatch: captionLanguageMismatch(video.expectedCaptionLanguage, transcript.language),
         openaiUsage: analysis.usage,
+        speechQuality,
         violations: analysis.violations,
         detections,
       })
@@ -297,6 +331,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         status: 'provider_error',
         openaiUsage: analysisError.usage,
         transcriptLanguage: transcript.language,
+        captionSource: captionSource(transcript.language),
+        captionSourceMismatch: captionLanguageMismatch(video.expectedCaptionLanguage, transcript.language),
+        speechQuality: normalized ? analyzeSpeechQuality(normalized, transcript.language ?? languagePriority) : undefined,
         analysisError: {
           type: analysisError.type,
           status: analysisError.status,
@@ -330,9 +367,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     analyzedVideos,
     failedVideos: videoResults.length - analyzedVideos,
     analysisMode: 'openai',
-    contextualFallbackVideos: 0,
     creditUsage: transcriptProvider.getCreditUsage(),
     openaiUsage,
+    speechQuality: summarizeSpeechQuality(
+      videoResults.flatMap((video) => video.speechQuality ? [video.speechQuality] : []),
+    ),
     selection: {
       targetVideos,
       inspectedVideos: inspectedIds.size,
@@ -359,6 +398,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         ? 'The scan stopped after an OpenAI analysis error to avoid consuming more TranscriptAPI credits.'
         : 'OpenAI analysis completed without a scan-stopping provider error.',
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions.',
+      'Speech-quality metrics are local heuristics, not safety violations or an overall quality score.',
       storageMode === 'diagnostic'
         ? 'Diagnostic mode stores normalized transcripts and redacted provider diagnostics on the server.'
         : 'Normalized and raw transcript text is not persisted in this storage mode.',
