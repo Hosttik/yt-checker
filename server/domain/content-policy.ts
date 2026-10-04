@@ -25,16 +25,22 @@ export interface CategoryPolicy<TEvent extends ClassifiedContentEvent = Classifi
 }
 
 function defaultDisplayLevel(
-  _event: ClassifiedContentEvent,
+  event: ClassifiedContentEvent,
   relevance: ParentRelevance,
   profile: AnalysisProfile,
 ): DisplayLevel {
-  if (profile === 'diagnostic') return relevance === 'high' ? 'highlight' : 'summary'
+  const weakEvidence = event.confidence < 0.55 || event.evidenceStrength === 'weak_context'
+
+  if (profile === 'diagnostic') return relevance === 'high' && !weakEvidence ? 'highlight' : 'summary'
+
   if (profile === 'strict') {
+    if (weakEvidence) return 'summary'
     if (relevance === 'high' || relevance === 'moderate') return 'highlight'
     return 'summary'
   }
+
   if (relevance === 'minimal') return 'hidden'
+  if (weakEvidence) return relevance === 'high' ? 'summary' : 'hidden'
   if (relevance === 'high') return 'highlight'
   return 'summary'
 }
