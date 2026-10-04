@@ -382,7 +382,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       }
       contentEventsByVideo.set(video.id, policyEvents)
       rejectedCandidatesByVideo.set(video.id, rejectedCandidates)
-      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents)
+      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents, semanticValidation.rejected)
       addUsage(openaiUsage, analysis.usage)
       const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
@@ -552,7 +552,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       'The analyzer uses transcript speech only; it does not inspect video frames or audio beyond captions. Absence of transcript evidence is not a claim about unseen visuals.',
       'Speech-quality metrics are local heuristics, not safety violations or an overall quality score.',
       storageMode === 'diagnostic'
-        ? 'Diagnostic mode stores normalized transcripts and redacted provider diagnostics on the server.'
+        ? 'Diagnostic storage stores normalized transcripts and provider diagnostics on the server without changing classifier behavior.'
         : 'Normalized and raw transcript text is not persisted in this storage mode.',
     ],
   }
