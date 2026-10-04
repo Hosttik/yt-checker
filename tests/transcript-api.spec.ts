@@ -208,7 +208,7 @@ describe('TranscriptApiClient', () => {
     })
 
     const requestUrl = String(fetchMock.mock.calls[0]?.[0])
-    expect(requestUrl).toContain('send_metadata=true')
+    expect(requestUrl).not.toContain('send_metadata=')
     expect(requestUrl).toContain('include_timestamp=true')
     expect(requestUrl).toContain('language=ru%2Cen')
   })
