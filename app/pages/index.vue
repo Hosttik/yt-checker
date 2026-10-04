@@ -90,6 +90,22 @@ function videoReport(videoId: string) {
   return result.value?.videoReports.find((item) => item.videoId === videoId)
 }
 
+function mainScenes(videoId: string) {
+  return (videoReport(videoId)?.scenes ?? []).filter((scene) =>
+    scene.attention
+      ? scene.attention === 'main'
+      : scene.level === 'moderate' || scene.level === 'high',
+  )
+}
+
+function detailScenes(videoId: string) {
+  return (videoReport(videoId)?.scenes ?? []).filter((scene) =>
+    scene.attention
+      ? scene.attention === 'details'
+      : scene.level === 'low',
+  )
+}
+
 function levelText(level: ReportLevel): string {
   if (level === 'high') return 'Высокий'
   if (level === 'moderate') return 'Умеренный'
@@ -236,6 +252,16 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             cached {{ result.openaiUsage.cachedTokens }},
             cache writes {{ result.openaiUsage.cacheWriteTokens }}).
           </p>
+          <p v-if="result.openaiStages" class="muted">
+            Detector: {{ result.openaiStages.detection.requests }} запросов /
+            {{ result.openaiStages.detection.totalTokens }} tokens.
+            Reviewer: {{ result.openaiStages.review.requests }} запросов /
+            {{ result.openaiStages.review.totalTokens }} tokens.
+          </p>
+          <p class="muted">
+            Вывод относится только к {{ result.analyzedVideos }} проанализированным видео и доступным
+            субтитрам, а не ко всему каналу.
+          </p>
           <div class="limitations">
             <strong>Речевые особенности · отдельно от безопасности</strong>
             <p>{{ result.speechQuality.interpretation.summary }}</p>
@@ -306,10 +332,20 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
                 OpenAI analysis error: {{ video.analysisError?.type }}.
               </p>
               <p
-                v-if="video.status === 'analyzed' && (videoReport(video.id)?.scenes.length ?? 0) === 0"
-                class="clean"
+                v-if="video.status === 'analyzed' && (video.contentReview?.status === 'failed' || video.contentReview?.status === 'skipped_after_failure')"
+                class="warning"
               >
-                В текущем профиле значимых особенностей контента не показано.
+                Контекстная перепроверка не завершена. Ниже сохранены находки первого прохода —
+                их нельзя считать независимо подтверждёнными.
+              </p>
+              <p
+                v-else-if="video.status === 'analyzed' && video.contentReview?.status === 'partial'"
+                class="warning"
+              >
+                Контекстная перепроверка завершена не полностью; спорные находки сохранены консервативно.
+              </p>
+              <p v-if="video.status === 'analyzed' && videoReport(video.id)?.contentSummary" class="clean">
+                {{ videoReport(video.id)?.contentSummary }}
               </p>
             </div>
             <a :href="`https://www.youtube.com/watch?v=${video.id}`" target="_blank" rel="noreferrer">
@@ -317,8 +353,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             </a>
           </div>
 
-          <ul v-if="videoReport(video.id)?.scenes.length" class="violations">
-            <li v-for="scene in videoReport(video.id)?.scenes" :key="scene.sceneId">
+          <ul v-if="mainScenes(video.id).length" class="violations">
+            <li v-for="scene in mainScenes(video.id)" :key="scene.sceneId">
               <div>
                 <strong>{{ scene.label }}</strong>
                 <small>
@@ -341,11 +377,38 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <div class="evidence">
                 <p>{{ scene.summary }}</p>
                 <small v-if="result.profile === 'diagnostic'">
-                  {{ scene.events.map(event => event.subtype).join(' · ') }}
+                  {{ scene.events.map(event => `${event.subtype} [${event.review?.status || 'not_reviewed'}]`).join(' · ') }}
                 </small>
               </div>
             </li>
           </ul>
+
+          <details v-if="detailScenes(video.id).length" class="limitations">
+            <summary>Лёгкие и спорные находки ({{ detailScenes(video.id).length }})</summary>
+            <ul class="violations">
+              <li v-for="scene in detailScenes(video.id)" :key="`detail:${scene.sceneId}`">
+                <div>
+                  <strong>{{ scene.label }}</strong>
+                  <small>{{ levelText(scene.level) }}</small>
+                </div>
+                <div class="range-list">
+                  <a
+                    v-for="range in scene.evidenceRanges"
+                    :key="`detail:${scene.sceneId}:${range.startMs}:${range.endMs}`"
+                    class="timestamp"
+                    :href="youtubeTimestampUrl(video.id, range.startMs)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    ▶ {{ formatRange(range.startMs, range.endMs) }}
+                  </a>
+                </div>
+                <div class="evidence">
+                  <p>{{ scene.summary }}</p>
+                </div>
+              </li>
+            </ul>
+          </details>
 
           <details v-if="result.profile === 'diagnostic' && videoReport(video.id)" class="limitations">
             <summary>Diagnostic trace</summary>
