@@ -11,4 +11,7 @@ export const RULE_LABELS: Record<RuleId, string> = {
   sexual_content: 'Сексуальные темы',
   violence: 'Насилие',
   alcohol_and_drugs: 'Алкоголь и наркотики',
+  scary_and_disturbing: 'Пугающие и тревожные темы',
+  tobacco_and_nicotine: 'Табак и никотин',
+  self_harm: 'Самоповреждение',
 }
