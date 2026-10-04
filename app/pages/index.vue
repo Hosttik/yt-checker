@@ -237,7 +237,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             cache writes {{ result.openaiUsage.cacheWriteTokens }}).
           </p>
           <div class="limitations">
-            <strong>Речевые особенности</strong>
+            <strong>Речевые особенности · отдельно от безопасности</strong>
             <p>{{ result.speechQuality.interpretation.summary }}</p>
             <p v-if="speechMarkerSummary()" class="muted">
               Чаще всего встречаются: {{ speechMarkerSummary() }}.
@@ -247,7 +247,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <summary>Технические метрики</summary>
               <p class="muted">
                 Проанализировано {{ result.speechQuality.totalWords }} слов.
-                Маркеры слов-паразитов: {{ result.speechQuality.fillerWordCount }}
+                Речевые маркеры: {{ result.speechQuality.fillerWordCount }}
                 ({{ result.speechQuality.fillersPer1000Words }} на 1000 слов).
                 Повторы слов подряд: {{ result.speechQuality.repeatedWordCount }}
                 ({{ result.speechQuality.repeatedWordsPer1000Words }} на 1000 слов).
