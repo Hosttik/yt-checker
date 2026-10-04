@@ -1,52 +1,60 @@
 # Security model
 
-YT Checker uses containers to reduce host exposure and make the development/runtime environment reproducible. Containers are one security boundary, not a guarantee that dependencies or application code are safe.
+YT Checker uses containers to reduce host exposure and keep the development/runtime environment reproducible. Containers are one security boundary, not a guarantee that dependencies or application code are safe.
 
-## Local development hardening
+## Container hardening
 
-The default `compose.yaml`:
+The default development container:
 
-- runs the application as the non-root `node` user from the image;
+- runs as the non-root `node` user;
 - drops all Linux capabilities;
 - enables `no-new-privileges`;
-- uses a read-only container root filesystem;
-- mounts the host repository read-only;
-- keeps `node_modules`, Nuxt build state, and output in Docker-managed volumes;
-- gives the process only a small temporary `/tmp`;
-- applies process, memory, and CPU limits;
-- binds the development port only to `127.0.0.1`;
-- never mounts the Docker socket;
-- never uses privileged mode.
+- uses a read-only root filesystem;
+- mounts the source repository read-only;
+- gives write access only to dedicated Docker volumes/tmpfs and `scan-results`;
+- binds the application port only to `127.0.0.1`;
+- does not mount the Docker socket;
+- does not use privileged mode;
+- applies process, memory and CPU limits.
 
-The production compose file does not mount the source tree at all.
+The production compose file uses a dedicated `scan_data` volume rather than mounting the source tree.
 
 ## Secrets
 
-`.env` is:
+`.env` is ignored by Git and excluded from Docker build context. API keys are injected only at runtime.
 
-- ignored by Git;
-- excluded from the Docker build context;
-- injected only when a container starts.
+Authorization values captured in diagnostic provider/classifier exchanges are replaced with `Bearer <redacted>`.
 
-Do not bake API keys into an image or commit them to the repository.
+Docker is not a secrets vault: code running in the application container can access secrets deliberately supplied to that container.
 
-For a real hosted production deployment, use the hosting platform's secret manager instead of copying a developer `.env` file to the server.
+## Storage modes and raw transcripts
 
-A user who can control the Docker daemon can generally inspect or control containers and should be treated as highly privileged. Docker is not a secrets vault.
+### none
 
-## Raw transcript policy
+No scan artifact is persisted.
 
-Containerization does not change the content-handling policy:
+### minimal
 
-- raw transcripts are transient server-memory input;
-- they must not be persisted, cached, logged, returned from our API, or displayed;
-- only bounded candidate context may be sent to the configured contextual classifier;
-- only derived detections and timeline ranges leave the analysis layer.
+Only the derived scan result is written. Transcript text and Jev candidate context are not part of the stored result.
+
+### diagnostic
+
+Diagnostic mode intentionally records raw TranscriptAPI responses and Jev request/response payloads. This can include complete third-party transcript text and candidate context.
+
+Diagnostic mode therefore:
+
+- is disabled unless `NUXT_ALLOW_DIAGNOSTIC_STORAGE=true`;
+- must not be enabled as the public production default;
+- must use a private storage location;
+- must not feed raw artifacts into analytics/error tracking;
+- requires explicit deletion/retention rules before any hosted use.
+
+The normal production raw-content policy remains: raw transcript is transient input and only derived detections/timeline ranges are persisted.
 
 ## Dependency risk
 
-Docker prevents npm packages from being installed directly into the host OS, but malicious dependencies can still execute inside the build/container and can access resources explicitly exposed to that container.
+Docker prevents npm packages from being installed directly into the host OS, but malicious dependencies can still execute inside a build/container and access resources exposed to that container.
 
-Current mitigations include read-only source mounts, non-root execution, capability dropping, no Docker socket, and restricted filesystem writes.
+Current mitigations include non-root execution, read-only source mounts, capability dropping, no Docker socket and restricted writable paths.
 
-A lockfile should be added and CI switched from `npm install` to `npm ci` once the dependency tree is intentionally frozen. Until then, semver ranges in `package.json` can resolve to newer dependency versions during image rebuilds.
+A reviewed lockfile and `npm ci` remain a follow-up hardening task.
