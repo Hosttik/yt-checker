@@ -236,9 +236,16 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
         <article v-for="item in result.channelReport" :key="item.category" class="summary-card">
           <strong>{{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
-          <small>
+          <small v-if="result.profile === 'diagnostic'">
             {{ item.affectedVideos }}/{{ item.analyzedVideos }} видео ·
-            {{ item.displayedEventCount }} показано из {{ item.rawEventCount }} signals
+            {{ item.displayedEventCount }} показано из {{ item.rawEventCount }} raw signals
+          </small>
+          <small v-else-if="item.level === 'none'">
+            Значимых элементов для выбранного профиля не показано
+          </small>
+          <small v-else>
+            {{ item.affectedVideos }}/{{ item.analyzedVideos }} видео ·
+            {{ item.displayedEventCount }} отображаемых событий
           </small>
           <p>{{ item.summary }}</p>
         </article>
