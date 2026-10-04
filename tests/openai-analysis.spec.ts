@@ -21,7 +21,7 @@ function providerWith(output: { violations: ViolationEvidence[]; rejectedCandida
     },
   })
   const client = { responses: { create: parse } } as unknown as OpenAI
-  return { provider: new OpenAIAnalysisProvider('secret', 'gpt-5.6-luna', undefined, client), parse }
+  return { provider: new OpenAIAnalysisProvider('secret', 'gpt-6-luna', undefined, client), parse }
 }
 
 async function analyze(
@@ -122,7 +122,7 @@ describe('OpenAIAnalysisProvider', () => {
     const result = await provider.analyze(transcript, 'ru', ['gambling'], false)
     expect(parse).toHaveBeenCalledTimes(1)
     expect(parse).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'gpt-5.6-luna',
+      model: 'gpt-6-luna',
       reasoning: { effort: 'low' },
       instructions: OPENAI_SYSTEM_PROMPT,
       tools: [],
