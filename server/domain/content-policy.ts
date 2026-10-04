@@ -6,6 +6,7 @@ import type {
   DisplayLevel,
   ParentRelevance,
 } from '../../shared/types/content'
+import { CONTENT_CATEGORY_LABELS } from './content-categories'
 
 const relevanceRank: Record<ParentRelevance, number> = {
   minimal: 0,
@@ -19,6 +20,8 @@ export const PARENT_RELEVANCE_RANK = relevanceRank
 export interface CategoryPolicy<TEvent extends ClassifiedContentEvent = ClassifiedContentEvent> {
   getParentRelevance(event: TEvent): ParentRelevance
   getDisplayLevel(event: TEvent, relevance: ParentRelevance, profile: AnalysisProfile): DisplayLevel
+  getLabel(events: ContentEvent[]): string
+  summarize(events: ContentEvent[], displayed: ContentEvent[]): string
 }
 
 function defaultDisplayLevel(
@@ -42,6 +45,29 @@ function severityFloor(event: ClassifiedContentEvent): ParentRelevance {
   return 'low'
 }
 
+function unique<T>(items: T[]): T[] {
+  return [...new Set(items)]
+}
+
+function defaultLabel(category: ContentCategory): (events: ContentEvent[]) => string {
+  return () => CONTENT_CATEGORY_LABELS[category]
+}
+
+function defaultSummary(_category: ContentCategory): (events: ContentEvent[], displayed: ContentEvent[]) => string {
+  return (events, displayed) => {
+    if (events.length === 0) {
+      return 'В проанализированных субтитрах релевантных элементов не обнаружено.'
+    }
+    const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
+      : ''
+    if (displayed.length === 0) {
+      return 'Найдены только минимально значимые элементы, скрытые в обычном родительском отчёте.' + contextText
+    }
+    return `Обнаружены элементы: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+  }
+}
+
 const profanityPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'profanity_and_rude_language' }>> = {
   getParentRelevance(event) {
     if (event.subtype === 'slur') return event.severity === 'low' ? 'moderate' : 'high'
@@ -51,6 +77,8 @@ const profanityPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category
     return event.severity === 'medium' ? 'moderate' : 'low'
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('profanity_and_rude_language'),
+  summarize: defaultSummary('profanity_and_rude_language'),
 }
 
 const insultsPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'insults' }>> = {
@@ -60,6 +88,8 @@ const insultsPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 
     return event.severity === 'low' ? 'low' : 'moderate'
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('insults'),
+  summarize: defaultSummary('insults'),
 }
 
 const toiletPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'toilet_humor' }>> = {
@@ -69,6 +99,8 @@ const toiletPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: '
     return 'low'
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('toilet_humor'),
+  summarize: defaultSummary('toilet_humor'),
 }
 
 const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'violence' }>> = {
@@ -91,6 +123,8 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
     return severityFloor(event)
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('sexual_content'),
+  summarize: defaultSummary('sexual_content'),
 }
 
 const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'scary_and_disturbing' }>> = {
@@ -101,6 +135,8 @@ const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 's
     return 'minimal'
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('gambling'),
+  summarize: defaultSummary('gambling'),
 }
 
 const sexualPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'sexual_content' }>> = {
@@ -113,6 +149,8 @@ const sexualPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: '
     return 'moderate'
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('self_harm'),
+  summarize: defaultSummary('self_harm'),
 }
 
 const gamblingPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'gambling' }>> = {
@@ -143,6 +181,18 @@ const substancesPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { categor
     return severityFloor(event)
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel(events) {
+    const subtypes = new Set(events.map((event) => event.subtype))
+    if (subtypes.size === 1 && subtypes.has('nicotine')) return 'Табак и никотин'
+    if (subtypes.size === 1 && subtypes.has('alcohol')) return 'Алкоголь'
+    return CONTENT_CATEGORY_LABELS.substances
+  },
+  summarize(events, displayed) {
+    if (events.length === 0 || displayed.length === 0) {
+      return defaultSummary('substances')(events, displayed)
+    }
+    return `Обнаружены упоминания или действия, связанные с веществами: ${unique(events.map((event) => event.subtype)).join(', ')}.`
+  },
 }
 
 const selfHarmPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'self_harm' }>> = {
@@ -159,6 +209,8 @@ const selfHarmPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
     if (profile === 'normal' && relevance === 'minimal') return 'hidden'
     return defaultDisplayLevel(event, relevance, profile)
   },
+  getLabel: defaultLabel('self_harm'),
+  summarize: defaultSummary('self_harm'),
 }
 
 export const categoryPolicies: {
