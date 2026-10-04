@@ -310,6 +310,18 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
         ),
       )
+      for (const adjusted of semanticValidation.adjustments) {
+        logger.debug('content.validation_adjusted', {
+          videoId: video.id,
+          candidateId: adjusted.event.sourceCandidateId ?? null,
+          sceneId: adjusted.event.sceneId ?? null,
+          category: adjusted.event.category,
+          subtype: adjusted.event.subtype,
+          fromAssertionStatus: adjusted.originalEvent.assertionStatus,
+          toAssertionStatus: adjusted.event.assertionStatus,
+          reason: adjusted.reason,
+        })
+      }
       for (const rejected of semanticValidation.rejected) {
         logger.debug('content.validation_rejected', {
           videoId: video.id,
@@ -382,7 +394,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       }
       contentEventsByVideo.set(video.id, policyEvents)
       rejectedCandidatesByVideo.set(video.id, rejectedCandidates)
-      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents, semanticValidation.rejected)
+      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents, semanticValidation.rejected, semanticValidation.adjustments)
       addUsage(openaiUsage, analysis.usage)
       const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
@@ -404,6 +416,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         classifiedEventCount: analysis.classifiedEvents.length,
         normalizedEventCount: policyEvents.length,
         validationRejectedCount: semanticValidation.rejected.length,
+        validationAdjustedCount: semanticValidation.adjustments.length,
         inputTokens: analysis.usage.inputTokens,
         outputTokens: analysis.usage.outputTokens,
         reasoningTokens: analysis.usage.reasoningTokens,
