@@ -127,6 +127,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       context: candidate.context,
       startMs: candidate.startMs,
       endMs: candidate.endMs,
+      transcriptLanguage: candidate.transcriptLanguage,
+      transcriptSource: candidate.transcriptSource,
+      jev: candidate.jev,
     }
   }
 
@@ -166,6 +169,17 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       storage.recordProvider(exchange)
       logger.debug('transcriptapi.exchange', providerLogFields(exchange))
     },
+    {
+      traceObserver: (traceEvent) => {
+        storage.recordAnalysisTrace({
+          timestamp: new Date().toISOString(),
+          ...traceEvent,
+        })
+        const { providerMessage: _providerMessage, ...safeFields } = traceEvent as
+          typeof traceEvent & { providerMessage?: string }
+        logger.debug(traceEvent.event, safeFields)
+      },
+    },
   )
 
   const contextFilter = config.typesafeApiKey
@@ -173,7 +187,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         config.typesafeApiKey,
         config.typesafeBaseUrl,
         config.typesafeModel,
-        Number(config.typesafeBenignDropProbability),
+        Number(config.jevBenignDismissThreshold),
+        Number(config.jevViolationConfirmThreshold),
         async (exchange) => {
           storage.recordJev(exchange)
           logger.debug('jev.exchange', {
@@ -284,7 +299,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
     try {
       const transcript = await provider.getTranscript(video.id, languagePriority)
-      const candidates = findTranscriptCandidates(transcript.segments, enabledRuleIds)
+      const candidates = findTranscriptCandidates(
+        transcript.segments,
+        enabledRuleIds,
+        transcript.language,
+      )
 
       logger.debug('video.regex.completed', {
         videoId: video.id,
@@ -298,34 +317,45 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         traceCandidate('candidate.regex_match', video.id, candidate)
       }
 
-      let filteredCandidates = candidates
+      let resolvedCandidates: TranscriptCandidate[] = candidates.map((candidate) => ({
+        ...candidate,
+        resolution: 'needs_review' as const,
+      }))
       let contextFilterStatus: ContextFilterStatus = contextFilter ? 'not_needed' : 'disabled'
 
       if (contextFilter && candidates.length > 0) {
         try {
-          filteredCandidates = await contextFilter.filter(candidates)
+          resolvedCandidates = await contextFilter.filter(candidates)
           contextFilterStatus = 'applied'
-          const keptIds = new Set(filteredCandidates.map((candidate) => candidate.id))
 
-          for (const candidate of candidates) {
+          for (const candidate of resolvedCandidates) {
             traceCandidate('candidate.jev_result', video.id, candidate, {
-              result: keptIds.has(candidate.id) ? 'kept' : 'removed_as_benign',
+              jevChoice: candidate.jev?.choice,
+              jevConfidence: candidate.jev?.confidence,
+              probabilities: candidate.jev?.probabilities,
+              resolution: candidate.resolution,
             })
           }
 
           logger.debug('video.jev.completed', {
             videoId: video.id,
             inputCandidates: candidates.length,
-            keptCandidates: filteredCandidates.length,
-            removedCandidates: candidates.length - filteredCandidates.length,
+            confirmedCandidates: resolvedCandidates.filter((item) => item.resolution === 'confirmed').length,
+            reviewCandidates: resolvedCandidates.filter((item) => item.resolution === 'needs_review').length,
+            dismissedCandidates: resolvedCandidates.filter((item) => item.resolution === 'dismissed').length,
           })
         } catch {
           contextualFallbackVideos += 1
           contextFilterStatus = 'fallback'
 
-          for (const candidate of candidates) {
+          resolvedCandidates = candidates.map((candidate) => ({
+            ...candidate,
+            resolution: 'needs_review' as const,
+          }))
+          for (const candidate of resolvedCandidates) {
             traceCandidate('candidate.jev_result', video.id, candidate, {
-              result: 'kept_on_jev_fallback',
+              resolution: 'needs_review',
+              fallbackReason: 'jev_unavailable',
             })
           }
 
@@ -336,17 +366,13 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         }
       }
 
-      for (const candidate of filteredCandidates) {
-        traceCandidate('candidate.final_violation', video.id, candidate, {
-          resolution: contextFilterStatus === 'applied'
-            ? 'kept_after_jev'
-            : contextFilterStatus === 'fallback'
-              ? 'kept_on_jev_fallback'
-              : 'regex_only',
+      for (const candidate of resolvedCandidates) {
+        traceCandidate('candidate.final_resolution', video.id, candidate, {
+          resolution: candidate.resolution,
         })
       }
 
-      const detections = buildDetections(filteredCandidates, enabledRuleIds)
+      const detections = buildDetections(resolvedCandidates, enabledRuleIds)
       videoResults.push({
         ...video,
         status: 'analyzed',
@@ -395,6 +421,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       inspectedVideos: inspectedIds.size,
       captionEligibleVideos: eligibleVideos.length,
       transcriptAttempts,
+      transcriptVideosAttempted: transcriptAttempts,
+      transcriptHttpRequests: provider.getTranscriptHttpRequestCount(),
       usedChannelVideosFallback,
       requestedLanguage: languagePriority || 'auto',
     },
@@ -439,6 +467,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     failedVideos: result.failedVideos,
     requestedLanguage: languagePriority || 'auto',
     transcriptAttempts,
+    transcriptHttpRequests: provider.getTranscriptHttpRequestCount(),
     contextualFallbackVideos,
     totalCredits: result.creditUsage.totalCredits,
     transcriptCredits: result.creditUsage.transcriptCredits,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranscriptCandidate } from '../server/domain/analyze-transcript'
-import { JevContextFilter } from '../server/services/jev-context-filter'
+import { findTranscriptCandidates } from '../server/domain/analyze-transcript'
+import { JevContextFilter, resolveJevAnswer } from '../server/services/jev-context-filter'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -13,7 +14,11 @@ const candidates: TranscriptCandidate[] = [
     hitCount: 1,
     startMs: 1_000,
     endMs: 2_000,
+    segmentText: 'В Minecraft нужно убить зомби и забрать лут.',
     context: 'В Minecraft нужно убить зомби и забрать лут.',
+    transcriptLanguage: 'asr-ru',
+    transcriptSource: 'asr',
+    matchedTerms: ['убить'],
   },
   {
     id: 'c1',
@@ -21,11 +26,41 @@ const candidates: TranscriptCandidate[] = [
     hitCount: 1,
     startMs: 3_000,
     endMs: 4_000,
+    segmentText: 'Ты дебил, заткнись уже.',
     context: 'Ты дебил, заткнись уже.',
+    transcriptLanguage: 'ru',
+    transcriptSource: 'manual',
+    matchedTerms: ['дебил'],
   },
 ]
 
 describe('JevContextFilter', () => {
+  it.each([
+    ['Мы запустили космическую ракету на Луну.', 'benign', 'dismissed'],
+    ['Он выстрелил в него из пистолета.', 'violation', 'confirmed'],
+  ])('resolves the full regex pipeline for %s', async (text, choice, resolution) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      answers: { c0: { choice, confidence: 0.9, probabilities: {
+        benign: choice === 'benign' ? 0.9 : 0.05,
+        violation: choice === 'violation' ? 0.9 : 0.05, uncertain: 0.05,
+      } } },
+    }))))
+    const extracted = findTranscriptCandidates([{ text, startMs: 0, endMs: 1000 }], ['violence'], 'asr-ru')
+    expect(extracted).toHaveLength(1)
+    expect((await new JevContextFilter('key').filter(extracted))[0]?.resolution).toBe(resolution)
+    expect((await new JevContextFilter('key').filter([]))).toEqual([])
+  })
+  it('requires complete, valid confidence and probabilities', () => {
+    const answer = { choice: 'benign' as const, confidence: 0.9,
+      probabilities: { benign: 0.9, violation: 0.05, uncertain: 0.05 } }
+    expect(resolveJevAnswer(answer, 0.75, 0.7)).toBe('dismissed')
+    for (const confidence of [undefined, NaN, Infinity, -1, 2, '0.9']) {
+      expect(resolveJevAnswer({ ...answer, confidence } as never, 0.75, 0.7)).toBe('needs_review')
+    }
+    expect(resolveJevAnswer({ ...answer, probabilities: { benign: 0.9 } }, 0.75, 0.7)).toBe('needs_review')
+    expect(resolveJevAnswer({ ...answer, probabilities: { benign: 0.9, violation: 0.9, uncertain: 0 } }, 0.75, 0.7)).toBe('needs_review')
+    expect(() => new JevContextFilter('key', undefined, undefined, 0)).toThrow(/thresholds/)
+  })
   it('drops only high-probability benign candidates', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       answers: {
@@ -47,7 +82,10 @@ describe('JevContextFilter', () => {
     const filter = new JevContextFilter('secret', undefined, 'jev-latest', 0.8)
     const result = await filter.filter(candidates)
 
-    expect(result.map((item) => item.id)).toEqual(['c1'])
+    expect(result.map((item) => [item.id, item.resolution])).toEqual([
+      ['c0', 'dismissed'],
+      ['c1', 'confirmed'],
+    ])
   })
 
   it('keeps ambiguous and low-confidence benign candidates conservatively', async () => {
@@ -71,7 +109,10 @@ describe('JevContextFilter', () => {
     const filter = new JevContextFilter('secret', undefined, 'jev-latest', 0.8)
     const result = await filter.filter(candidates)
 
-    expect(result.map((item) => item.id)).toEqual(['c0', 'c1'])
+    expect(result.map((item) => [item.id, item.resolution])).toEqual([
+      ['c0', 'needs_review'],
+      ['c1', 'needs_review'],
+    ])
   })
 
   it('sends only bounded candidate contexts, not an entire transcript object', async () => {
@@ -102,13 +143,53 @@ describe('JevContextFilter', () => {
       questions: Record<string, unknown>
     }
     const state = JSON.parse(body.state) as {
-      candidates: Array<{ id: string; context: string }>
+      candidates: Array<{ id: string; context: string; transcript_source: string }>
     }
 
     expect(body.model).toBe('jev-latest')
     expect(state.candidates).toHaveLength(2)
     expect(state.candidates.map((item) => item.context)).toEqual(candidates.map((item) => item.context))
+    expect(state.candidates[0]?.transcript_source).toBe('asr')
     expect(body.questions).toHaveProperty('c0')
     expect(body.questions).toHaveProperty('c1')
+  })
+
+  it('dismisses a garbled ASR keyword only when Jev is confidently benign', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      answers: {
+        c0: {
+          type: 'choice',
+          choice: 'benign',
+          confidence: 0.86,
+          probabilities: { violation: 0.04, benign: 0.9, uncertain: 0.06 },
+        },
+      },
+    }), { status: 200 })))
+    const garbled = findTranscriptCandidates([
+      { text: 'ты потопная кровь', startMs: 0, endMs: 1_000 },
+      { text: 'ты дари подарки', startMs: 1_000, endMs: 2_000 },
+    ], ['violence'], 'asr-ru')
+    expect(garbled).toHaveLength(1)
+    expect(garbled[0]).toMatchObject({ transcriptSource: 'asr' })
+
+    const [result] = await new JevContextFilter('secret').filter(garbled)
+    expect(result?.resolution).toBe('dismissed')
+  })
+
+  it('keeps a low-confidence benign choice for review', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      answers: {
+        c0: {
+          type: 'choice',
+          choice: 'benign',
+          confidence: 0.31,
+          probabilities: { violation: 0.07, benign: 0.65, uncertain: 0.28 },
+        },
+      },
+    }), { status: 200 })))
+
+    const [result] = await new JevContextFilter('secret').filter([candidates[0]!])
+    expect(result?.resolution).toBe('needs_review')
+    expect(result?.jev?.choice).toBe('benign')
   })
 })

@@ -24,6 +24,8 @@ const result: ChannelCheckResponse = {
     inspectedVideos: 1,
     captionEligibleVideos: 1,
     transcriptAttempts: 1,
+    transcriptVideosAttempted: 1,
+    transcriptHttpRequests: 1,
     usedChannelVideosFallback: false,
     requestedLanguage: 'ru',
   },
@@ -42,6 +44,8 @@ const result: ChannelCheckResponse = {
           label: 'Оскорбления',
           severity: 'medium',
           count: 1,
+          confirmedCount: 0,
+          reviewCount: 1,
           ranges: [{ startMs: 12_400, endMs: 14_400 }],
         },
       ],
@@ -90,7 +94,7 @@ describe('ScanStorage', () => {
 
     storage.recordAnalysisTrace({
       timestamp: '2026-10-04T00:00:01Z',
-      event: 'candidate.final_violation',
+      event: 'candidate.final_resolution',
       videoId: 'video-one11',
       candidateId: 'c7',
       ruleId: 'insults',
@@ -101,7 +105,14 @@ describe('ScanStorage', () => {
       context: 'ну хватит [CANDIDATE] да ты дебил вообще пошли дальше',
       startMs: 12_400,
       endMs: 14_400,
-      resolution: 'kept_after_jev',
+      resolution: 'needs_review',
+      transcriptLanguage: 'asr-ru',
+      transcriptSource: 'asr',
+      jev: {
+        choice: 'benign',
+        confidence: 0.47,
+        probabilities: { benign: 0.65, uncertain: 0.27, violation: 0.08 },
+      },
     })
 
     await storage.save({ ...result, storageMode: 'diagnostic', scanId: storage.scanId })
@@ -135,9 +146,24 @@ describe('ScanStorage', () => {
         startMs: 12_400,
         endMs: 14_400,
         youtubeUrl: 'https://www.youtube.com/watch?v=video-one11&t=12s',
-        resolution: 'kept_after_jev',
+        resolution: 'needs_review',
+        transcriptLanguage: 'asr-ru',
+        transcriptSource: 'asr',
+        jev: {
+          choice: 'benign',
+          confidence: 0.47,
+          probabilities: { benign: 0.65, uncertain: 0.27, violation: 0.08 },
+        },
       },
     ])
     expect(diagnosticResult.diagnostic.finalViolationCount).toBe(1)
+    expect(diagnosticResult.diagnostic).toMatchObject({
+      confirmedCount: 0,
+      reviewCount: 1,
+      dismissedCount: 0,
+    })
+    expect(diagnosticResult.videos[0].diagnosticEvidence).toEqual(
+      diagnosticResult.videos[0].diagnosticViolations,
+    )
   })
 })

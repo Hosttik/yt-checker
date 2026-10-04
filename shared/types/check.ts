@@ -13,10 +13,12 @@ export const SCAN_STORAGE_MODES = ['none', 'minimal', 'diagnostic'] as const
 export type RuleId = (typeof RULE_IDS)[number]
 export type ScanStorageMode = (typeof SCAN_STORAGE_MODES)[number]
 export type RuleSeverity = 'low' | 'medium' | 'high'
+export type CandidateResolution = 'confirmed' | 'needs_review' | 'dismissed'
 export type TranscriptUnavailableReason =
   | 'not_available'
   | 'rate_limited'
   | 'billing'
+  | 'provider_timeout'
   | 'provider_error'
 export type ContextFilterStatus =
   | 'applied'
@@ -34,6 +36,8 @@ export interface RuleDetection {
   label: string
   severity: RuleSeverity
   count: number
+  confirmedCount: number
+  reviewCount: number
   ranges: TimelineRange[]
 }
 
@@ -63,6 +67,8 @@ export interface RuleSummary {
   label: string
   severity: RuleSeverity
   hitCount: number
+  confirmedCount: number
+  reviewCount: number
   videoCount: number
 }
 
@@ -77,7 +83,10 @@ export interface ScanSelection {
   targetVideos: number
   inspectedVideos: number
   captionEligibleVideos: number
+  /** Backward-compatible alias for transcriptVideosAttempted. */
   transcriptAttempts: number
+  transcriptVideosAttempted: number
+  transcriptHttpRequests: number
   usedChannelVideosFallback: boolean
   requestedLanguage: string
 }

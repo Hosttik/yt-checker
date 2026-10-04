@@ -1,7 +1,8 @@
 import type { TranscriptCandidate } from '../domain/analyze-transcript'
+import type { CandidateResolution } from '../../shared/types/check'
 import { getRule } from '../domain/rules'
 
-type JevChoice = 'violation' | 'benign' | 'uncertain'
+export type JevChoice = 'violation' | 'benign' | 'uncertain'
 
 interface JevChoiceAnswer {
   type?: 'choice'
@@ -44,26 +45,56 @@ export interface ContextFilter {
   filter(candidates: TranscriptCandidate[]): Promise<TranscriptCandidate[]>
 }
 
+export function resolveJevAnswer(
+  answer: JevChoiceAnswer | undefined,
+  benignDismissThreshold: number,
+  violationConfirmThreshold: number,
+): CandidateResolution {
+  if (!answer?.choice || !answer.probabilities) return 'needs_review'
+
+  const validScore = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+  const probabilities = ['benign', 'uncertain', 'violation'].map(
+    (choice) => answer.probabilities?.[choice as JevChoice],
+  )
+  if (!validScore(answer.confidence) || !probabilities.every(validScore)) return 'needs_review'
+  if (Math.abs(probabilities.reduce((sum, value) => sum + value, 0) - 1) > 0.02) return 'needs_review'
+  const probability = answer.probabilities[answer.choice]
+  if (!validScore(probability) || probability < Math.max(...probabilities)) return 'needs_review'
+  const confidence = answer.confidence
+  const score = Math.min(probability, confidence)
+
+  if (answer.choice === 'benign' && score >= benignDismissThreshold) return 'dismissed'
+  if (answer.choice === 'violation' && score >= violationConfirmThreshold) return 'confirmed'
+  return 'needs_review'
+}
+
 export class JevContextFilter implements ContextFilter {
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl = 'https://api.typesafe.ai/v1',
     private readonly model = 'jev-latest',
-    private readonly benignDropProbability = 0.8,
+    private readonly benignDismissThreshold = 0.75,
+    private readonly violationConfirmThreshold = 0.7,
     private readonly observer?: (exchange: JevExchange) => void | Promise<void>,
   ) {
     if (!apiKey) throw new Error('TypeSafe API key is not configured.')
+    for (const threshold of [benignDismissThreshold, violationConfirmThreshold]) {
+      if (!Number.isFinite(threshold) || threshold <= 0.5 || threshold > 1) {
+        throw new Error('Jev thresholds must be finite numbers greater than 0.5 and at most 1.')
+      }
+    }
   }
 
   async filter(candidates: TranscriptCandidate[]): Promise<TranscriptCandidate[]> {
-    const kept: TranscriptCandidate[] = []
+    const resolved: TranscriptCandidate[] = []
 
     for (let offset = 0; offset < candidates.length; offset += MAX_CANDIDATES_PER_CALL) {
       const chunk = candidates.slice(offset, offset + MAX_CANDIDATES_PER_CALL)
-      kept.push(...await this.filterChunk(chunk))
+      resolved.push(...await this.filterChunk(chunk))
     }
 
-    return kept
+    return resolved
   }
 
   private async filterChunk(candidates: TranscriptCandidate[]): Promise<TranscriptCandidate[]> {
@@ -78,6 +109,8 @@ export class JevContextFilter implements ContextFilter {
           category: candidate.ruleId,
           category_description: rule.description,
           context: candidate.context,
+          transcript_language: candidate.transcriptLanguage ?? null,
+          transcript_source: candidate.transcriptSource,
         }
       }),
     }
@@ -86,7 +119,7 @@ export class JevContextFilter implements ContextFilter {
       const rule = getRule(candidate.ruleId)
       const question: JevQuestion = {
         type: 'choice',
-        instructions: `For candidate ${candidate.id}, decide whether the flagged context genuinely matches the parental-content category "${rule.label}". Be conservative about removing candidates: if context is insufficient or ambiguous, choose uncertain rather than benign.`,
+        instructions: `For candidate ${candidate.id}, decide whether the flagged context genuinely matches the parental-content category "${rule.label}". Be conservative about removing candidates: if context is insufficient or ambiguous, choose uncertain rather than benign. The transcript may be auto-generated ASR and may contain malformed or incorrectly recognized words. If the matched word appears to be an ASR transcription error and the surrounding context does not coherently describe the category, classify it as benign. Do not treat a single malformed keyword as a violation without coherent supporting context. ASR metadata alone is never a reason to dismiss a coherent violation.`,
         criteria: {
           violation: rule.contextPolicy.violation,
           benign: rule.contextPolicy.benign,
@@ -141,11 +174,23 @@ export class JevContextFilter implements ContextFilter {
     if (!response.ok) throw new Error(`TypeSafe API returned ${response.status}.`)
     const data = bodyJson as JevResponse
 
-    return candidates.filter((candidate) => {
+    return candidates.map((candidate) => {
       const answer = data.answers?.[candidate.id]
-      if (!answer?.choice || !answer.probabilities) return true
-      const benignProbability = answer.probabilities.benign ?? 0
-      return !(answer.choice === 'benign' && benignProbability >= this.benignDropProbability)
+      return {
+        ...candidate,
+        resolution: candidate.contextTruncated ? 'needs_review' : resolveJevAnswer(
+          answer,
+          this.benignDismissThreshold,
+          this.violationConfirmThreshold,
+        ),
+        jev: answer
+          ? {
+              choice: answer.choice,
+              confidence: answer.confidence,
+              probabilities: answer.probabilities,
+            }
+          : undefined,
+      }
     })
   }
 }

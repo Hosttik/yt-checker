@@ -20,6 +20,26 @@ describe('TranscriptAPI language selection', () => {
 })
 
 describe('TranscriptApiClient', () => {
+  it.each([200, 503])('records interrupted HTTP %s bodies and accounts for paid responses', async (status) => {
+    const response = new Response('', { status })
+    vi.spyOn(response, 'text').mockRejectedValue(new Error('socket closed'))
+    const fetchMock = vi.fn().mockResolvedValue(response)
+    vi.stubGlobal('fetch', fetchMock)
+    const exchanges: unknown[] = []
+    const client = new TranscriptApiClient('key', undefined, (item) => { exchanges.push(item) }, {
+      sleep: async () => {},
+    })
+    await expect(client.getTranscript('video')).rejects.toMatchObject({ reason: 'provider_error', status })
+    expect(fetchMock).toHaveBeenCalledTimes(status === 200 ? 1 : 3)
+    expect(client.getCreditUsage().transcriptCredits).toBe(status === 200 ? 1 : 0)
+    expect(exchanges).toHaveLength(status === 200 ? 1 : 3)
+  })
+  const successfulTranscript = () => new Response(JSON.stringify({
+    video_id: 'video-one11',
+    language: 'asr-ru',
+    transcript: [{ text: 'тест', start: 1, duration: 1 }],
+  }), { status: 200 })
+
   it('uses the free latest-channel endpoint and tracks it as a free request', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       channel: {
@@ -157,7 +177,7 @@ describe('TranscriptApiClient', () => {
     const secretUpstreamBody = 'DO NOT LEAK THIS TRANSCRIPT-LIKE BODY'
     const exchanges: unknown[] = []
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () =>
       new Response(secretUpstreamBody, { status: 404 }),
     ))
 
@@ -180,5 +200,107 @@ describe('TranscriptApiClient', () => {
     } catch (error) {
       expect(String(error)).not.toContain(secretUpstreamBody)
     }
+  })
+
+  it.each([
+    { statuses: [408, 200], requests: 2 },
+    { statuses: [408, 408, 200], requests: 3 },
+    { statuses: [503, 200], requests: 2 },
+  ])('retries $statuses and charges only the successful transcript', async ({ statuses, requests }) => {
+    const fetchMock = vi.fn()
+    for (const status of statuses) {
+      fetchMock.mockResolvedValueOnce(status === 200
+        ? successfulTranscript()
+        : new Response(JSON.stringify({ message: 'Request failed, please retry' }), { status }))
+    }
+    vi.stubGlobal('fetch', fetchMock)
+    const trace: unknown[] = []
+    const client = new TranscriptApiClient('secret', undefined, undefined, {
+      sleep: async () => {},
+      traceObserver: (event) => trace.push(event),
+    })
+
+    await expect(client.getTranscript('video-one11', 'ru')).resolves.toMatchObject({
+      language: 'asr-ru',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(requests)
+    expect(client.getTranscriptHttpRequestCount()).toBe(requests)
+    expect(client.getCreditUsage()).toMatchObject({ transcriptCredits: 1, totalCredits: 1 })
+    expect(trace[0]).toEqual({
+      event: 'transcript.request',
+      videoId: 'video-one11',
+      language: 'ru',
+      attempt: 1,
+      maxAttempts: 3,
+    })
+    expect(trace).toContainEqual(expect.objectContaining({
+      event: 'transcript.retry',
+      attempt: 1,
+      status: statuses[0],
+      providerMessage: 'Request failed, please retry',
+      retryInMs: 1_000,
+    }))
+    expect(trace).toContainEqual(expect.objectContaining({
+      event: 'transcript.success',
+      attempt: requests,
+      language: 'asr-ru',
+      chargedCredits: 1,
+    }))
+  })
+
+  it('emits a deterministic failed trace after three 408 responses', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ message: 'Request failed, please retry' }), { status: 408 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const trace: unknown[] = []
+    const client = new TranscriptApiClient('secret', undefined, undefined, {
+      sleep: async () => {},
+      traceObserver: (event) => trace.push(event),
+    })
+
+    await expect(client.getTranscript('video-one11', 'ru')).rejects.toMatchObject({
+      reason: 'provider_timeout',
+      status: 408,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(client.getCreditUsage().transcriptCredits).toBe(0)
+    expect(trace.at(-1)).toEqual(expect.objectContaining({
+      event: 'transcript.failed',
+      attempts: 3,
+      status: 408,
+      failureReason: 'provider_timeout',
+      providerMessage: 'Request failed, please retry',
+    }))
+  })
+
+  it('honors Retry-After for 429 and then succeeds', async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Slow down' }), {
+        status: 429,
+        headers: { 'Retry-After': '2' },
+      }))
+      .mockResolvedValueOnce(successfulTranscript()))
+    const client = new TranscriptApiClient('secret', undefined, undefined, { sleep })
+
+    await client.getTranscript('video-one11')
+    expect(sleep).toHaveBeenCalledWith(2_000)
+    expect(client.getCreditUsage().transcriptCredits).toBe(1)
+  })
+
+  it('does not retry a 404 transcript response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'No captions' }), { status: 404 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new TranscriptApiClient('secret', undefined, undefined, {
+      sleep: async () => {},
+    })
+
+    await expect(client.getTranscript('video-one11')).rejects.toMatchObject({
+      reason: 'not_available',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

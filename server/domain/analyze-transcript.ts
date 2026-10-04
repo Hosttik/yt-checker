@@ -1,4 +1,5 @@
 import type {
+  CandidateResolution,
   RuleDetection,
   RuleId,
   RuleSummary,
@@ -9,8 +10,10 @@ import type { TranscriptSegment } from './transcript'
 import { getRule } from './rules'
 
 const RANGE_MERGE_GAP_MS = 1_000
-const CONTEXT_SEGMENTS_EACH_SIDE = 1
+export const CANDIDATE_MERGE_GAP_MS = 5_000
+const CONTEXT_SEGMENTS_EACH_SIDE = 2
 const MAX_CONTEXT_CHARS = 900
+const MAX_INCIDENT_MS = 25_000
 
 /**
  * Server-only intermediate that may contain raw transcript context.
@@ -26,6 +29,15 @@ export interface TranscriptCandidate {
   segmentText: string
   matchedTerms: string[]
   context: string
+  contextTruncated?: boolean
+  transcriptLanguage?: string
+  transcriptSource: 'manual' | 'asr' | 'unknown'
+  resolution?: CandidateResolution
+  jev?: {
+    choice?: 'violation' | 'benign' | 'uncertain'
+    confidence?: number
+    probabilities?: Partial<Record<'violation' | 'benign' | 'uncertain', number>>
+  }
 }
 
 function mergeRanges(ranges: TimelineRange[]): TimelineRange[] {
@@ -52,23 +64,64 @@ function buildContext(segments: TranscriptSegment[], segmentIndex: number): stri
   const start = Math.max(0, segmentIndex - CONTEXT_SEGMENTS_EACH_SIDE)
   const end = Math.min(segments.length, segmentIndex + CONTEXT_SEGMENTS_EACH_SIDE + 1)
 
-  return segments
-    .slice(start, end)
-    .map((segment, index) => index === segmentIndex - start
-      ? `[CANDIDATE] ${segment.text}`
-      : segment.text)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_CONTEXT_CHARS)
+  const candidateText = `[CANDIDATE] ${segments[segmentIndex]!.text}`
+  const nearby = (items: TranscriptSegment[]) => items
+    .filter((segment) => Math.abs(segment.startMs - segments[segmentIndex]!.startMs) <= 10_000)
+    .map((segment) => segment.text).join(' ')
+  const budget = Math.max(0, MAX_CONTEXT_CHARS - candidateText.length - 2)
+  const beforeBudget = Math.floor(budget / 2)
+  const before = beforeBudget ? nearby(segments.slice(start, segmentIndex)).slice(-beforeBudget) : ''
+  const after = nearby(segments.slice(segmentIndex + 1, end)).slice(0, budget - before.length)
+  return `${before} ${candidateText} ${after}`.replace(/\s+/g, ' ').trim().slice(0, MAX_CONTEXT_CHARS)
+}
+
+function transcriptSource(language?: string): TranscriptCandidate['transcriptSource'] {
+  if (!language) return 'unknown'
+  return language.toLowerCase().startsWith('asr') ? 'asr' : 'manual'
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
+
+function mergeCandidates(candidates: TranscriptCandidate[]): TranscriptCandidate[] {
+  const sorted = [...candidates].sort((a, b) => a.startMs - b.startMs)
+  const merged: TranscriptCandidate[] = []
+  const lastByRule = new Map<RuleId, TranscriptCandidate>()
+
+  for (const candidate of sorted) {
+    const previous = lastByRule.get(candidate.ruleId)
+    if (
+      previous
+      && previous.ruleId === candidate.ruleId
+      && candidate.startMs <= previous.endMs + CANDIDATE_MERGE_GAP_MS
+      && candidate.endMs - previous.startMs <= MAX_INCIDENT_MS
+      && unique([previous.context, candidate.context]).join(' ').length <= MAX_CONTEXT_CHARS
+    ) {
+      previous.hitCount += candidate.hitCount
+      previous.endMs = Math.max(previous.endMs, candidate.endMs)
+      previous.matchedTerms = unique([...previous.matchedTerms, ...candidate.matchedTerms])
+      previous.segmentText = unique([previous.segmentText, candidate.segmentText]).join(' ')
+      previous.context = unique([previous.context, candidate.context]).join(' ').slice(0, MAX_CONTEXT_CHARS)
+      continue
+    }
+    const next = { ...candidate }
+    merged.push(next)
+    lastByRule.set(candidate.ruleId, next)
+  }
+
+  return merged
+    .sort((a, b) => a.startMs - b.startMs)
+    .map((candidate, index) => ({ ...candidate, id: `c${index}` }))
 }
 
 export function findTranscriptCandidates(
   segments: TranscriptSegment[],
   enabledRuleIds: RuleId[],
+  transcriptLanguage?: string,
 ): TranscriptCandidate[] {
   const candidates: TranscriptCandidate[] = []
-  let candidateIndex = 0
+  const source = transcriptSource(transcriptLanguage)
 
   segments.forEach((segment, segmentIndex) => {
     for (const ruleId of enabledRuleIds) {
@@ -84,7 +137,7 @@ export function findTranscriptCandidates(
       if (matchedTerms.length === 0) continue
 
       candidates.push({
-        id: `c${candidateIndex}`,
+        id: '',
         ruleId,
         hitCount: matchedTerms.length,
         startMs: segment.startMs,
@@ -92,23 +145,79 @@ export function findTranscriptCandidates(
         segmentText: segment.text,
         matchedTerms,
         context: buildContext(segments, segmentIndex),
+        contextTruncated: segment.text.length + 12 > MAX_CONTEXT_CHARS,
+        transcriptLanguage,
+        transcriptSource: source,
       })
-      candidateIndex += 1
     }
   })
 
-  return candidates
+  for (const ruleId of enabledRuleIds) {
+    const rule = getRule(ruleId)
+    if (!rule.contextPatterns?.length) continue
+    const seenMatches = new Set<string>()
+
+    for (let startIndex = 0; startIndex < segments.length; startIndex += 1) {
+      const window = segments.slice(startIndex, startIndex + 3).filter(
+        (segment) => segment.endMs - segments[startIndex]!.startMs <= 10_000,
+      )
+      if (window.length === 0) continue
+      const windowText = window.map((segment) => segment.text).join(' ')
+      for (const pattern of rule.contextPatterns) {
+        for (const match of windowText.matchAll(pattern)) {
+          const matchStart = match.index!
+          const matchEnd = matchStart + match[0].length
+          let offset = 0
+          const affected = window.filter((segment) => {
+            const overlaps = offset < matchEnd && offset + segment.text.length > matchStart
+            offset += segment.text.length + 1
+            return overlaps
+          })
+          const key = `${affected[0]!.startMs}:${match[0]}`
+          if (seenMatches.has(key)) continue
+          seenMatches.add(key)
+          candidates.push({
+            id: '',
+            ruleId,
+            hitCount: 1,
+            startMs: affected[0]!.startMs,
+            endMs: affected.at(-1)!.endMs,
+            segmentText: affected.map((segment) => segment.text).join(' '),
+            matchedTerms: [match[0]],
+            context: `[CANDIDATE] ${match[0]} ${windowText}`.slice(0, MAX_CONTEXT_CHARS),
+            transcriptLanguage,
+            transcriptSource: source,
+          })
+        }
+      }
+    }
+  }
+
+  return mergeCandidates(candidates)
 }
 
 export function buildDetections(
   candidates: TranscriptCandidate[],
   enabledRuleIds: RuleId[],
 ): RuleDetection[] {
-  const grouped = new Map<RuleId, { count: number; ranges: TimelineRange[] }>()
+  const grouped = new Map<RuleId, {
+    count: number
+    confirmedCount: number
+    reviewCount: number
+    ranges: TimelineRange[]
+  }>()
 
   for (const candidate of candidates) {
-    const current = grouped.get(candidate.ruleId) ?? { count: 0, ranges: [] }
+    if (candidate.resolution === 'dismissed') continue
+    const current = grouped.get(candidate.ruleId) ?? {
+      count: 0,
+      confirmedCount: 0,
+      reviewCount: 0,
+      ranges: [],
+    }
     current.count += candidate.hitCount
+    if (candidate.resolution === 'confirmed') current.confirmedCount += candidate.hitCount
+    else current.reviewCount += candidate.hitCount
     current.ranges.push({
       startMs: candidate.startMs,
       endMs: candidate.endMs,
@@ -127,6 +236,8 @@ export function buildDetections(
       label: rule.label,
       severity: rule.severity,
       count: detection.count,
+      confirmedCount: detection.confirmedCount,
+      reviewCount: detection.reviewCount,
       ranges: mergeRanges(detection.ranges),
     }]
   })
@@ -146,6 +257,8 @@ export function buildRuleSummary(
   return enabledRuleIds.map((ruleId) => {
     const rule = getRule(ruleId)
     let hitCount = 0
+    let confirmedCount = 0
+    let reviewCount = 0
     let videoCount = 0
 
     for (const video of videos) {
@@ -154,6 +267,8 @@ export function buildRuleSummary(
 
       videoCount += 1
       hitCount += detection.count
+      confirmedCount += detection.confirmedCount
+      reviewCount += detection.reviewCount
     }
 
     return {
@@ -161,6 +276,8 @@ export function buildRuleSummary(
       label: rule.label,
       severity: rule.severity,
       hitCount,
+      confirmedCount,
+      reviewCount,
       videoCount,
     }
   })

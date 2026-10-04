@@ -85,6 +85,7 @@ function youtubeTimestampUrl(videoId: string, timestampMs: number): string {
 function unavailableText(reason?: TranscriptUnavailableReason): string {
   if (reason === 'rate_limited') return 'Провайдер временно ограничил запросы.'
   if (reason === 'billing') return 'Закончились credits у TranscriptAPI.'
+  if (reason === 'provider_timeout') return 'TranscriptAPI не ответил после повторных попыток.'
   if (reason === 'not_available') return 'Transcript неожиданно оказался недоступен.'
   return 'Transcript временно недоступен.'
 }
@@ -187,6 +188,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
           <p class="muted">
             Проверено кандидатов: {{ result.selection.inspectedVideos }}.
             Caption-eligible: {{ result.selection.captionEligibleVideos }}.
+            Transcript HTTP requests: {{ result.selection.transcriptHttpRequests }}.
             Язык: {{ result.selection.requestedLanguage }}.
             Storage: {{ result.storageMode }}.
             <span v-if="result.scanId">Scan ID: {{ result.scanId }}.</span>
@@ -205,7 +207,10 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
         <article v-for="item in result.summary" :key="item.ruleId" class="summary-card">
           <strong>{{ item.hitCount }}</strong>
           <span>{{ item.label }}</span>
-          <small>{{ item.videoCount }} видео</small>
+          <small>
+            Подтверждено: {{ item.confirmedCount }},
+            на проверку: {{ item.reviewCount }} · {{ item.videoCount }} видео
+          </small>
         </article>
       </div>
 
@@ -236,7 +241,11 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             <li v-for="detection in video.detections" :key="detection.ruleId">
               <div>
                 <strong>{{ detection.label }}</strong>
-                <small>Обнаружено: {{ detection.count }}</small>
+                <small>
+                  Всего: {{ detection.count }} ·
+                  подтверждено: {{ detection.confirmedCount }} ·
+                  на проверку: {{ detection.reviewCount }}
+                </small>
               </div>
               <div class="range-list">
                 <a

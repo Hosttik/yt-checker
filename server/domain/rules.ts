@@ -9,6 +9,8 @@ export interface RuleDefinition {
   description: string
   severity: RuleSeverity
   patterns: RegExp[]
+  /** High-signal combinations evaluated against a small local context window. */
+  contextPatterns?: RegExp[]
   contextPolicy: {
     violation: string
     benign: string
@@ -93,11 +95,19 @@ export const RULES: Record<RuleId, RuleDefinition> = {
   violence: {
     id: 'violence',
     label: 'Насилие',
-    description: 'Явные упоминания убийства, крови, оружия и стрельбы.',
+    description: 'Оружие, стрельба, взрывы, убийство, кровь и опасные ситуации.',
     severity: 'medium',
     patterns: [
-      words('уб(?:ью|ить|ил|ила|или)|кровь|зареж[а-яё]*|оружие|пистолет|стрел(?:ять|ял|яла)'),
-      words('kill(?:ed|ing)?|blood|gun|shoot(?:ing|er)?'),
+      words('уб(?:ью|ьёт|ьют|ить|ил|ила|или)|кровь|зареж[а-яё]*'),
+      words('оружи[ея]|пистолет[а-яё]*|автомат[а-яё]*|винтовк[а-яё]*|ружь[еяё][а-яё]*|дробовик[а-яё]*|пулем[её]т[а-яё]*|пушк[а-яё]*'),
+      words('патрон[а-яё]*|пул(?:я|и|ю|е|ей|ь|ям|ями|ях)|прицел[а-яё]*|стрел(?:я[а-яё]*|ьб[а-яё]*)|выстрел[а-яё]*'),
+      words('ракет[а-яё]*|бомб[а-яё]*|взрыв[а-яё]*|взорв[а-яё]*|взрывчатк[а-яё]*'),
+      words('ядерн[а-яё]*\\s+реактор[а-яё]*'),
+      words('kill(?:ed|ing)?|blood|guns?|firearms?|rifles?|shotguns?|bullets?|ammo|shoot(?:ing|er)?|missiles?|bombs?|explos(?:ion|ive)s?'),
+    ],
+    contextPatterns: [
+      /((?:привяз[а-яё]*[^.?!]{0,100}рельс[а-яё]*|рельс[а-яё]*[^.?!]{0,100}привяз[а-яё]*))/giu,
+      /((?:поезд[^.?!]{0,140}(?:привяз[а-яё]*|задав[а-яё]*|убьёт|убьет)|(?:привяз[а-яё]*|задав[а-яё]*|убьёт|убьет)[^.?!]{0,140}поезд))/giu,
     ],
     contextPolicy: {
       violation: 'The context depicts, threatens, celebrates, describes, or encourages realistic or disturbing physical violence, injury, killing, weapons, or blood.',

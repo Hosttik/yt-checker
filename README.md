@@ -13,8 +13,9 @@ A normal scan targets **10 successfully analyzed videos with captions**.
 5. A successful transcript costs 1 credit. Failed transcript requests do not consume a credit.
 6. Continue through eligible replacement videos until the requested number of successful transcript analyses is reached or the candidate pool is exhausted.
 7. Run local regex candidate detection.
-8. Optionally pass only bounded candidate context to TypeSafe Jev for contextual false-positive filtering.
-9. Return derived categories, counts, severity and YouTube timeline ranges.
+8. Optionally pass only bounded candidate context plus transcript-source metadata to TypeSafe Jev.
+9. Resolve every candidate as `confirmed`, `needs_review`, or `dismissed`.
+10. Return derived categories, confirmed/review counts, severity and YouTube timeline ranges.
 
 Typical 10-video scan:
 
@@ -98,6 +99,8 @@ Optional Jev layer:
 
 ```env
 NUXT_TYPESAFE_API_KEY=...
+NUXT_JEV_BENIGN_DISMISS_THRESHOLD=0.75
+NUXT_JEV_VIOLATION_CONFIRM_THRESHOLD=0.70
 ```
 
 To use diagnostic storage locally:
@@ -233,9 +236,13 @@ Full-debug mode now records the exact text responsible for rule matches.
 Structured events:
 
 ```text
+transcript.request
+transcript.retry
+transcript.success
+transcript.failed
 candidate.regex_match
 candidate.jev_result
-candidate.final_violation
+candidate.final_resolution
 ```
 
 When `NUXT_LOG_RAW_CANDIDATES=true` and the scan runs in `diagnostic` mode, stdout includes:
@@ -245,8 +252,8 @@ When `NUXT_LOG_RAW_CANDIDATES=true` and the scan runs in `diagnostic` mode, stdo
 - the full caption segment treated as the phrase;
 - bounded neighboring context;
 - start/end timestamps;
-- whether Jev kept or removed the candidate;
-- final resolution for violations that remain.
+- Jev choice, confidence and probabilities;
+- final `confirmed`, `needs_review`, or `dismissed` resolution.
 
 Diagnostic storage also writes:
 
@@ -272,13 +279,13 @@ Raw candidate logging is intentionally not enabled by normal production configur
 ### Diagnostic result.json evidence
 
 When a scan uses `storageMode: diagnostic`, the file written to disk at
-`scan-results/<scan-id>/result.json` is enriched with raw evidence for each final violation.
+`scan-results/<scan-id>/result.json` is enriched with raw evidence for every final candidate resolution.
 
 Each video can contain:
 
 ```json
 {
-  "diagnosticViolations": [
+  "diagnosticEvidence": [
     {
       "candidateId": "c7",
       "ruleId": "insults",
@@ -290,13 +297,47 @@ Each video can contain:
       "startMs": 12400,
       "endMs": 14400,
       "youtubeUrl": "https://www.youtube.com/watch?v=VIDEO_ID&t=12s",
-      "resolution": "kept_after_jev"
+      "resolution": "needs_review",
+      "transcriptLanguage": "asr-ru",
+      "transcriptSource": "asr",
+      "jev": {
+        "choice": "benign",
+        "confidence": 0.47,
+        "probabilities": { "benign": 0.65, "uncertain": 0.27, "violation": 0.08 }
+      }
     }
   ]
 }
 ```
 
-Only final violations that remain after Jev are included in `diagnosticViolations`.
-All regex/Jev intermediate decisions remain available in `analysis-trace.json`.
+For backward compatibility, non-dismissed evidence is also included in
+`diagnosticViolations`. All three resolutions are included in `diagnosticEvidence`,
+and all regex/Jev/retry decisions remain available in `analysis-trace.json`.
+
+`selection.transcriptAttempts` remains a backward-compatible count of videos for
+which transcript retrieval was attempted. The explicit fields are:
+
+```json
+{
+  "transcriptVideosAttempted": 10,
+  "transcriptHttpRequests": 12
+}
+```
+
+`hitCount`/`count` mean all non-dismissed regex hits. `confirmedCount` and
+`reviewCount` split that total by final resolution.
+
+Jev decisions require finite confidence and all three probabilities in [0, 1],
+with probabilities summing to 1 (rounding tolerance 0.02). Missing or malformed
+scores resolve to `needs_review`. Confirmation requires both confidence and
+violation probability >= 0.70; dismissal requires both confidence and benign
+probability >= 0.75. The selected choice must have the largest probability.
+Threshold overrides must be greater than 0.5 and at most 1.
+
+Incident merging uses a 5-second gap, a maximum 25-second span, and never
+discards evidence to fit the 900-character context limit. Compound matching
+uses at most three segments within 10 seconds. Truncated candidate segments
+remain `needs_review`. A paid successful HTTP response is accounted for even
+if reading its body fails; it is not automatically requested and charged again.
 
 This enrichment applies only to the diagnostic file persisted on disk. The public API response remains derived-only and does not expose raw transcript phrases.

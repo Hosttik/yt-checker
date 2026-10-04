@@ -109,10 +109,27 @@ export interface ChannelVideosPage {
 
 export type TranscriptApiObserver = (exchange: TranscriptApiExchange) => void | Promise<void>
 
+export type TranscriptApiTraceEvent =
+  | { event: 'transcript.request'; videoId: string; language: string; attempt: number; maxAttempts: number }
+  | { event: 'transcript.retry'; videoId: string; language: string; attempt: number; status?: number; providerMessage?: string; retryInMs: number }
+  | { event: 'transcript.success'; videoId: string; language: string; attempt: number; chargedCredits: number }
+  | { event: 'transcript.failed'; videoId: string; attempts: number; status?: number; failureReason: TranscriptUnavailableReason; providerMessage?: string }
+
+export interface TranscriptApiRetryOptions {
+  maxAttempts?: number
+  baseDelayMs?: number
+  sleep?: (delayMs: number) => Promise<void>
+  traceObserver?: (event: TranscriptApiTraceEvent) => void | Promise<void>
+}
+
 export class TranscriptApiError extends Error {
   constructor(
     public readonly reason: TranscriptUnavailableReason,
     message: string,
+    public readonly status?: number,
+    public readonly providerMessage?: string,
+    public readonly retryAfterMs?: number,
+    public readonly retryable = false,
   ) {
     super(message)
     this.name = 'TranscriptApiError'
@@ -120,10 +137,38 @@ export class TranscriptApiError extends Error {
 }
 
 function reasonForStatus(status: number): TranscriptUnavailableReason {
+  if (status === 408) return 'provider_timeout'
   if (status === 404 || status === 422) return 'not_available'
   if (status === 429) return 'rate_limited'
   if (status === 402) return 'billing'
   return 'provider_error'
+}
+
+function providerMessage(bodyJson: unknown): string | undefined {
+  if (!bodyJson || typeof bodyJson !== 'object') return undefined
+  const body = bodyJson as Record<string, unknown>
+  for (const key of ['message', 'detail', 'error']) {
+    if (typeof body[key] === 'string') return body[key]
+  }
+  return undefined
+}
+
+function retryAfterMs(headers: Headers): number | undefined {
+  const value = headers.get('retry-after')
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000)
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined
+}
+
+function isRetryableTranscriptError(error: unknown): error is TranscriptApiError {
+  if (!(error instanceof TranscriptApiError)) return false
+  if (error.retryable) return true
+  if (error.status === undefined) return false
+  return error.status === 408
+    || error.status === 429
+    || [500, 502, 503, 504].includes(error.status)
 }
 
 function headersToObject(headers: Headers): Record<string, string> {
@@ -204,17 +249,31 @@ export class TranscriptApiClient {
     totalCredits: 0,
     freeRequests: 0,
   }
+  private transcriptHttpRequests = 0
+  private readonly maxTranscriptAttempts: number
+  private readonly retryBaseDelayMs: number
+  private readonly sleep: (delayMs: number) => Promise<void>
+  private readonly traceObserver?: TranscriptApiRetryOptions['traceObserver']
 
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl = 'https://transcriptapi.com/api/v2',
     private readonly observer?: TranscriptApiObserver,
+    retry: TranscriptApiRetryOptions = {},
   ) {
     if (!apiKey) throw new Error('TranscriptAPI key is not configured.')
+    this.maxTranscriptAttempts = Math.max(1, Math.floor(retry.maxAttempts ?? 3))
+    this.retryBaseDelayMs = Math.max(0, retry.baseDelayMs ?? 1_000)
+    this.sleep = retry.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)))
+    this.traceObserver = retry.traceObserver
   }
 
   getCreditUsage(): ScanCreditUsage {
     return { ...this.usage }
+  }
+
+  getTranscriptHttpRequestCount(): number {
+    return this.transcriptHttpRequests
   }
 
   async getLatestVideos(channelInput: string): Promise<RecentVideosResult> {
@@ -319,34 +378,84 @@ export class TranscriptApiClient {
 
     if (languagePriority) params.language = languagePriority
 
-    const data = await this.requestJson<TranscriptApiTranscriptResponse>(
-      'transcript',
-      '/youtube/transcript',
-      params,
-      'transcript',
-    )
+    let lastError: TranscriptApiError | undefined
 
-    if (!Array.isArray(data.transcript)) {
-      throw new TranscriptApiError('provider_error', 'Provider returned an invalid transcript response.')
+    for (let attempt = 1; attempt <= this.maxTranscriptAttempts; attempt += 1) {
+      await this.traceObserver?.({
+        event: 'transcript.request',
+        videoId,
+        language: languagePriority || 'auto',
+        attempt,
+        maxAttempts: this.maxTranscriptAttempts,
+      })
+      this.transcriptHttpRequests += 1
+
+      try {
+        const data = await this.requestJson<TranscriptApiTranscriptResponse>(
+          'transcript',
+          '/youtube/transcript',
+          params,
+          'transcript',
+        )
+
+        if (!Array.isArray(data.transcript)) {
+          throw new TranscriptApiError('provider_error', 'Provider returned an invalid transcript response.')
+        }
+
+        const segments = data.transcript.flatMap((segment) => {
+          if (!segment.text || typeof segment.start !== 'number' || typeof segment.duration !== 'number') {
+            return []
+          }
+          const startMs = Math.max(0, Math.round(segment.start * 1_000))
+          const durationMs = Math.max(0, Math.round(segment.duration * 1_000))
+          return [{ text: segment.text, startMs, endMs: startMs + durationMs }]
+        })
+
+        if (segments.length === 0) {
+          throw new TranscriptApiError('not_available', 'Transcript is unavailable from the provider.')
+        }
+
+        await this.traceObserver?.({
+          event: 'transcript.success',
+          videoId,
+          language: data.language ?? (languagePriority || 'auto'),
+          attempt,
+          chargedCredits: 1,
+        })
+        return { language: data.language, segments }
+      } catch (error) {
+        lastError = error instanceof TranscriptApiError
+          ? error
+          : new TranscriptApiError('provider_error', 'TranscriptAPI request failed.')
+
+        if (attempt < this.maxTranscriptAttempts && isRetryableTranscriptError(lastError)) {
+          const delayMs = lastError.retryAfterMs ?? this.retryBaseDelayMs * (2 ** (attempt - 1))
+          await this.traceObserver?.({
+            event: 'transcript.retry',
+            videoId,
+            language: languagePriority || 'auto',
+            attempt,
+            status: lastError.status,
+            providerMessage: lastError.providerMessage,
+            retryInMs: delayMs,
+          })
+          await this.sleep(delayMs)
+          continue
+        }
+
+        await this.traceObserver?.({
+          event: 'transcript.failed',
+          videoId,
+          attempts: attempt,
+          status: lastError.status,
+          failureReason: lastError.reason,
+          providerMessage: lastError.providerMessage,
+        })
+        throw lastError
+      }
     }
 
-    const segments = data.transcript.flatMap((segment) => {
-      if (
-        !segment.text
-        || typeof segment.start !== 'number'
-        || typeof segment.duration !== 'number'
-      ) return []
-
-      const startMs = Math.max(0, Math.round(segment.start * 1_000))
-      const durationMs = Math.max(0, Math.round(segment.duration * 1_000))
-      return [{ text: segment.text, startMs, endMs: startMs + durationMs }]
-    })
-
-    if (segments.length === 0) {
-      throw new TranscriptApiError('not_available', 'Transcript is unavailable from the provider.')
-    }
-
-    return { language: data.language, segments }
+    throw lastError ?? new TranscriptApiError('provider_error', 'TranscriptAPI request failed.')
   }
 
   private async requestJson<T>(
@@ -380,23 +489,36 @@ export class TranscriptApiClient {
         },
         chargedCredits: 0,
       })
-      throw new TranscriptApiError('provider_error', 'TranscriptAPI network request failed.')
+      throw new TranscriptApiError(
+        'provider_error',
+        'TranscriptAPI network request failed.',
+        undefined,
+        undefined,
+        undefined,
+        true,
+      )
     }
 
-    const bodyText = await response.text()
-    let bodyJson: unknown = null
-    try {
-      bodyJson = bodyText ? JSON.parse(bodyText) : null
-    } catch {
-      bodyJson = null
-    }
-
+    // Account for a successful paid HTTP response even if its body is interrupted.
     const chargedCredits = response.ok && billing !== 'free' ? 1 : 0
     if (response.ok) {
       if (billing === 'free') this.usage.freeRequests += 1
       if (billing === 'transcript') this.usage.transcriptCredits += 1
       if (billing === 'channel_videos') this.usage.channelVideosCredits += 1
       this.usage.totalCredits += chargedCredits
+    }
+    let bodyText = ''
+    let bodyReadError: unknown
+    try {
+      bodyText = await response.text()
+    } catch (error) {
+      bodyReadError = error
+    }
+    let bodyJson: unknown = null
+    try {
+      bodyJson = bodyText ? JSON.parse(bodyText) : null
+    } catch {
+      bodyJson = null
     }
 
     await this.observer?.({
@@ -417,6 +539,7 @@ export class TranscriptApiClient {
         bodyJson,
       },
       chargedCredits,
+      networkError: bodyReadError ? { name: 'BodyReadError', message: 'Response body interrupted.' } : undefined,
     })
 
     if (!response.ok) {
@@ -425,11 +548,14 @@ export class TranscriptApiClient {
         operation === 'channel_latest' || operation === 'channel_videos'
           ? 'Could not load the YouTube channel from the provider.'
           : 'Transcript data is unavailable from the provider.',
+        response.status,
+        providerMessage(bodyJson),
+        retryAfterMs(response.headers),
       )
     }
 
     if (bodyJson === null) {
-      throw new TranscriptApiError('provider_error', 'Provider returned invalid JSON.')
+      throw new TranscriptApiError('provider_error', 'Provider returned invalid or interrupted JSON.', response.status)
     }
 
     return bodyJson as T
