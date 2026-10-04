@@ -53,7 +53,7 @@ function defaultLabel(category: ContentCategory): (events: ContentEvent[]) => st
   return () => CONTENT_CATEGORY_LABELS[category]
 }
 
-function defaultSummary(_category: ContentCategory): (events: ContentEvent[], displayed: ContentEvent[]) => string {
+function defaultSummary(category: ContentCategory): (events: ContentEvent[], displayed: ContentEvent[]) => string {
   return (events, displayed) => {
     if (events.length === 0) {
       return 'В проанализированных субтитрах релевантных элементов не обнаружено.'
@@ -64,7 +64,7 @@ function defaultSummary(_category: ContentCategory): (events: ContentEvent[], di
     if (displayed.length === 0) {
       return 'Найдены только минимально значимые элементы, скрытые в обычном родительском отчёте.' + contextText
     }
-    return `Обнаружены элементы: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+    return `Обнаружены элементы ${CONTENT_CATEGORY_LABELS[category]}: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
   }
 }
 
@@ -117,14 +117,21 @@ const violencePolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
     if (event.subtype === 'dangerous_situation' || event.subtype === 'destruction') {
       return event.severity === 'low' && details.harmLevel === 'none' ? 'low' : 'moderate'
     }
-    if (event.subtype === 'physical_attack' || event.subtype === 'injury' || event.subtype === 'death') {
-      return severityFloor(event)
-    }
     return severityFloor(event)
   },
   getDisplayLevel: defaultDisplayLevel,
-  getLabel: defaultLabel('sexual_content'),
-  summarize: defaultSummary('sexual_content'),
+  getLabel(events) {
+    return events.length > 0 && events.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? 'Игровое насилие и опасные сцены'
+      : CONTENT_CATEGORY_LABELS.violence
+  },
+  summarize(events, displayed) {
+    if (events.length === 0 || displayed.length === 0) return defaultSummary('violence')(events, displayed)
+    const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
+      : ''
+    return `Обнаружены: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+  },
 }
 
 const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'scary_and_disturbing' }>> = {
@@ -135,8 +142,16 @@ const scaryPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 's
     return 'minimal'
   },
   getDisplayLevel: defaultDisplayLevel,
-  getLabel: defaultLabel('gambling'),
-  summarize: defaultSummary('gambling'),
+  getLabel: defaultLabel('scary_and_disturbing'),
+  summarize(events, displayed) {
+    if (events.length === 0 || displayed.length === 0) {
+      return defaultSummary('scary_and_disturbing')(events, displayed)
+    }
+    const contextText = events.every((event) => event.context === 'game' || event.context === 'fiction')
+      ? ' Большинство найденных элементов относятся к игровому или вымышленному контексту.'
+      : ''
+    return `Обнаружены пугающие или тревожные элементы: ${unique(events.map((event) => event.subtype)).join(', ')}.${contextText}`
+  },
 }
 
 const sexualPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'sexual_content' }>> = {
@@ -149,8 +164,8 @@ const sexualPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: '
     return 'moderate'
   },
   getDisplayLevel: defaultDisplayLevel,
-  getLabel: defaultLabel('self_harm'),
-  summarize: defaultSummary('self_harm'),
+  getLabel: defaultLabel('sexual_content'),
+  summarize: defaultSummary('sexual_content'),
 }
 
 const gamblingPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'gambling' }>> = {
@@ -163,6 +178,8 @@ const gamblingPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category:
     return severityFloor(event)
   },
   getDisplayLevel: defaultDisplayLevel,
+  getLabel: defaultLabel('gambling'),
+  summarize: defaultSummary('gambling'),
 }
 
 const substancesPolicy: CategoryPolicy<Extract<ClassifiedContentEvent, { category: 'substances' }>> = {
