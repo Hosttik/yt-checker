@@ -22,8 +22,9 @@ const violenceEvent = {
   portrayal: 'neutral' as const,
   explicitness: 'mild' as const,
   assertionStatus: 'actual' as const,
-  startSegment: 0,
-  endSegment: 0,
+  evidenceSegments: [0],
+  sceneStartSegment: 0,
+  sceneEndSegment: 0,
   reason: 'Персонажу подарили меч.',
   details: {
     harmLevel: 'none' as const,
@@ -96,6 +97,8 @@ describe('OpenAI content-event classifier', () => {
     const schema = JSON.stringify(request.text.format.schema)
 
     expect(schema).toContain('sceneId')
+    expect(schema).toContain('evidenceSegments')
+    expect(schema).toContain('sceneStartSegment')
     expect(schema).toContain('confidence')
     expect(schema).toContain('harmLevel')
     expect(schema).toContain('assertionStatus')
@@ -126,6 +129,8 @@ describe('OpenAI content-event classifier', () => {
       endMs: 2_000,
       text: 'Мне подарили меч.',
       confidence: 0.98,
+      sceneStartMs: 0,
+      sceneEndMs: 2_000,
       details: {
         harmLevel: 'none',
         targetType: 'object',
@@ -137,7 +142,7 @@ describe('OpenAI content-event classifier', () => {
 
   it('rejects out-of-range segment indexes', async () => {
     const { provider } = providerWith({
-      events: [{ ...violenceEvent, startSegment: 99, endSegment: 99 }],
+      events: [{ ...violenceEvent, evidenceSegments: [99], sceneStartSegment: 99, sceneEndSegment: 99 }],
     })
     await expect(provider.analyze(transcript(['Привет']), 'ru', ['violence'], false))
       .rejects.toMatchObject({ type: 'schema' })
@@ -158,8 +163,9 @@ describe('OpenAI content-event classifier', () => {
         portrayal: 'neutral',
         explicitness: 'none',
         assertionStatus: 'actual',
-        startSegment: 0,
-        endSegment: 0,
+        evidenceSegments: [0],
+        sceneStartSegment: 0,
+        sceneEndSegment: 0,
         reason: 'Упоминание сигареты.',
         details: {
           substance: 'alcohol',
@@ -209,6 +215,8 @@ describe('OpenAI content-event classifier', () => {
     expect(OPENAI_SYSTEM_PROMPT).toContain('Ten low-intensity mentions do not become high severity')
     expect(OPENAI_SYSTEM_PROMPT.toLowerCase()).toContain('do not infer visual facts')
     expect(OPENAI_SYSTEM_PROMPT).toContain('Reuse the exact same sceneId')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('1-6 nearby segment indexes')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('coercive condition')
   })
 
   it('contains regression guidance for self-harm and weak violence candidates', () => {
