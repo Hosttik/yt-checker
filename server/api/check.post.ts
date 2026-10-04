@@ -328,6 +328,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       normalized = normalizeTranscript(transcript.segments)
       if (!normalized.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
       openaiUsage.requests += 1
+      openaiStages.detection.requests += 1
       const resolvedLanguage = transcript.language ?? languagePriority
       const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
       const analysis = await analyzer.analyze(
@@ -336,11 +337,110 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         enabledCategories,
         diagnosticAnalysis,
       )
-      const semanticValidation = validateClassifiedEvents(
-        analysis.classifiedEvents.filter((classifiedEvent) =>
-          enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
-        ),
+      addUsage(openaiUsage, analysis.usage)
+      addUsage(openaiStages.detection, analysis.usage)
+
+      const firstPassEvents = analysis.classifiedEvents.filter((classifiedEvent) =>
+        enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
       )
+      let reviewedEvents = firstPassEvents
+      let reviewResult: OpenAIReviewResult | undefined
+      let reviewError: OpenAIAnalysisError | undefined
+      let contentReview: VideoContentReview
+
+      if (firstPassEvents.length === 0) {
+        contentReview = {
+          status: 'not_needed',
+          candidateCount: 0,
+          reviewedCount: 0,
+          rejectedCount: 0,
+          uncertainCount: 0,
+        }
+      } else if (reviewDisabledAfterFailure) {
+        reviewedEvents = unreviewedEvents(firstPassEvents)
+        contentReview = {
+          status: 'skipped_after_failure',
+          candidateCount: firstPassEvents.length,
+          reviewedCount: 0,
+          rejectedCount: 0,
+          uncertainCount: 0,
+          model: openaiReviewModel,
+          promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+          schemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+          error: {
+            type: 'provider',
+            message: 'Contextual review was skipped after an earlier reviewer failure in this scan.',
+          },
+        }
+      } else {
+        try {
+          openaiUsage.requests += 1
+          openaiStages.review.requests += 1
+          reviewResult = await reviewer.review(
+            normalized,
+            resolvedLanguage,
+            enabledCategories,
+            firstPassEvents,
+          )
+          addUsage(openaiUsage, reviewResult.usage)
+          addUsage(openaiStages.review, reviewResult.usage)
+          reviewedEvents = reviewResult.reviewedEvents.filter((classifiedEvent) =>
+            enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
+          )
+          const reviewIsPartial = !reviewResult.complete || reviewResult.uncertainCandidates > 0
+          contentReview = {
+            status: reviewIsPartial ? 'partial' : 'completed',
+            candidateCount: reviewResult.totalCandidates,
+            reviewedCount: reviewResult.reviewedCandidates,
+            rejectedCount: reviewResult.rejectedCandidates,
+            uncertainCount: reviewResult.uncertainCandidates,
+            model: reviewResult.requestMetadata.model,
+            promptVersion: reviewResult.requestMetadata.promptVersion,
+            schemaVersion: reviewResult.requestMetadata.schemaVersion,
+            latencyMs: reviewResult.provider.latencyMs,
+          }
+          logger.debug('content.review_completed', {
+            videoId: video.id,
+            status: contentReview.status,
+            candidates: contentReview.candidateCount,
+            reviewed: contentReview.reviewedCount,
+            rejected: contentReview.rejectedCount,
+            uncertain: contentReview.uncertainCount,
+            latencyMs: contentReview.latencyMs,
+          })
+        } catch (error) {
+          reviewError = error instanceof OpenAIAnalysisError
+            ? error
+            : new OpenAIAnalysisError('provider', 'OpenAI contextual review failed.')
+          addUsage(openaiUsage, reviewError.usage)
+          addUsage(openaiStages.review, reviewError.usage)
+          reviewDisabledAfterFailure = true
+          reviewedEvents = unreviewedEvents(firstPassEvents)
+          contentReview = {
+            status: 'failed',
+            candidateCount: firstPassEvents.length,
+            reviewedCount: 0,
+            rejectedCount: 0,
+            uncertainCount: 0,
+            model: openaiReviewModel,
+            promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+            schemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+            latencyMs: reviewError.provider?.latencyMs,
+            error: {
+              type: reviewError.type,
+              message: 'Contextual review failed; first-pass findings were retained.',
+            },
+          }
+          logger.warn('content.review_failed', {
+            videoId: video.id,
+            type: reviewError.type,
+            status: reviewError.status ?? null,
+            code: reviewError.code ?? null,
+          })
+        }
+      }
+
+      const semanticValidation = validateClassifiedEvents(reviewedEvents)
       for (const adjusted of semanticValidation.adjustments) {
         logger.debug('content.validation_adjusted', {
           videoId: video.id,
@@ -384,6 +484,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           suspectedCategory: classifiedEvent.category,
           startMs: classifiedEvent.startMs,
           endMs: classifiedEvent.endMs,
+          reviewStatus: classifiedEvent.review?.status ?? 'not_reviewed',
         })
         const eventId = `${video.id}:${classifiedEvent.sourceCandidateId ?? `event_${eventIndex}`}:${classifiedEvent.category}:${classifiedEvent.subtype}`
         const contentEvent = applyContentPolicy(normalizedEvent, eventId, profile)
@@ -401,6 +502,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           videoId: video.id,
           eventId,
           parentRelevance: contentEvent.parentRelevance,
+          reviewerRecommendation: contentEvent.review?.recommendedParentRelevance ?? null,
         })
         logger.debug('content.display', {
           videoId: video.id,
@@ -425,8 +527,18 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       }
       contentEventsByVideo.set(video.id, policyEvents)
       rejectedCandidatesByVideo.set(video.id, rejectedCandidates)
-      storage.recordOpenAISuccess(video.id, analysis, normalized.text, policyEvents, semanticValidation.rejected, semanticValidation.adjustments)
-      addUsage(openaiUsage, analysis.usage)
+      storage.recordOpenAISuccess(
+        video.id,
+        analysis,
+        normalized.text,
+        policyEvents,
+        semanticValidation.rejected,
+        semanticValidation.adjustments,
+        contentReview,
+        reviewResult,
+        reviewError,
+      )
+      const videoUsage = combinedUsage(analysis.usage, reviewResult?.usage ?? reviewError?.usage)
       const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
       videoResults.push({
@@ -436,7 +548,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         transcriptLanguage: transcript.language,
         captionSource: captionSource(transcript.language),
         captionLanguageResolution: captionLanguageResolution(video.preflightCaptionLanguage, transcript.language),
-        openaiUsage: analysis.usage,
+        openaiUsage: videoUsage,
+        contentReview,
         speechQuality,
         violations,
         detections,
@@ -445,12 +558,13 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       logger.info('video.analysis.completed', {
         videoId: video.id,
         classifiedEventCount: analysis.classifiedEvents.length,
+        reviewedEventCount: reviewedEvents.length,
         normalizedEventCount: policyEvents.length,
         validationRejectedCount: semanticValidation.rejected.length,
         validationAdjustedCount: semanticValidation.adjustments.length,
-        inputTokens: analysis.usage.inputTokens,
-        outputTokens: analysis.usage.outputTokens,
-        reasoningTokens: analysis.usage.reasoningTokens,
+        reviewStatus: contentReview.status,
+        detectorTokens: analysis.usage.totalTokens,
+        reviewTokens: reviewResult?.usage.totalTokens ?? reviewError?.usage?.totalTokens ?? 0,
       })
     } catch (error) {
       const analysisError = error instanceof OpenAIAnalysisError
