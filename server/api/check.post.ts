@@ -398,6 +398,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             reviewedCount: reviewResult.reviewedCandidates,
             rejectedCount: reviewResult.rejectedCandidates,
             uncertainCount: reviewResult.uncertainCandidates,
+            reviewRequestCount: reviewResult.requestCount,
+            retryCount: reviewResult.retryCount,
+            missingBeforeRetry: reviewResult.missingBeforeRetry,
+            missingAfterRetry: reviewResult.missingAfterRetry,
             model: reviewResult.requestMetadata.model,
             promptVersion: reviewResult.requestMetadata.promptVersion,
             schemaVersion: reviewResult.requestMetadata.schemaVersion,
@@ -410,6 +414,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             reviewed: contentReview.reviewedCount,
             rejected: contentReview.rejectedCount,
             uncertain: contentReview.uncertainCount,
+            reviewRequestCount: contentReview.reviewRequestCount ?? 0,
+            retryCount: contentReview.retryCount ?? 0,
+            missingBeforeRetry: contentReview.missingBeforeRetry ?? 0,
+            missingAfterRetry: contentReview.missingAfterRetry ?? 0,
             latencyMs: contentReview.latencyMs,
           })
         } catch (error) {
@@ -543,7 +551,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         reviewError,
       )
       const videoUsage = combinedUsage(analysis.usage, reviewResult?.usage ?? reviewError?.usage)
-      const violations = buildLegacyViolations(policyEvents, enabledRuleIds)
+      const legacyVisibleEvents = policyEvents.filter((event) => event.displayLevel !== 'hidden')
+      const violations = buildLegacyViolations(legacyVisibleEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
       videoResults.push({
         ...video,
@@ -689,6 +698,23 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     })),
   })
 
+  const legacySummaryBase = buildRuleSummary(videoResults, enabledRuleIds)
+  const legacySummary = legacySummaryBase.map((item) => {
+    const canonical = channelReport.find((report) => report.category === item.ruleId)
+    if (!canonical) return item
+    const severity = canonical.level === 'none'
+      ? null
+      : canonical.level === 'moderate'
+        ? 'medium' as const
+        : canonical.level
+    return {
+      ...item,
+      severity,
+      violationCount: canonical.displayedEventCount,
+      affectedVideoCount: canonical.affectedVideos,
+    }
+  })
+
   const result: ChannelCheckResponse = {
     scanId: storageMode === 'none' ? undefined : storage.scanId,
     storageMode,
@@ -718,7 +744,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     contentEvents,
     videoReports,
     channelReport,
-    summary: buildRuleSummary(videoResults, enabledRuleIds),
+    summary: legacySummary,
     videos: videoResults,
     limitations: [
       'Each transcript is first analyzed for factual content events. Videos with detected candidates then receive one batched contextual review request over the original full transcript before deterministic backend display policy is applied.',
