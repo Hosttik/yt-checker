@@ -111,6 +111,38 @@ describe('deterministic content policy', () => {
     expect(event.displayLevel).toBe('summary')
   })
 
+  it('floors sufficiently evidenced directed coercion at high even when reviewer recommends moderate', () => {
+    const event = applyContentPolicy(violence('violent_threat', {
+      harmLevel: 'threatened',
+      targetType: 'human_like_character',
+      weaponRole: 'none',
+      actionPurpose: 'threat',
+    }, {
+      severity: 'medium',
+      assertionStatus: 'threatened',
+      review: {
+        status: 'corrected',
+        recommendedParentRelevance: 'moderate',
+        evidenceSufficiency: 'sufficient',
+        contextRanges: [],
+        actor: 'читер',
+        target: 'жители',
+        aggressionDirection: 'actor_to_target',
+        intent: 'coercive',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        repetition: 'single',
+        narrativeFraming: 'unclear',
+        parentSummary: 'Читер обещает не трогать жителей, если герой ему поможет.',
+        rationale: 'Условное обещание безопасности используется для принуждения.',
+      },
+    }), 'event_coercion_floor', 'normal')
+
+    expect(event.parentRelevance).toBe('high')
+    expect(event.displayLevel).toBe('highlight')
+  })
+
   it('treats a pitchfork threat as more relevant than weapon presence', () => {
     const event = applyContentPolicy(violence('violent_threat', {
       harmLevel: 'threatened', targetType: 'human_like_character', weaponRole: 'threatened_use',

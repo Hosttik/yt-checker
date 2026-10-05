@@ -17,8 +17,8 @@ import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
 export const OPENAI_PROMPT_VERSION = '2026-10-05.content-events-v7'
 export const OPENAI_SCHEMA_VERSION = '9'
-export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-05.parent-scene-review-v5'
-export const OPENAI_REVIEW_SCHEMA_VERSION = '3'
+export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-05.parent-scene-review-v6'
+export const OPENAI_REVIEW_SCHEMA_VERSION = '4'
 
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
@@ -243,7 +243,7 @@ const reviewItemSchema = z.object({
 
 const missedHighPriorityEventSchema = z.object({
   event: OPENAI_MODEL_EVENT_SCHEMA,
-  parentRelevance: z.literal('high'),
+  parentRelevance: z.enum(['moderate', 'high']),
   evidenceSufficiency: z.literal('sufficient'),
   contextSegments: z.array(z.number().int().nonnegative()).max(8),
   actor: z.string().min(1).max(100).nullable(),
@@ -394,7 +394,9 @@ For uncertain findings, prefer a restrained description and low/details relevanc
 Coverage rescue:
 - After reviewing every supplied hypothesis, scan the full transcript once for OBVIOUS HIGH-priority parent-relevant events in enabled categories that the first pass missed entirely.
 - Put those only in missedHighPriorityEvents. This is a recall safety net, not a second general detector.
-- A rescue event must have sufficient direct transcript evidence and must independently justify high relevance. Do not rescue moderate/low/minimal material, routine game combat, ordinary pursuit/fright, mild insults, non-targeted weapon presence, property-only destruction, or merely hypothetical/reported danger.
+- A rescue candidate must have sufficient direct transcript evidence and serious facts that could justify high relevance. You may return parentRelevance=moderate when the factual event is strong but the relevance level is borderline; the server will independently validate whether it is structurally serious enough to rescue.
+- Do not rescue ordinary moderate/low/minimal material, routine game combat, ordinary pursuit/fright, mild insults, non-targeted weapon presence, property-only destruction, or merely hypothetical/reported danger.
+- Good rescue candidates include directed coercion with threatened harm, immediate potentially lethal peril with helpless targets, directed weapon threats/attacks, severe actual harm, or comparably strong facts.
 - Do not duplicate, restate, or re-label a supplied hypothesis that already covers the SAME LOCAL DIRECT EVIDENCE. Treat a supplied hypothesis as covering the signal only when its direct evidence/local scene materially overlaps the rescue event's direct evidence.
 - Same actors, same targets, or membership in the same broader story arc do NOT by themselves make two events duplicates. A distinct later or earlier high-priority event with separate direct evidence may be rescued even when it continues an existing storyline.
 - For example, a later explicit coercive condition or threat can be a separate rescue event from an earlier peril/confinement scene when the first pass has no candidate covering that later direct evidence.
@@ -458,6 +460,7 @@ export interface OpenAIReviewResult {
   missingAfterRetry: number
   rescuedCandidates: number
   rescueRejectedCandidates: number
+  rescuedEvents: ClassifiedContentEvent[]
   outputText?: string
   usage: OpenAIUsage
   provider: OpenAIProviderMetadata
@@ -727,6 +730,66 @@ function rescueDuplicatesKnownCandidate(
   return originals.some((original) =>
     original.category === rescue.category && directEvidenceOverlaps(original, rescue),
   )
+}
+
+function coverageRescueIsStructurallySerious(
+  item: z.infer<typeof missedHighPriorityEventSchema>,
+  event: ClassifiedContentEvent,
+): boolean {
+  if (item.evidenceSufficiency !== 'sufficient') return false
+  if (event.assertionStatus === 'reported'
+    || event.assertionStatus === 'hypothetical'
+    || event.assertionStatus === 'negated') {
+    return false
+  }
+
+  const seriousConsequence = item.consequence === 'threatened_harm'
+    || item.consequence === 'injury_or_severe_harm'
+    || item.consequence === 'death'
+  if (!seriousConsequence) return false
+
+  if (event.category === 'violence') {
+    const directedTarget = event.details.targetType === 'person'
+      || event.details.targetType === 'human_like_character'
+      || event.details.targetType === 'animal'
+      || event.details.targetType === 'fantasy_creature'
+    if (!directedTarget) return false
+
+    const directedCoercion = item.intent === 'coercive'
+      && item.aggressionDirection === 'actor_to_target'
+      && (event.subtype === 'violent_threat'
+        || event.subtype === 'dangerous_situation'
+        || event.subtype === 'life_threatening_situation')
+      && (event.details.harmLevel === 'threatened'
+        || event.details.harmLevel === 'attempted'
+        || event.details.harmLevel === 'actual')
+
+    const directedAttack = item.intent === 'aggressive'
+      && item.aggressionDirection === 'actor_to_target'
+      && (event.subtype === 'physical_attack'
+        || event.details.weaponRole === 'threatened_use'
+        || event.details.weaponRole === 'used')
+      && event.details.harmLevel !== 'none'
+
+    const immediateLethalPeril = event.subtype === 'life_threatening_situation'
+      && event.details.harmLevel !== 'none'
+      && (item.distress === 'clear' || item.distress === 'strong' || item.duration === 'sustained')
+
+    return directedCoercion || directedAttack || immediateLethalPeril
+  }
+
+  if (event.category === 'scary_and_disturbing') {
+    return event.details.threatPresent
+      && (event.subtype === 'confinement' || event.subtype === 'intense_peril')
+      && (item.intent === 'coercive'
+        || item.distress === 'clear'
+        || item.distress === 'strong'
+        || item.duration === 'sustained')
+  }
+
+  // Preserve the previous behavior for other enabled categories when the
+  // reviewer itself is confident that the event is high priority.
+  return item.parentRelevance === 'high'
 }
 
 function coverageReview(item: z.infer<typeof missedHighPriorityEventSchema>, transcript: NormalizedTranscript): ContentEventReview {
@@ -1076,6 +1139,7 @@ export class OpenAIAnalysisProvider {
         missingAfterRetry: 0,
         rescuedCandidates: 0,
         rescueRejectedCandidates: 0,
+        rescuedEvents: [],
         usage: {
           inputTokens: 0,
           outputTokens: 0,
@@ -1328,20 +1392,24 @@ export class OpenAIAnalysisProvider {
 
       let rescuedCandidates = 0
       let rescueRejectedCandidates = 0
+      const rescuedEvents: ClassifiedContentEvent[] = []
       const rescueItems = firstResponse.parsed.missedHighPriorityEvents ?? []
       for (const item of rescueItems) {
         try {
           const rescued = materializeEvents([item.event], transcript, enabledCategories)[0]
           if (!rescued
             || rescueDuplicatesKnownCandidate(rescued, events)
-            || rescueDuplicatesKnownCandidate(rescued, reviewedEvents)) {
+            || rescueDuplicatesKnownCandidate(rescued, reviewedEvents)
+            || !coverageRescueIsStructurallySerious(item, rescued)) {
             rescueRejectedCandidates += 1
             continue
           }
-          reviewedEvents.push({
+          const rescuedWithReview = {
             ...rescued,
             review: coverageReview(item, transcript),
-          })
+          }
+          reviewedEvents.push(rescuedWithReview)
+          rescuedEvents.push(rescuedWithReview)
           rescuedCandidates += 1
         } catch {
           rescueRejectedCandidates += 1
@@ -1374,6 +1442,7 @@ export class OpenAIAnalysisProvider {
         missingAfterRetry: items.filter((item) => !byId.has(item.reviewItemId)).length,
         rescuedCandidates,
         rescueRejectedCandidates,
+        rescuedEvents,
         outputText: outputParts.length > 0
           ? outputParts.join('\n--- targeted review retry ---\n')
           : undefined,

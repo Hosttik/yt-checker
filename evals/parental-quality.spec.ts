@@ -24,7 +24,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.coverage-rescue-v11'
+const QUALITY_EVAL_VERSION = '2026-10-05.coverage-rescue-v12'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -112,6 +112,7 @@ interface NewVideoResult {
   onePassEvents: ContentEvent[]
   events: ContentEvent[]
   reviewDecisions: OpenAIReviewDecision[]
+  rescuedEvents: ClassifiedContentEvent[]
   rescuedCandidates: number
   rescueRejectedCandidates: number
   onePassSceneCount: number
@@ -155,6 +156,7 @@ interface RunOutput {
   firstPassSignatures: Record<string, string[]>
   finalSignatures: Record<string, string[]>
   reviewDecisions: Record<string, OpenAIReviewDecision[]>
+  rescueSignatures: Record<string, string[]>
   rescuedCandidates: number
   rescueRejectedCandidates: number
   onePassPriorities: Record<string, Priority>
@@ -165,7 +167,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 10
+  version: 12
   key: string
   runOutputs: RunOutput[]
 }
@@ -577,6 +579,7 @@ async function runCurrent(
     ))
   let reviewed = detection.classifiedEvents
   let reviewDecisions: OpenAIReviewDecision[] = []
+  let rescuedEvents: ClassifiedContentEvent[] = []
   let rescuedCandidates = 0
   let rescueRejectedCandidates = 0
   let requests = 1 + detectionAttempt.retries
@@ -593,6 +596,7 @@ async function runCurrent(
     const review = reviewAttempt.value
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
+    rescuedEvents = review.rescuedEvents
     rescuedCandidates = review.rescuedCandidates
     rescueRejectedCandidates = review.rescueRejectedCandidates
     requests += review.requestCount + reviewAttempt.retries
@@ -614,6 +618,7 @@ async function runCurrent(
     onePassEvents,
     events,
     reviewDecisions,
+    rescuedEvents,
     rescuedCandidates,
     rescueRejectedCandidates,
     onePassSceneCount: buildPresentationScenes(onePassEvents).length,
@@ -716,6 +721,24 @@ function finalSignatures(
         event.parentRelevance,
         event.displayLevel,
         event.review?.status ?? 'no_review',
+      ].join(':')),
+  ]))
+}
+
+function rescueSignaturesForAnnotations(
+  annotations: ManualCase[],
+  rescuedByVideo: Map<string, ClassifiedContentEvent[]>,
+): Record<string, string[]> {
+  return Object.fromEntries(annotations.map((annotation) => [
+    annotation.id,
+    (rescuedByVideo.get(annotation.sourceVideo) ?? [])
+      .filter((event) => eventMatches(event, annotation))
+      .map((event) => [
+        event.category,
+        event.subtype,
+        event.severity,
+        event.assertionStatus,
+        event.evidenceStrength,
       ].join(':')),
   ]))
 }
@@ -856,7 +879,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 10 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 12 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -918,6 +941,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       const onePassByVideo = new Map<string, ContentEvent[]>()
       const firstPassByVideo = new Map<string, ClassifiedContentEvent[]>()
       const reviewDecisionsByVideo = new Map<string, OpenAIReviewDecision[]>()
+      const rescuedByVideo = new Map<string, ClassifiedContentEvent[]>()
       for (const record of selectedRecords) {
         const output = newByKey.get(`${record.videoId}:${record.transcriptHash}`)
         if (!output) continue
@@ -925,6 +949,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         onePassByVideo.set(record.videoId, output.onePassEvents)
         firstPassByVideo.set(record.videoId, output.firstPassEvents)
         reviewDecisionsByVideo.set(record.videoId, output.reviewDecisions)
+        rescuedByVideo.set(record.videoId, output.rescuedEvents)
       }
       const outputs = [...newByKey.values()]
       runOutputs.push({
@@ -951,6 +976,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
           firstPassByVideo,
           reviewDecisionsByVideo,
         ),
+        rescueSignatures: rescueSignaturesForAnnotations(applicableAnnotations, rescuedByVideo),
         rescuedCandidates: outputs.reduce((sum, item) => sum + item.rescuedCandidates, 0),
         rescueRejectedCandidates: outputs.reduce((sum, item) => sum + item.rescueRejectedCandidates, 0),
         onePassPriorities: priorities(applicableAnnotations, onePassByVideo),
@@ -962,7 +988,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 10,
+          version: 12,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1113,6 +1139,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
               firstPassSignatures: output.firstPassSignatures[annotation.id] ?? [],
               finalSignatures: output.finalSignatures[annotation.id] ?? [],
               reviewDecisions: output.reviewDecisions[annotation.id] ?? [],
+              rescueSignatures: output.rescueSignatures[annotation.id] ?? [],
               onePassPriority,
               onePassLevel,
               finalPriority,

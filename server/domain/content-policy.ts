@@ -354,12 +354,52 @@ function reviewedHighPriorityIsSupported(event: ClassifiedContentEvent): boolean
   return true
 }
 
+function reviewEstablishesHighPriorityCoercion(event: ClassifiedContentEvent): boolean {
+  const review = event.review
+  if (!review || (review.status !== 'confirmed' && review.status !== 'corrected')) return false
+  if (review.evidenceSufficiency !== 'sufficient') return false
+  if (review.intent !== 'coercive' || review.aggressionDirection !== 'actor_to_target') return false
+  if (review.consequence !== 'threatened_harm'
+    && review.consequence !== 'injury_or_severe_harm'
+    && review.consequence !== 'death') {
+    return false
+  }
+  if (event.assertionStatus === 'reported'
+    || event.assertionStatus === 'hypothetical'
+    || event.assertionStatus === 'negated') {
+    return false
+  }
+
+  if (event.category === 'violence') {
+    const seriousSubtype = event.subtype === 'violent_threat'
+      || event.subtype === 'dangerous_situation'
+      || event.subtype === 'life_threatening_situation'
+      || event.subtype === 'physical_attack'
+    const seriousHarm = event.details.harmLevel === 'threatened'
+      || event.details.harmLevel === 'attempted'
+      || event.details.harmLevel === 'actual'
+    return seriousSubtype && seriousHarm
+  }
+
+  if (event.category === 'scary_and_disturbing') {
+    return event.details.threatPresent
+      && (event.subtype === 'confinement'
+        || event.subtype === 'intense_peril'
+        || event.subtype === 'threatening_character'
+        || event.subtype === 'pursuit')
+  }
+
+  return false
+}
+
 function reviewAdjustedRelevance(
   event: ClassifiedContentEvent,
   baseline: ParentRelevance,
 ): ParentRelevance {
   const review = event.review
   if (!review || review.status === 'not_reviewed') return baseline
+
+  if (reviewEstablishesHighPriorityCoercion(event)) return 'high'
 
   if (review.status === 'uncertain'
     && relevanceRank[review.recommendedParentRelevance] <= relevanceRank[baseline]) {
