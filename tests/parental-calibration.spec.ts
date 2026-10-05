@@ -257,8 +257,8 @@ describe('parent relevance calibration', () => {
     const event = applyContentPolicy(scary('intense_peril', {
       severity: 'medium',
       context: 'game',
-      assertionStatus: 'actual',
-      engagementLevel: 'depiction',
+      assertionStatus: 'reported',
+      engagementLevel: 'mention',
       text: 'Нам сообщили, что к деревне идут 11 000 зомби. Мы не справимся, нужно прятаться в бункере.',
       reason: 'Персонажи обсуждают сообщённую будущую угрозу и планируют укрыться.',
       details: {
@@ -285,7 +285,7 @@ describe('parent relevance calibration', () => {
     expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
   })
 
-  it('keeps sustained accidental fictional peril on main but caps it below high', () => {
+  it('keeps active accidental fictional peril on main even when review calls it brief and single', () => {
     const event = applyContentPolicy(scary('intense_peril', {
       severity: 'high',
       context: 'game',
@@ -305,8 +305,8 @@ describe('parent relevance calibration', () => {
         intent: 'accidental',
         distress: 'clear',
         consequence: 'threatened_harm',
-        duration: 'sustained',
-        repetition: 'repeated',
+        duration: 'brief',
+        repetition: 'single',
         parentSummary: 'Чёрная дыра разрастается и затягивает рассказчика, который не может удержаться даже за колодец.',
         mitigatingContext: 'Это происходит в Minecraft.',
         highPriorityReason: 'Рассказчика всё быстрее тянет к разрастающейся чёрной дыре.',
@@ -317,6 +317,37 @@ describe('parent relevance calibration', () => {
     const scene = buildPresentationScenes([event])[0]!
     expect(scene.level).toBe('moderate')
     expect(scene.attention).toBe('main')
+  })
+
+  it('keeps active reviewed dangerous situations on main without duration or repetition escalation', () => {
+    const event = applyContentPolicy(violence('dangerous_situation', {
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      engagementLevel: 'depiction',
+      text: 'Меня засасывает в воронку, я пытаюсь удержаться.',
+      reason: 'Персонаж непосредственно находится в опасной ситуации и пытается удержаться.',
+      details: {
+        harmLevel: 'implied',
+        targetType: 'human_like_character',
+        weaponRole: 'none',
+        actionPurpose: 'accident',
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        aggressionDirection: 'none',
+        intent: 'accidental',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        repetition: 'single',
+        highPriorityReason: undefined,
+        parentSummary: 'Персонажа затягивает в воронку, и он пытается удержаться.',
+      }),
+    }), 'active-danger', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('main')
   })
 
   it('keeps sustained coercive confinement high', () => {
