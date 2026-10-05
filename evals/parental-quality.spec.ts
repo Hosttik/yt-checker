@@ -24,7 +24,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.semantic-anchor-v7'
+const QUALITY_EVAL_VERSION = '2026-10-05.strict-temporal-v8'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -161,7 +161,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 7
+  version: 8
   key: string
   runOutputs: RunOutput[]
 }
@@ -285,6 +285,7 @@ function eventMatches(
     'text' | 'reason' | 'category' | 'startMs' | 'endMs' | 'sceneStartMs' | 'sceneEndMs'
   >,
   annotation: ManualCase,
+  allowLexicalFallback = false,
 ): boolean {
   if (!annotation.categories.includes(event.category)) return false
   if (annotation.matchingFindings?.length
@@ -299,29 +300,41 @@ function eventMatches(
     const temporalMatch = startMs <= annotation.anchorEndMs + EVENT_MATCH_PADDING_MS
       && endMs >= annotation.anchorStartMs - EVENT_MATCH_PADDING_MS
     if (temporalMatch) return true
+    if (!allowLexicalFallback) return false
   }
 
-  // Saved baseline events can carry the provider's original timing while the
-  // replay transcript uses deterministic synthetic timing. Lexical rescue keeps
-  // baseline/reference matching usable without weakening the primary temporal path.
+  // Lexical fallback is only for saved baseline/reference events whose original
+  // provider timing can differ from the deterministic replay transcript timing.
   return anchorOverlap(annotation.anchor, `${event.text} ${event.reason}`) >= 0.6
 }
 
-function matchingPresentationScenes(events: ContentEvent[], annotation: ManualCase) {
+function matchingPresentationScenes(
+  events: ContentEvent[],
+  annotation: ManualCase,
+  allowLexicalFallback = false,
+) {
   return buildPresentationScenes(events).filter((scene) =>
-    scene.events.some((event) => eventMatches(event, annotation)),
+    scene.events.some((event) => eventMatches(event, annotation, allowLexicalFallback)),
   )
 }
 
-function actualPriority(events: ContentEvent[], annotation: ManualCase): Priority {
-  const scenes = matchingPresentationScenes(events, annotation)
+function actualPriority(
+  events: ContentEvent[],
+  annotation: ManualCase,
+  allowLexicalFallback = false,
+): Priority {
+  const scenes = matchingPresentationScenes(events, annotation, allowLexicalFallback)
   if (scenes.some((scene) => scene.attention === 'main')) return 'main'
   if (scenes.length > 0) return 'details'
   return 'hidden'
 }
 
-function actualLevel(events: ContentEvent[], annotation: ManualCase): ConcernLevel {
-  return matchingPresentationScenes(events, annotation)
+function actualLevel(
+  events: ContentEvent[],
+  annotation: ManualCase,
+  allowLexicalFallback = false,
+): ConcernLevel {
+  return matchingPresentationScenes(events, annotation, allowLexicalFallback)
     .reduce<ConcernLevel>((max, scene) => {
       const level = scene.level === 'high'
         ? 'high'
@@ -336,9 +349,13 @@ function findingMatches(event: ContentEvent, pattern: string): boolean {
   return matchesFindingPattern(event, pattern)
 }
 
-function unsupportedCount(events: ContentEvent[], annotation: ManualCase): number {
+function unsupportedCount(
+  events: ContentEvent[],
+  annotation: ManualCase,
+  allowLexicalFallback = false,
+): number {
   return events.filter((event) =>
-    eventMatches(event, annotation)
+    eventMatches(event, annotation, allowLexicalFallback)
     && annotation.forbiddenFindings.some((pattern) => findingMatches(event, pattern)),
   ).length
 }
@@ -346,6 +363,7 @@ function unsupportedCount(events: ContentEvent[], annotation: ManualCase): numbe
 function metricsFor(
   annotations: ManualCase[],
   eventsByVideo: Map<string, ContentEvent[]>,
+  allowLexicalFallback = false,
 ): MetricSet {
   let shownCases = 0
   let usefulShownCases = 0
@@ -359,7 +377,7 @@ function metricsFor(
 
   for (const annotation of annotations) {
     const events = eventsByVideo.get(annotation.sourceVideo) ?? []
-    const actual = actualPriority(events, annotation)
+    const actual = actualPriority(events, annotation, allowLexicalFallback)
     if (actual === 'main') mainCases += 1
     else if (actual === 'details') detailCases += 1
     else hiddenCases += 1
@@ -373,8 +391,9 @@ function metricsFor(
       || (annotation.priority === 'details' && actual === 'main')) {
       lowValueCards += 1
     }
-    unsupportedClaims += unsupportedCount(events, annotation)
-    if (annotation.expectedLevel && actualLevel(events, annotation) !== annotation.expectedLevel) {
+    unsupportedClaims += unsupportedCount(events, annotation, allowLexicalFallback)
+    if (annotation.expectedLevel
+      && actualLevel(events, annotation, allowLexicalFallback) !== annotation.expectedLevel) {
       levelMismatches += 1
     }
   }
@@ -398,6 +417,7 @@ function cardAuditFor(
   annotations: ManualCase[],
   eventsByVideo: Map<string, ContentEvent[]>,
   coverage: VideoCoverageFile,
+  allowLexicalFallback = false,
 ): CardAudit {
   let allDisplayedCards = 0
   let matchedKnownVisibleAnchors = 0
@@ -413,7 +433,7 @@ function cardAuditFor(
     )
     const matched = scenes.filter((scene) =>
       visibleAnnotations.some((annotation) =>
-        scene.events.some((event) => eventMatches(event, annotation)),
+        scene.events.some((event) => eventMatches(event, annotation, allowLexicalFallback)),
       ),
     ).length
 
@@ -428,7 +448,7 @@ function cardAuditFor(
     exhaustiveDisplayedCards += scenes.length
     exhaustiveUsefulCards += matched
     exhaustiveVisibleMisses += visibleAnnotations.filter((annotation) =>
-      !scenes.some((scene) => scene.events.some((event) => eventMatches(event, annotation))),
+      !scenes.some((scene) => scene.events.some((event) => eventMatches(event, annotation, allowLexicalFallback))),
     ).length
   }
 
@@ -796,8 +816,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       const scanAnnotations = applicableAnnotations.filter((annotation) => eventsByVideo.has(annotation.sourceVideo))
       return {
         scan: basename(scanDirs[scanIndex]!),
-        metrics: metricsFor(scanAnnotations, eventsByVideo),
-        cardAudit: cardAuditFor(scanAnnotations, eventsByVideo, coverage),
+        metrics: metricsFor(scanAnnotations, eventsByVideo, true),
+        cardAudit: cardAuditFor(scanAnnotations, eventsByVideo, coverage, true),
         usage: item.result.openaiUsage ?? zeroUsage(),
         latencyMs: records.reduce((sum, record) => sum + record.baselineLatencyMs, 0),
         annotations: scanAnnotations.map((item) => item.id),
@@ -823,7 +843,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 7 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 8 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -927,7 +947,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 7,
+          version: 8,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -982,11 +1002,12 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         baselineCombinedEvents.set(record.videoId, record.baselineEvents)
       }
     }
-    const baselineCombined = metricsFor(applicableAnnotations, baselineCombinedEvents)
+    const baselineCombined = metricsFor(applicableAnnotations, baselineCombinedEvents, true)
     const baselineCombinedCardAudit = cardAuditFor(
       applicableAnnotations,
       baselineCombinedEvents,
       coverage,
+      true,
     )
     const current = runOutputs[0]!
 
