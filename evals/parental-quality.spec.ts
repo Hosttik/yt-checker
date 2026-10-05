@@ -965,7 +965,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       )
     }
 
-    const baselineByScan = loaded.map((item, scanIndex) => {
+    const baselineByScan = loaded.map((item) => {
       const records = item.records.filter((record) =>
         selectedKeys.has(`${record.videoId}:${record.transcriptHash}`),
       )
@@ -999,6 +999,11 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         reviewModel,
         reasoningEffort,
         requestTimeoutMs,
+        discoverScans,
+        uniqueChannels,
+        maxScans,
+        maxVideosPerScan,
+        transcriptCreditUsd,
         profile,
       }))
       .digest('hex')
@@ -1008,7 +1013,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 14 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 15 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1095,6 +1100,25 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         rescuedByVideo.set(record.videoId, output.rescuedEvents)
       }
       const outputs = [...newByKey.values()]
+      const runUsage = aggregateUsages(outputs.map((item) => item.usage))
+      const videoStats: VideoRunStat[] = outputs.map((item) => {
+        const scenes = buildPresentationScenes(item.events)
+        return {
+          scanName: item.scanName,
+          videoId: item.videoId,
+          requests: item.requests,
+          usage: item.usage,
+          openaiCostUsd: estimateOpenAICostUsd(item.usage),
+          providerLatencyMs: item.latencyMs,
+          wallClockMs: item.wallClockMs,
+          onePassSceneCount: item.onePassSceneCount,
+          sceneCount: item.sceneCount,
+          mainSceneCount: scenes.filter((scene) => scene.attention === 'main').length,
+          detailSceneCount: scenes.filter((scene) => scene.attention === 'details').length,
+          rescuedCandidates: item.rescuedCandidates,
+          rescueRejectedCandidates: item.rescueRejectedCandidates,
+        }
+      })
       runOutputs.push({
         metrics: metricsFor(applicableAnnotations, currentByVideo),
         onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
@@ -1127,11 +1151,15 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         priorities: priorities(applicableAnnotations, currentByVideo),
         levels: levels(applicableAnnotations, currentByVideo),
         sceneSignatures: displayedSceneSignatures(currentByVideo),
+        usage: runUsage,
+        openaiCostUsd: estimateOpenAICostUsd(runUsage),
+        wallClockMs: outputs.reduce((sum, item) => sum + item.wallClockMs, 0),
+        videoStats,
       })
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 14,
+          version: 15,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
