@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AggregateOpenAIUsage } from '../shared/types/check'
@@ -10,6 +10,10 @@ import type {
   ContentEvent,
 } from '../shared/types/content'
 import { applyContentPolicy } from '../server/domain/content-policy'
+import {
+  estimateOpenAICostUsd,
+  GPT6_LUNA_STANDARD_PRICING,
+} from '../server/domain/openai-cost'
 import { normalizeClassifiedEvents } from '../server/domain/content-normalization'
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
@@ -27,7 +31,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.reasoning-comparison-v14'
+const QUALITY_EVAL_VERSION = '2026-10-05.cross-channel-cost-v15'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -95,6 +99,15 @@ interface DiagnosticEntry {
 }
 
 interface ScanResult {
+  channel?: { id: string; title: string }
+  analyzedVideos?: number
+  failedVideos?: number
+  creditUsage?: {
+    transcriptCredits: number
+    channelVideosCredits: number
+    totalCredits: number
+    freeRequests: number
+  }
   openaiUsage?: AggregateOpenAIUsage
 }
 
@@ -109,6 +122,7 @@ interface ScanRecord {
 }
 
 interface NewVideoResult {
+  scanName: string
   videoId: string
   transcriptHash: string
   firstPassEvents: ClassifiedContentEvent[]
@@ -125,6 +139,8 @@ interface NewVideoResult {
   requests: number
   tokens: number
   latencyMs: number
+  wallClockMs: number
+  usage: AggregateOpenAIUsage
 }
 
 interface MetricSet {
@@ -140,6 +156,20 @@ interface MetricSet {
   mainCases: number
   detailCases: number
   hiddenCases: number
+}
+
+interface VideoRunStat {
+  scanName: string
+  videoId: string
+  requests: number
+  usage: AggregateOpenAIUsage
+  openaiCostUsd: number
+  providerLatencyMs: number
+  wallClockMs: number
+  onePassSceneCount: number
+  sceneCount: number
+  rescuedCandidates: number
+  rescueRejectedCandidates: number
 }
 
 interface RunOutput {
@@ -167,10 +197,14 @@ interface RunOutput {
   priorities: Record<string, Priority>
   levels: Record<string, ConcernLevel>
   sceneSignatures: Record<string, string[]>
+  usage: AggregateOpenAIUsage
+  openaiCostUsd: number
+  wallClockMs: number
+  videoStats: VideoRunStat[]
 }
 
 interface StabilityCheckpoint {
-  version: 14
+  version: 15
   key: string
   runOutputs: RunOutput[]
 }
@@ -204,6 +238,45 @@ function zeroUsage(): AggregateOpenAIUsage {
     cacheWriteTokens: 0,
     totalTokens: 0,
   }
+}
+
+function addUsage(total: AggregateOpenAIUsage, usage: Partial<AggregateOpenAIUsage> | undefined): void {
+  if (!usage) return
+  total.requests += usage.requests ?? 0
+  total.inputTokens += usage.inputTokens ?? 0
+  total.outputTokens += usage.outputTokens ?? 0
+  total.reasoningTokens += usage.reasoningTokens ?? 0
+  total.cachedTokens += usage.cachedTokens ?? 0
+  total.cacheWriteTokens += usage.cacheWriteTokens ?? 0
+  total.totalTokens += usage.totalTokens ?? 0
+}
+
+function aggregateUsages(usages: Array<AggregateOpenAIUsage | undefined>): AggregateOpenAIUsage {
+  const total = zeroUsage()
+  for (const usage of usages) addUsage(total, usage)
+  return total
+}
+
+async function discoverSavedScanDirs(root = 'scan-results'): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true })
+  const candidates = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => resolve(root, entry.name))
+    .sort((a, b) => basename(b).localeCompare(basename(a)))
+
+  const valid: string[] = []
+  for (const dir of candidates) {
+    try {
+      await Promise.all([
+        access(resolve(dir, 'result.json')),
+        access(resolve(dir, 'openai-analysis.json')),
+      ])
+      valid.push(dir)
+    } catch {
+      // Ignore incomplete/non-diagnostic scan folders.
+    }
+  }
+  return valid
 }
 
 function parseTranscript(text: string): NormalizedTranscript {
