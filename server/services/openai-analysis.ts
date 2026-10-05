@@ -22,6 +22,8 @@ export const OPENAI_REVIEW_SCHEMA_VERSION = '4'
 export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-05.high-priority-coverage-v1'
 export const OPENAI_COVERAGE_SCHEMA_VERSION = '1'
 
+export type OpenAIReasoningEffort = 'low' | 'medium' | 'high'
+
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
 const evidenceStrengthSchema = z.enum(['explicit', 'strong_context', 'weak_context'])
@@ -471,7 +473,7 @@ export interface OpenAICoverageResult {
   provider: OpenAIProviderMetadata
   requestMetadata: {
     model: string
-    reasoningEffort: 'low'
+    reasoningEffort: OpenAIReasoningEffort
     transcriptLanguage: string
     enabledCategories: ContentCategory[]
     promptVersion: string
@@ -500,7 +502,7 @@ export interface OpenAIReviewResult {
   provider: OpenAIProviderMetadata
   requestMetadata: {
     model: string
-    reasoningEffort: 'low'
+    reasoningEffort: OpenAIReasoningEffort
     transcriptLanguage: string
     enabledCategories: ContentCategory[]
     promptVersion: string
@@ -524,7 +526,7 @@ export interface OpenAIAnalysisResult {
   provider: OpenAIProviderMetadata
   requestMetadata: {
     model: string
-    reasoningEffort: 'low'
+    reasoningEffort: OpenAIReasoningEffort
     transcriptLanguage: string
     enabledCategories: ContentCategory[]
     diagnostic: boolean
@@ -1030,6 +1032,7 @@ export class OpenAIAnalysisProvider {
     private readonly model = 'gpt-6-luna',
     private readonly observer?: OpenAIAnalysisObserver,
     client?: OpenAI,
+    private readonly reasoningEffort: OpenAIReasoningEffort = 'low',
   ) {
     if (!apiKey) throw new Error('OpenAI API key is not configured.')
     this.client = client ?? new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 })
@@ -1043,7 +1046,7 @@ export class OpenAIAnalysisProvider {
   ): Promise<OpenAIAnalysisResult> {
     const metadata: OpenAIAnalysisResult['requestMetadata'] = {
       model: this.model,
-      reasoningEffort: 'low',
+      reasoningEffort: this.reasoningEffort,
       transcriptLanguage: language || 'unknown',
       enabledCategories,
       diagnostic,
@@ -1057,7 +1060,7 @@ export class OpenAIAnalysisProvider {
 
     const common = {
       model: this.model,
-      reasoning: { effort: 'low' as const },
+      reasoning: { effort: this.reasoningEffort },
       input: [
         {
           role: 'developer' as const,
@@ -1168,7 +1171,7 @@ export class OpenAIAnalysisProvider {
   ): Promise<OpenAIReviewResult> {
     const metadata: OpenAIReviewResult['requestMetadata'] = {
       model: this.model,
-      reasoningEffort: 'low',
+      reasoningEffort: this.reasoningEffort,
       transcriptLanguage: language || 'unknown',
       enabledCategories,
       promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
@@ -1233,7 +1236,7 @@ export class OpenAIAnalysisProvider {
       const dynamicInput = `Transcript language: ${language || 'unknown'}\nEnabled categories: ${enabledCategories.join(', ')}${retryInstruction}\n\nFirst-pass hypotheses (untrusted):\n${JSON.stringify(batchItems)}\n\nOriginal transcript:\n${transcript.text}`
       const response = await this.client.responses.parse({
         model: this.model,
-        reasoning: { effort: 'low' as const },
+        reasoning: { effort: this.reasoningEffort },
         input: [
           {
             role: 'developer' as const,
@@ -1516,7 +1519,7 @@ export class OpenAIAnalysisProvider {
   ): Promise<OpenAICoverageResult> {
     const metadata: OpenAICoverageResult['requestMetadata'] = {
       model: this.model,
-      reasoningEffort: 'low',
+      reasoningEffort: this.reasoningEffort,
       transcriptLanguage: language || 'unknown',
       enabledCategories,
       promptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
@@ -1542,7 +1545,7 @@ ${transcript.text}`
 
     const response = await this.client.responses.parse({
       model: this.model,
-      reasoning: { effort: 'low' as const },
+      reasoning: { effort: this.reasoningEffort },
       input: [
         {
           role: 'developer' as const,

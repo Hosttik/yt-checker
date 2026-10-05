@@ -22,11 +22,12 @@ import {
   OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisProvider,
+  type OpenAIReasoningEffort,
   type OpenAIReviewDecision,
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.dedicated-coverage-v13'
+const QUALITY_EVAL_VERSION = '2026-10-05.reasoning-comparison-v14'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -169,7 +170,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 13
+  version: 14
   key: string
   runOutputs: RunOutput[]
 }
@@ -808,6 +809,11 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
     const reviewModel = process.env.OPENAI_REVIEW_MODEL ?? model
+    const reasoningEffortRaw = process.env.QUALITY_REASONING_EFFORT ?? 'low'
+    if (!['low', 'medium', 'high'].includes(reasoningEffortRaw)) {
+      throw new Error('QUALITY_REASONING_EFFORT must be one of: low, medium, high.')
+    }
+    const reasoningEffort = reasoningEffortRaw as OpenAIReasoningEffort
     const profile: AnalysisProfile = 'normal'
 
     const [annotations, coverage] = await Promise.all([
@@ -884,6 +890,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         runs,
         model,
         reviewModel,
+        reasoningEffort,
         profile,
       }))
       .digest('hex')
@@ -893,7 +900,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 13 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 14 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -902,15 +909,27 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     }
 
     console.log(
-      `Quality eval: ${runs} run(s), ${selected.length} video(s), concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
     )
     if (runOutputs.length > 0) {
       console.log(`[quality] resumed from checkpoint: ${runOutputs.length}/${runs} completed run(s)`)
     }
 
     for (let run = runOutputs.length; run < runs; run += 1) {
-      const detector = new OpenAIAnalysisProvider(apiKey, model)
-      const reviewer = new OpenAIAnalysisProvider(apiKey, reviewModel)
+      const detector = new OpenAIAnalysisProvider(
+        apiKey,
+        model,
+        undefined,
+        undefined,
+        reasoningEffort,
+      )
+      const reviewer = new OpenAIAnalysisProvider(
+        apiKey,
+        reviewModel,
+        undefined,
+        undefined,
+        reasoningEffort,
+      )
       const newByKey = new Map<string, NewVideoResult>()
       let completedVideos = 0
 
@@ -1002,7 +1021,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 13,
+          version: 14,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1104,6 +1123,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         qualityEval: QUALITY_EVAL_VERSION,
         detectorModel: model,
         reviewerModel: reviewModel,
+        reasoningEffort,
         detectorPrompt: OPENAI_PROMPT_VERSION,
         detectorSchema: OPENAI_SCHEMA_VERSION,
         reviewerPrompt: OPENAI_REVIEW_PROMPT_VERSION,
