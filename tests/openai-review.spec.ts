@@ -162,20 +162,51 @@ describe('OpenAI contextual reviewer', () => {
     expect(userText).toContain('[2] Теперь выход из деревни вам запрещён.')
   })
 
-  it('rescues a missed sufficiently evidenced high-priority scene in the existing review request', async () => {
+  it('keeps candidate review and missed-event coverage as separate tasks', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const firstPass = violentThreat('candidate_existing', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_only',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[]}',
+      output_parsed: {
+        reviews: [confirmedReviewItem('review_0')],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 50, output_tokens: 20, total_tokens: 70 },
+    }))
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+
+    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    const request = parse.mock.calls[0]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
+    const developerText = request.input?.find((item) => item.role === 'developer')?.content[0]?.text ?? ''
+    const userText = request.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
+    expect(developerText).toContain('Coverage is handled by a separate dedicated pass')
+    expect(userText).toContain('candidate review only')
+    expect(result.rescuedCandidates).toBe(0)
+    expect(result.rescuedEvents).toHaveLength(0)
+  })
+
+  it('rescues a missed sufficiently evidenced high-priority scene in a dedicated coverage request', async () => {
     const transcript = normalizeTranscript([
       { text: 'Герой идёт по дороге.', startMs: 1_000, endMs: 2_000 },
       { text: 'Я отпущу жителей только если ты выполнишь мои задания.', startMs: 10_000, endMs: 11_000 },
       { text: 'Если откажешься, им конец.', startMs: 11_100, endMs: 12_000 },
     ])
-    const firstPass = violentThreat('candidate_existing', 1_000)
-
+    const existing = violentThreat('candidate_existing', 1_000)
     const parse = vi.fn(async () => ({
-      id: 'resp_review_rescue',
+      id: 'resp_coverage_rescue',
       status: 'completed',
-      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[{}]}',
+      output_text: '{"missedHighPriorityEvents":[{}]}',
       output_parsed: {
-        reviews: [confirmedReviewItem('review_0')],
         missedHighPriorityEvents: [{
           event: {
             candidateId: 'coverage_1_1',
@@ -219,31 +250,26 @@ describe('OpenAI contextual reviewer', () => {
           rationale: 'Прямые реплики подтверждают условное освобождение и угрозу вреда при отказе.',
         }],
       },
-      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+      usage: { input_tokens: 90, output_tokens: 30, total_tokens: 120 },
     }))
-
     const provider = new OpenAIAnalysisProvider(
       'test-key',
       'gpt-test',
       undefined,
       { responses: { parse } } as never,
     )
-    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    const result = await provider.coverage(transcript, 'ru', ['violence'], [existing])
 
     const request = parse.mock.calls[0]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
     const developerText = request.input?.find((item) => item.role === 'developer')?.content[0]?.text ?? ''
     const userText = request.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
-    expect(developerText).toContain('Coverage rescue step below is the only exception')
-    expect(developerText).toContain('same broader story arc do NOT by themselves make two events duplicates')
-    expect(userText).toContain('Coverage rescue is ENABLED for this primary review request')
-
-    expect(result.complete).toBe(true)
+    expect(developerText).toContain('dedicated HIGH-PRIORITY coverage pass')
+    expect(userText).toContain('Covered direct-evidence segment indexes: [0]')
     expect(result.requestCount).toBe(1)
-    expect(parse).toHaveBeenCalledTimes(1)
     expect(result.rescuedCandidates).toBe(1)
-    expect(result.rescueRejectedCandidates).toBe(0)
-    expect(result.reviewedEvents).toHaveLength(2)
-    expect(result.reviewedEvents[1]).toMatchObject({
+    expect(result.rejectedCandidates).toBe(0)
+    expect(result.rescuedEvents[0]).toMatchObject({
       sourceCandidateId: 'coverage_1_1',
       category: 'violence',
       subtype: 'violent_threat',
@@ -256,19 +282,17 @@ describe('OpenAI contextual reviewer', () => {
     })
   })
 
-  it('rejects a borderline rescue that is not structurally serious enough', async () => {
+  it('rejects a borderline coverage candidate that is not structurally serious enough', async () => {
     const transcript = normalizeTranscript([
       { text: 'Герой идёт по дороге.', startMs: 1_000, endMs: 2_000 },
       { text: 'На стене висит меч.', startMs: 10_000, endMs: 11_000 },
     ])
-    const firstPass = violentThreat('candidate_existing', 1_000)
-
+    const existing = violentThreat('candidate_existing', 1_000)
     const parse = vi.fn(async () => ({
-      id: 'resp_review_rescue_weak',
+      id: 'resp_coverage_weak',
       status: 'completed',
-      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[{}]}',
+      output_text: '{"missedHighPriorityEvents":[{}]}',
       output_parsed: {
-        reviews: [confirmedReviewItem('review_0')],
         missedHighPriorityEvents: [{
           event: {
             candidateId: 'coverage_weak',
@@ -308,39 +332,36 @@ describe('OpenAI contextual reviewer', () => {
           narrativeFraming: 'neutral',
           parentSummary: 'В сцене присутствует меч.',
           mitigatingContext: null,
-          highPriorityReason: 'Проверка серверной валидации rescue.',
+          highPriorityReason: 'Проверка серверной валидации coverage.',
           rationale: 'Это не направленная угроза и не непосредственная опасность.',
         }],
       },
-      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+      usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 },
     }))
-
     const provider = new OpenAIAnalysisProvider(
       'test-key',
       'gpt-test',
       undefined,
       { responses: { parse } } as never,
     )
-    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    const result = await provider.coverage(transcript, 'ru', ['violence'], [existing])
 
     expect(result.rescuedCandidates).toBe(0)
-    expect(result.rescueRejectedCandidates).toBe(1)
+    expect(result.rejectedCandidates).toBe(1)
     expect(result.rescuedEvents).toHaveLength(0)
-    expect(result.reviewedEvents).toHaveLength(1)
   })
 
-  it('rejects a coverage rescue that duplicates direct evidence of an existing same-category candidate', async () => {
+  it('rejects a dedicated coverage candidate that duplicates existing direct evidence', async () => {
     const transcript = normalizeTranscript([
       { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
     ])
-    const firstPass = violentThreat('candidate_existing', 10_000)
-
+    const existing = violentThreat('candidate_existing', 10_000)
     const parse = vi.fn(async () => ({
-      id: 'resp_review_rescue_duplicate',
+      id: 'resp_coverage_duplicate',
       status: 'completed',
-      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[{}]}',
+      output_text: '{"missedHighPriorityEvents":[{}]}',
       output_parsed: {
-        reviews: [confirmedReviewItem('review_0')],
         missedHighPriorityEvents: [{
           event: {
             candidateId: 'coverage_duplicate',
@@ -384,20 +405,20 @@ describe('OpenAI contextual reviewer', () => {
           rationale: 'Прямое доказательство совпадает с уже существующим candidate.',
         }],
       },
-      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+      usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 },
     }))
-
     const provider = new OpenAIAnalysisProvider(
       'test-key',
       'gpt-test',
       undefined,
       { responses: { parse } } as never,
     )
-    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    const result = await provider.coverage(transcript, 'ru', ['violence'], [existing])
 
     expect(result.rescuedCandidates).toBe(0)
-    expect(result.rescueRejectedCandidates).toBe(1)
-    expect(result.reviewedEvents).toHaveLength(1)
+    expect(result.rejectedCandidates).toBe(1)
+    expect(result.rescuedEvents).toHaveLength(0)
   })
 
   it('retries only omitted review items and recovers a partial batch', async () => {
