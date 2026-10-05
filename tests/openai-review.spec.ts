@@ -201,7 +201,7 @@ describe('OpenAI contextual reviewer', () => {
               actionPurpose: 'threat',
             },
           },
-          parentRelevance: 'high',
+          parentRelevance: 'moderate',
           evidenceSufficiency: 'sufficient',
           contextSegments: [],
           actor: 'антагонист',
@@ -254,6 +254,79 @@ describe('OpenAI contextual reviewer', () => {
         intent: 'coercive',
       },
     })
+  })
+
+  it('rejects a borderline rescue that is not structurally serious enough', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Герой идёт по дороге.', startMs: 1_000, endMs: 2_000 },
+      { text: 'На стене висит меч.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const firstPass = violentThreat('candidate_existing', 1_000)
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_rescue_weak',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[{}]}',
+      output_parsed: {
+        reviews: [confirmedReviewItem('review_0')],
+        missedHighPriorityEvents: [{
+          event: {
+            candidateId: 'coverage_weak',
+            sceneId: 'coverage_weak_scene',
+            category: 'violence',
+            subtype: 'weapon_presence',
+            severity: 'medium',
+            context: 'game',
+            confidence: 0.95,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'neutral',
+            explicitness: 'none',
+            assertionStatus: 'actual',
+            evidenceSegments: [1],
+            sceneStartSegment: 1,
+            sceneEndSegment: 1,
+            reason: 'В сцене присутствует меч.',
+            details: {
+              harmLevel: 'none',
+              targetType: 'object',
+              weaponRole: 'possessed',
+              actionPurpose: 'demonstration',
+            },
+          },
+          parentRelevance: 'moderate',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [],
+          actor: null,
+          target: null,
+          aggressionDirection: 'none',
+          intent: 'benign',
+          distress: 'none',
+          consequence: 'threatened_harm',
+          duration: 'brief',
+          repetition: 'single',
+          narrativeFraming: 'neutral',
+          parentSummary: 'В сцене присутствует меч.',
+          mitigatingContext: null,
+          highPriorityReason: 'Проверка серверной валидации rescue.',
+          rationale: 'Это не направленная угроза и не непосредственная опасность.',
+        }],
+      },
+      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    expect(result.rescuedCandidates).toBe(0)
+    expect(result.rescueRejectedCandidates).toBe(1)
+    expect(result.rescuedEvents).toHaveLength(0)
+    expect(result.reviewedEvents).toHaveLength(1)
   })
 
   it('rejects a coverage rescue that duplicates direct evidence of an existing same-category candidate', async () => {
