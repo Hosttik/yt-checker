@@ -24,7 +24,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.strict-temporal-v8'
+const QUALITY_EVAL_VERSION = '2026-10-05.direct-evidence-v9'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -161,7 +161,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 8
+  version: 9
   key: string
   runOutputs: RunOutput[]
 }
@@ -279,10 +279,10 @@ function matchesFindingPattern(
 function eventMatches(
   event: Pick<
     ContentEvent,
-    'text' | 'reason' | 'category' | 'startMs' | 'endMs' | 'sceneStartMs' | 'sceneEndMs'
+    'text' | 'reason' | 'category' | 'startMs' | 'endMs' | 'evidenceRanges'
   > | Pick<
     ClassifiedContentEvent,
-    'text' | 'reason' | 'category' | 'startMs' | 'endMs' | 'sceneStartMs' | 'sceneEndMs'
+    'text' | 'reason' | 'category' | 'startMs' | 'endMs' | 'evidenceRanges'
   >,
   annotation: ManualCase,
   allowLexicalFallback = false,
@@ -295,10 +295,13 @@ function eventMatches(
 
   if (annotation.anchorStartMs !== undefined && annotation.anchorEndMs !== undefined) {
     const EVENT_MATCH_PADDING_MS = 5_000
-    const startMs = event.sceneStartMs ?? event.startMs
-    const endMs = event.sceneEndMs ?? event.endMs
-    const temporalMatch = startMs <= annotation.anchorEndMs + EVENT_MATCH_PADDING_MS
-      && endMs >= annotation.anchorStartMs - EVENT_MATCH_PADDING_MS
+    const directRanges = event.evidenceRanges?.length
+      ? event.evidenceRanges
+      : [{ startMs: event.startMs, endMs: event.endMs }]
+    const temporalMatch = directRanges.some((range) =>
+      range.startMs <= annotation.anchorEndMs + EVENT_MATCH_PADDING_MS
+      && range.endMs >= annotation.anchorStartMs - EVENT_MATCH_PADDING_MS,
+    )
     if (temporalMatch) return true
     if (!allowLexicalFallback) return false
   }
@@ -843,7 +846,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 8 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 9 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -947,7 +950,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 8,
+          version: 9,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
