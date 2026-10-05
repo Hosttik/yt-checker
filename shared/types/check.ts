@@ -73,6 +73,9 @@ export interface VideoContentReview {
   rescuedCount?: number
   rescueRejectedCount?: number
   reviewRequestCount?: number
+  coverageRequestCount?: number
+  coveragePromptVersion?: string
+  coverageSchemaVersion?: string
   retryCount?: number
   missingBeforeRetry?: number
   missingAfterRetry?: number
