@@ -626,6 +626,23 @@ function materializeContextRanges(
   })
 }
 
+function preserveFirstPassEpistemicState(
+  original: ClassifiedContentEvent,
+  corrected: ClassifiedContentEvent,
+): ClassifiedContentEvent {
+  const preserveAssertion = original.assertionStatus === 'reported'
+    || original.assertionStatus === 'hypothetical'
+    || original.assertionStatus === 'negated'
+
+  return {
+    ...corrected,
+    assertionStatus: preserveAssertion ? original.assertionStatus : corrected.assertionStatus,
+    engagementLevel: original.engagementLevel === 'mention'
+      ? 'mention'
+      : corrected.engagementLevel,
+  }
+}
+
 function unreviewedReview(rationale: string): ContentEventReview {
   return {
     status: 'not_reviewed',
@@ -1002,7 +1019,7 @@ export class OpenAIAnalysisProvider {
           const materialized = item.event
             ? materializeEvents([item.event], transcript, enabledCategories)[0]
             : undefined
-          const corrected = materialized ?? original
+          const corrected = preserveFirstPassEpistemicState(original, materialized ?? original)
           const review: ContentEventReview = {
             status: item.verdict === 'uncertain'
               ? 'uncertain'
