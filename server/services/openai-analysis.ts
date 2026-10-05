@@ -381,7 +381,36 @@ export interface OpenAIReviewDecision {
   resultingSubtype?: string
   parentRelevance?: ParentRelevance
   evidenceSufficiency?: ContentEventReview['evidenceSufficiency']
+  actor?: string
+  target?: string
+  aggressionDirection?: ContentEventReview['aggressionDirection']
+  intent?: ContentEventReview['intent']
+  distress?: ContentEventReview['distress']
+  consequence?: ContentEventReview['consequence']
+  duration?: ContentEventReview['duration']
+  repetition?: ContentEventReview['repetition']
+  narrativeFraming?: ContentEventReview['narrativeFraming']
+  parentSummary?: string
+  mitigatingContext?: string
+  highPriorityReason?: string
   rationale: string
+}
+
+function reviewDecisionSemanticFields(item: z.infer<typeof reviewItemSchema>) {
+  return {
+    actor: item.actor ?? undefined,
+    target: item.target ?? undefined,
+    aggressionDirection: item.aggressionDirection,
+    intent: item.intent,
+    distress: item.distress,
+    consequence: item.consequence,
+    duration: item.duration,
+    repetition: item.repetition,
+    narrativeFraming: item.narrativeFraming,
+    parentSummary: item.parentSummary,
+    mitigatingContext: item.mitigatingContext ?? undefined,
+    highPriorityReason: item.highPriorityReason ?? undefined,
+  }
 }
 
 export interface OpenAIReviewResult {
@@ -1110,6 +1139,7 @@ export class OpenAIAnalysisProvider {
             originalSubtype: original.subtype,
             parentRelevance: item.parentRelevance,
             evidenceSufficiency: item.evidenceSufficiency,
+            ...reviewDecisionSemanticFields(item),
             rationale: 'Unsafe reviewer downgrade was ignored; first-pass serious event retained.',
           })
           continue
@@ -1124,6 +1154,7 @@ export class OpenAIAnalysisProvider {
             originalSubtype: original.subtype,
             parentRelevance: item.parentRelevance,
             evidenceSufficiency: item.evidenceSufficiency,
+            ...reviewDecisionSemanticFields(item),
             rationale: item.rationale,
           })
           continue
@@ -1189,6 +1220,7 @@ export class OpenAIAnalysisProvider {
             resultingSubtype: corrected.subtype,
             parentRelevance: item.parentRelevance,
             evidenceSufficiency: item.evidenceSufficiency,
+            ...reviewDecisionSemanticFields(item),
             rationale: item.rationale,
           })
         } catch {

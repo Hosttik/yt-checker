@@ -20,10 +20,11 @@ import {
   OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisProvider,
+  type OpenAIReviewDecision,
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.phase-diagnostics-v5'
+const QUALITY_EVAL_VERSION = '2026-10-05.phase-diagnostics-v6'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -109,6 +110,7 @@ interface NewVideoResult {
   firstPassEvents: ClassifiedContentEvent[]
   onePassEvents: ContentEvent[]
   events: ContentEvent[]
+  reviewDecisions: OpenAIReviewDecision[]
   onePassSceneCount: number
   sceneCount: number
   detectorTokens: number
@@ -149,6 +151,7 @@ interface RunOutput {
   firstPassPresence: Record<string, boolean>
   firstPassSignatures: Record<string, string[]>
   finalSignatures: Record<string, string[]>
+  reviewDecisions: Record<string, OpenAIReviewDecision[]>
   onePassPriorities: Record<string, Priority>
   onePassLevels: Record<string, ConcernLevel>
   priorities: Record<string, Priority>
@@ -157,7 +160,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 5
+  version: 6
   key: string
   runOutputs: RunOutput[]
 }
@@ -534,6 +537,7 @@ async function runCurrent(
       profile,
     ))
   let reviewed = detection.classifiedEvents
+  let reviewDecisions: OpenAIReviewDecision[] = []
   let requests = 1 + detectionAttempt.retries
   let tokens = detection.usage.totalTokens
   let latencyMs = detection.provider.latencyMs
@@ -547,6 +551,7 @@ async function runCurrent(
     )
     const review = reviewAttempt.value
     reviewed = review.reviewedEvents
+    reviewDecisions = review.decisions
     requests += review.requestCount + reviewAttempt.retries
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
@@ -565,6 +570,7 @@ async function runCurrent(
     firstPassEvents: detection.classifiedEvents,
     onePassEvents,
     events,
+    reviewDecisions,
     onePassSceneCount: buildPresentationScenes(onePassEvents).length,
     sceneCount: buildPresentationScenes(events).length,
     detectorTokens: detection.usage.totalTokens,
@@ -667,6 +673,29 @@ function finalSignatures(
         event.review?.status ?? 'no_review',
       ].join(':')),
   ]))
+}
+
+function reviewDecisionsForAnnotations(
+  annotations: ManualCase[],
+  firstPassByVideo: Map<string, ClassifiedContentEvent[]>,
+  decisionsByVideo: Map<string, OpenAIReviewDecision[]>,
+): Record<string, OpenAIReviewDecision[]> {
+  return Object.fromEntries(annotations.map((annotation) => {
+    const candidateIds = new Set(
+      (firstPassByVideo.get(annotation.sourceVideo) ?? [])
+        .filter((event) => eventMatches(event, annotation))
+        .map((event) => event.sourceCandidateId)
+        .filter((value): value is string => Boolean(value)),
+    )
+    return [
+      annotation.id,
+      (decisionsByVideo.get(annotation.sourceVideo) ?? [])
+        .filter((decision) =>
+          Boolean(decision.originalCandidateId)
+          && candidateIds.has(decision.originalCandidateId!),
+        ),
+    ]
+  }))
 }
 
 const PRIORITY_RANK: Record<Priority, number> = {
@@ -782,7 +811,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 5 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 6 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -843,12 +872,14 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       const currentByVideo = new Map<string, ContentEvent[]>()
       const onePassByVideo = new Map<string, ContentEvent[]>()
       const firstPassByVideo = new Map<string, ClassifiedContentEvent[]>()
+      const reviewDecisionsByVideo = new Map<string, OpenAIReviewDecision[]>()
       for (const record of selectedRecords) {
         const output = newByKey.get(`${record.videoId}:${record.transcriptHash}`)
         if (!output) continue
         currentByVideo.set(record.videoId, output.events)
         onePassByVideo.set(record.videoId, output.onePassEvents)
         firstPassByVideo.set(record.videoId, output.firstPassEvents)
+        reviewDecisionsByVideo.set(record.videoId, output.reviewDecisions)
       }
       const outputs = [...newByKey.values()]
       runOutputs.push({
@@ -870,6 +901,11 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         firstPassPresence: firstPassPresence(applicableAnnotations, firstPassByVideo),
         firstPassSignatures: firstPassSignatures(applicableAnnotations, firstPassByVideo),
         finalSignatures: finalSignatures(applicableAnnotations, currentByVideo),
+        reviewDecisions: reviewDecisionsForAnnotations(
+          applicableAnnotations,
+          firstPassByVideo,
+          reviewDecisionsByVideo,
+        ),
         onePassPriorities: priorities(applicableAnnotations, onePassByVideo),
         onePassLevels: levels(applicableAnnotations, onePassByVideo),
         priorities: priorities(applicableAnnotations, currentByVideo),
@@ -879,7 +915,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 5,
+          version: 6,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1028,6 +1064,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
               firstPassDetected: detected,
               firstPassSignatures: output.firstPassSignatures[annotation.id] ?? [],
               finalSignatures: output.finalSignatures[annotation.id] ?? [],
+              reviewDecisions: output.reviewDecisions[annotation.id] ?? [],
               onePassPriority,
               onePassLevel,
               finalPriority,
