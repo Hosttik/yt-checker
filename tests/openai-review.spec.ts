@@ -493,6 +493,146 @@ describe('OpenAI contextual reviewer', () => {
     })
   })
 
+  it('retains the first-pass event when a reviewer correction drifts to a disjoint scene', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+      { text: 'Потом герои идут дальше.', startMs: 20_000, endMs: 21_000 },
+      { text: 'Совсем другая сцена.', startMs: 30_000, endMs: 31_000 },
+    ])
+    const event = violentThreat('candidate_drift', 10_000)
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_drift',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'corrected',
+          event: {
+            candidateId: 'candidate_drift',
+            sceneId: 'scene_other',
+            category: 'violence',
+            subtype: 'weapon_presence',
+            severity: 'low',
+            context: 'game',
+            confidence: 0.95,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'neutral',
+            explicitness: 'none',
+            assertionStatus: 'actual',
+            evidenceSegments: [2],
+            sceneStartSegment: 2,
+            sceneEndSegment: 2,
+            reason: 'В другой сцене упоминается предмет.',
+            details: {
+              harmLevel: 'none',
+              targetType: 'object',
+              weaponRole: 'possessed',
+              actionPurpose: 'demonstration',
+            },
+          },
+          parentRelevance: 'minimal',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [2],
+          aggressionDirection: 'none',
+          intent: 'benign',
+          distress: 'none',
+          consequence: 'none',
+          parentSummary: 'Reviewer перенёс candidate в другую сцену.',
+          rationale: 'Коррекция ошибочно использует несвязанную сцену.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(false)
+    expect(result.reviewedEvents).toHaveLength(1)
+    expect(result.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_drift',
+      subtype: 'violent_threat',
+      startMs: 10_000,
+      endMs: 11_000,
+      review: { status: 'not_reviewed' },
+    })
+    expect(result.decisions[0]?.rationale).toContain('drifted outside the original scene')
+  })
+
+  it('keeps first-pass scene identity when an overlapping reviewer correction changes sceneId', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event = violentThreat('candidate_scene_id', 10_000)
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_scene_id',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'corrected',
+          event: {
+            candidateId: 'candidate_scene_id',
+            sceneId: 'scene_reassigned_by_reviewer',
+            category: 'violence',
+            subtype: 'violent_threat',
+            severity: 'medium',
+            context: 'game',
+            confidence: 0.99,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'discouraged',
+            explicitness: 'mild',
+            assertionStatus: 'threatened',
+            evidenceSegments: [0],
+            sceneStartSegment: 0,
+            sceneEndSegment: 0,
+            reason: 'Персонаж угрожает жителям вредом.',
+            details: {
+              harmLevel: 'threatened',
+              targetType: 'human_like_character',
+              weaponRole: 'none',
+              actionPurpose: 'threat',
+            },
+          },
+          parentRelevance: 'high',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [],
+          aggressionDirection: 'actor_to_target',
+          intent: 'coercive',
+          distress: 'clear',
+          consequence: 'threatened_harm',
+          highPriorityReason: 'Направленная угроза используется как давление.',
+          parentSummary: 'Персонаж угрожает жителям.',
+          rationale: 'Угроза подтверждена.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(true)
+    expect(result.reviewedEvents[0]?.sceneId).toBe(event.sceneId)
+    expect(result.reviewedEvents[0]?.review?.status).toBe('corrected')
+  })
+
   it('preserves first-pass reported and mention provenance when review tries to upgrade the same candidate', async () => {
     const transcript = normalizeTranscript([
       { text: 'Админ сообщил, что к деревне идут тысячи зомби.', startMs: 10_000, endMs: 11_000 },
