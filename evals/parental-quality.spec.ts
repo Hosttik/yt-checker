@@ -410,7 +410,7 @@ async function runCurrent(
   if (reviewed.length > 0) {
     const review = await reviewer.review(record.transcript, 'ru', ALL_CATEGORIES, reviewed)
     reviewed = review.reviewedEvents
-    requests += 1
+    requests += review.requestCount
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
   }
@@ -436,6 +436,30 @@ async function runCurrent(
     tokens,
     latencyMs,
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (true) {
+        const index = nextIndex
+        nextIndex += 1
+        if (index >= items.length) return
+        results[index] = await task(items[index]!, index)
+      }
+    },
+  )
+
+  await Promise.all(workers)
+  return results
 }
 
 function average(values: number[]): number {
@@ -472,6 +496,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       : DEFAULT_SCAN_DIRS)
     const maxVideos = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_VIDEOS ?? 20)))
     const runs = Math.max(1, Math.min(5, Number(process.env.QUALITY_RUNS ?? 1)))
+    const concurrency = Math.max(1, Math.min(5, Number(process.env.QUALITY_CONCURRENCY ?? 3)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
     const reviewModel = process.env.OPENAI_REVIEW_MODEL ?? model
     const profile: AnalysisProfile = 'normal'
@@ -535,14 +560,45 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       sceneSignatures: Record<string, string[]>
     }> = []
 
+    console.log(
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), concurrency=${concurrency}, scans=${scanDirs.join(', ')}`,
+    )
+
     for (let run = 0; run < runs; run += 1) {
       const detector = new OpenAIAnalysisProvider(apiKey, model)
       const reviewer = new OpenAIAnalysisProvider(apiKey, reviewModel)
       const newByKey = new Map<string, NewVideoResult>()
-      for (const record of selected) {
-        const output = await runCurrent(record, detector, reviewer, profile)
-        newByKey.set(`${record.videoId}:${record.transcriptHash}`, output)
+      let completedVideos = 0
+
+      console.log(`[quality] run ${run + 1}/${runs} started`)
+      const outputsForRun = await mapWithConcurrency(
+        selected,
+        concurrency,
+        async (record, index) => {
+          console.log(
+            `[quality] run ${run + 1}/${runs} video ${index + 1}/${selected.length} started: ${record.videoId}`,
+          )
+          try {
+            const output = await runCurrent(record, detector, reviewer, profile)
+            completedVideos += 1
+            console.log(
+              `[quality] run ${run + 1}/${runs} completed ${completedVideos}/${selected.length}: ${record.videoId} (${output.tokens} tokens, ${output.requests} request(s))`,
+            )
+            return output
+          } catch (error) {
+            console.error(
+              `[quality] run ${run + 1}/${runs} failed on ${record.videoId}`,
+              error,
+            )
+            throw error
+          }
+        },
+      )
+
+      for (const output of outputsForRun) {
+        newByKey.set(`${output.videoId}:${output.transcriptHash}`, output)
       }
+      console.log(`[quality] run ${run + 1}/${runs} finished`)
 
       const currentByVideo = new Map<string, ContentEvent[]>()
       const onePassByVideo = new Map<string, ContentEvent[]>()
@@ -633,6 +689,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         scanDirs,
         selectedUniqueFullTranscripts: selected.length,
         selectedRecords: selectedRecords.length,
+        runs,
+        concurrency,
         annotations: applicableAnnotations.length,
         provisionalAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'provisional').length,
         humanConfirmedAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'human_confirmed').length,
@@ -720,5 +778,5 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       expect(current.metrics.usefulWarningPrecision).toBeGreaterThanOrEqual(baselineCombined.usefulWarningPrecision)
     }
     expect(current.firstPassSubstantialMisses).toBe(0)
-  }, 600_000)
+  }, 1_800_000)
 })
