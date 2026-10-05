@@ -168,6 +168,8 @@ interface VideoRunStat {
   wallClockMs: number
   onePassSceneCount: number
   sceneCount: number
+  mainSceneCount: number
+  detailSceneCount: number
   rescuedCandidates: number
   rescueRejectedCandidates: number
 }
@@ -1222,6 +1224,42 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       true,
     )
     const current = runOutputs[0]!
+    const loadedByScanName = new Map(loaded.map((item) => [basename(item.scanDir), item]))
+    const videoStatsByScan = new Map<string, VideoRunStat[]>()
+    for (const stat of current.videoStats) {
+      const items = videoStatsByScan.get(stat.scanName) ?? []
+      items.push(stat)
+      videoStatsByScan.set(stat.scanName, items)
+    }
+    const channelEconomics = [...videoStatsByScan.entries()].map(([scanName, stats]) => {
+      const scan = loadedByScanName.get(scanName)
+      const usage = aggregateUsages(stats.map((item) => item.usage))
+      const openaiCostUsd = estimateOpenAICostUsd(usage)
+      const transcriptCredits = scan?.result.creditUsage?.totalCredits ?? 0
+      const transcriptApiCostUsd = transcriptCredits * transcriptCreditUsd
+      const sequentialWallClockMs = stats.reduce((sum, item) => sum + item.wallClockMs, 0)
+      const providerLatencyMs = stats.reduce((sum, item) => sum + item.providerLatencyMs, 0)
+      return {
+        scan: scanName,
+        channel: scan?.result.channel ?? null,
+        videosBenchmarked: stats.length,
+        savedScanAnalyzedVideos: scan?.result.analyzedVideos ?? scan?.records.length ?? stats.length,
+        savedScanFailedVideos: scan?.result.failedVideos ?? 0,
+        requests: stats.reduce((sum, item) => sum + item.requests, 0),
+        usage,
+        openaiCostUsd,
+        transcriptCredits,
+        transcriptApiCostUsd,
+        estimatedProviderCostUsd: openaiCostUsd + transcriptApiCostUsd,
+        sequentialWallClockMs,
+        providerLatencyMs,
+        averageVideoWallClockMs: sequentialWallClockMs / Math.max(1, stats.length),
+        mainSceneCount: stats.reduce((sum, item) => sum + item.mainSceneCount, 0),
+        detailSceneCount: stats.reduce((sum, item) => sum + item.detailSceneCount, 0),
+        rescuedCandidates: stats.reduce((sum, item) => sum + item.rescuedCandidates, 0),
+        rescueRejectedCandidates: stats.reduce((sum, item) => sum + item.rescueRejectedCandidates, 0),
+      }
+    })
 
     const report = {
       generatedAt: new Date().toISOString(),
@@ -1236,6 +1274,12 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         retryBaseDelayMs,
         runCooldownMs,
         requestTimeoutMs,
+        discoverScans,
+        uniqueChannels,
+        maxScans,
+        maxVideos,
+        maxVideosPerScan,
+        allowUnannotated,
         annotations: applicableAnnotations.length,
         provisionalAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'provisional').length,
         humanConfirmedAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'human_confirmed').length,
@@ -1257,6 +1301,19 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
             endMs: item.anchorEndMs ?? null,
           },
         ])),
+      },
+      pricing: {
+        openaiModel: model,
+        openaiStandardPerMillionTokens: GPT6_LUNA_STANDARD_PRICING,
+        transcriptCreditUsd,
+        transcriptApiPricingMode: 'configurable effective cost per successful credit',
+      },
+      economics: {
+        channels: channelEconomics,
+        currentRunOpenaiCostUsd: current.openaiCostUsd,
+        currentRunSequentialWallClockMs: current.wallClockMs,
+        averageOpenaiCostUsdPerRun: average(runOutputs.map((item) => item.openaiCostUsd)),
+        averageSequentialWallClockMsPerRun: average(runOutputs.map((item) => item.wallClockMs)),
       },
       versions: {
         qualityEval: QUALITY_EVAL_VERSION,
@@ -1338,6 +1395,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         averageRequests: average(runOutputs.map((item) => item.requests)),
         averageTokens: average(runOutputs.map((item) => item.tokens)),
         averageLatencyMs: average(runOutputs.map((item) => item.latencyMs)),
+        averageOpenaiCostUsd: average(runOutputs.map((item) => item.openaiCostUsd)),
+        averageSequentialWallClockMs: average(runOutputs.map((item) => item.wallClockMs)),
       },
       interpretation: {
         usefulWarningPrecision: 'Anchor-only metric: share of shown annotated anchors that are expected to be parent-visible. It is not card-level precision.',
@@ -1350,6 +1409,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         phaseDiagnostics: 'Per-anchor detector presence, one-pass policy placement, final reviewed placement, reviewer downgrade/upgrade counts, and high-priority coverage rescue counts across runs.',
         stability: 'Share of annotated anchors whose final priority is unchanged across repeated full-transcript runs.',
         displayedCardStability: 'Average Jaccard similarity of all displayed scene signatures across repeated runs.',
+        economics: 'OpenAI cost uses current GPT-6 Luna Standard token rates; TranscriptAPI cost uses saved credit usage multiplied by QUALITY_TRANSCRIPT_CREDIT_USD.',
       },
     }
 
