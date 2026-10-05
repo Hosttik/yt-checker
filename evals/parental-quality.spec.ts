@@ -24,7 +24,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.phase-diagnostics-v6'
+const QUALITY_EVAL_VERSION = '2026-10-05.semantic-anchor-v7'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -58,6 +58,7 @@ interface ManualCase {
   sourceVideo: string
   anchor: string
   categories: ContentCategory[]
+  matchingFindings?: string[]
   showToParent: boolean
   priority: Priority
   expectedLevel?: ConcernLevel
@@ -160,7 +161,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 6
+  version: 7
   key: string
   runOutputs: RunOutput[]
 }
@@ -267,6 +268,14 @@ function resolveAnnotationAnchor(
   }
 }
 
+function matchesFindingPattern(
+  event: Pick<ContentEvent, 'category' | 'subtype'> | Pick<ClassifiedContentEvent, 'category' | 'subtype'>,
+  pattern: string,
+): boolean {
+  const [category, subtype] = pattern.split('.')
+  return event.category === category && (subtype === '*' || event.subtype === subtype)
+}
+
 function eventMatches(
   event: Pick<
     ContentEvent,
@@ -278,6 +287,10 @@ function eventMatches(
   annotation: ManualCase,
 ): boolean {
   if (!annotation.categories.includes(event.category)) return false
+  if (annotation.matchingFindings?.length
+    && !annotation.matchingFindings.some((pattern) => matchesFindingPattern(event, pattern))) {
+    return false
+  }
 
   if (annotation.anchorStartMs !== undefined && annotation.anchorEndMs !== undefined) {
     const EVENT_MATCH_PADDING_MS = 5_000
@@ -320,8 +333,7 @@ function actualLevel(events: ContentEvent[], annotation: ManualCase): ConcernLev
 }
 
 function findingMatches(event: ContentEvent, pattern: string): boolean {
-  const [category, subtype] = pattern.split('.')
-  return event.category === category && (subtype === '*' || event.subtype === subtype)
+  return matchesFindingPattern(event, pattern)
 }
 
 function unsupportedCount(events: ContentEvent[], annotation: ManualCase): number {
@@ -811,7 +823,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 6 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 7 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -915,7 +927,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 6,
+          version: 7,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',

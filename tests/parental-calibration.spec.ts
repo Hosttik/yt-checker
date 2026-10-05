@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type {
   ClassifiedContentEvent,
@@ -708,4 +710,15 @@ describe('parent relevance calibration', () => {
     expect(buildPresentationScenes([unreviewedWeaponAttack])[0]?.attention).toBe('main')
   })
 
+
+  it('requires semantically relevant findings for the railway hostage coercion anchor', () => {
+    const cases = JSON.parse(
+      readFileSync(resolve('evals/parental-quality-manual.json'), 'utf8'),
+    ) as Array<{ id: string; matchingFindings?: string[] }>
+    const coercion = cases.find((item) => item.id === 'railway-hostage-coercion')
+
+    expect(coercion?.matchingFindings).toContain('violence.violent_threat')
+    expect(coercion?.matchingFindings).toContain('violence.dangerous_situation')
+    expect(coercion?.matchingFindings).not.toContain('violence.weapon_use')
+  })
 })
