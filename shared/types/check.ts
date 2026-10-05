@@ -97,6 +97,8 @@ export interface ContentReviewSummary {
   failedVideos: number
   skippedVideos: number
   notNeededVideos: number
+  rescuedEvents: number
+  rescueRejectedEvents: number
 }
 
 export interface TimelineRange { startMs: number; endMs: number }
