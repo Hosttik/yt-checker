@@ -90,12 +90,32 @@ describe('OpenAI content-event classifier', () => {
     expect(schema).toContain('rejectedCandidates')
   })
 
-  it('rejects evidence outside its declared scene', async () => {
+  it('expands a valid declared scene to include all evidence instead of failing the whole analysis', async () => {
     const { provider } = providerWith({ events: [{
-      ...violenceEvent, evidenceSegments: [1], sceneStartSegment: 0, sceneEndSegment: 0,
+      ...violenceEvent,
+      evidenceSegments: [4, 5, 8, 9, 12, 16],
+      sceneStartSegment: 0,
+      sceneEndSegment: 12,
     }] })
-    await expect(provider.analyze(transcript(['Привет', 'Мне подарили меч']), 'ru', ['violence'], false))
-      .rejects.toMatchObject({ type: 'schema' })
+    const result = await provider.analyze(
+      transcript(Array.from({ length: 17 }, (_, index) => `segment ${index}`)),
+      'ru',
+      ['violence'],
+      false,
+    )
+
+    expect(result.classifiedEvents[0]).toMatchObject({
+      startMs: 12_000,
+      endMs: 50_000,
+      sceneStartMs: 0,
+      sceneEndMs: 50_000,
+      evidenceRanges: [
+        { startMs: 12_000, endMs: 17_000 },
+        { startMs: 24_000, endMs: 29_000 },
+        { startMs: 36_000, endMs: 38_000 },
+        { startMs: 48_000, endMs: 50_000 },
+      ],
+    })
   })
 
   it('keeps UX decisions out of the LLM structured schema', async () => {
