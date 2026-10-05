@@ -1046,7 +1046,7 @@ export class OpenAIAnalysisProvider {
   ): Promise<OpenAIAnalysisResult> {
     const metadata: OpenAIAnalysisResult['requestMetadata'] = {
       model: this.model,
-      reasoningEffort: OpenAIReasoningEffort,
+      reasoningEffort: this.reasoningEffort,
       transcriptLanguage: language || 'unknown',
       enabledCategories,
       diagnostic,
@@ -1171,7 +1171,7 @@ export class OpenAIAnalysisProvider {
   ): Promise<OpenAIReviewResult> {
     const metadata: OpenAIReviewResult['requestMetadata'] = {
       model: this.model,
-      reasoningEffort: OpenAIReasoningEffort,
+      reasoningEffort: this.reasoningEffort,
       transcriptLanguage: language || 'unknown',
       enabledCategories,
       promptVersion: OPENAI_REVIEW_PROMPT_VERSION,
@@ -1519,7 +1519,7 @@ export class OpenAIAnalysisProvider {
   ): Promise<OpenAICoverageResult> {
     const metadata: OpenAICoverageResult['requestMetadata'] = {
       model: this.model,
-      reasoningEffort: OpenAIReasoningEffort,
+      reasoningEffort: this.reasoningEffort,
       transcriptLanguage: language || 'unknown',
       enabledCategories,
       promptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
