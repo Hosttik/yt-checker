@@ -170,7 +170,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 13
+  version: 14
   key: string
   runOutputs: RunOutput[]
 }
@@ -900,7 +900,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 13 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 14 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1021,7 +1021,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 13,
+          version: 14,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1123,6 +1123,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         qualityEval: QUALITY_EVAL_VERSION,
         detectorModel: model,
         reviewerModel: reviewModel,
+        reasoningEffort,
         detectorPrompt: OPENAI_PROMPT_VERSION,
         detectorSchema: OPENAI_SCHEMA_VERSION,
         reviewerPrompt: OPENAI_REVIEW_PROMPT_VERSION,
