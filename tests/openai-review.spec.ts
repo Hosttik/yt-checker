@@ -230,6 +230,13 @@ describe('OpenAI contextual reviewer', () => {
     )
     const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
 
+    const request = parse.mock.calls[0]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
+    const developerText = request.input?.find((item) => item.role === 'developer')?.content[0]?.text ?? ''
+    const userText = request.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
+    expect(developerText).toContain('Coverage rescue step below is the only exception')
+    expect(developerText).toContain('same broader story arc do NOT by themselves make two events duplicates')
+    expect(userText).toContain('Coverage rescue is ENABLED for this primary review request')
+
     expect(result.complete).toBe(true)
     expect(result.requestCount).toBe(1)
     expect(parse).toHaveBeenCalledTimes(1)

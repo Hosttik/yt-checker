@@ -24,7 +24,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.coverage-rescue-v10'
+const QUALITY_EVAL_VERSION = '2026-10-05.coverage-rescue-v11'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
