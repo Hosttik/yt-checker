@@ -1033,9 +1033,10 @@ export class OpenAIAnalysisProvider {
     private readonly observer?: OpenAIAnalysisObserver,
     client?: OpenAI,
     private readonly reasoningEffort: OpenAIReasoningEffort = 'low',
+    private readonly requestTimeoutMs = 60_000,
   ) {
     if (!apiKey) throw new Error('OpenAI API key is not configured.')
-    this.client = client ?? new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 })
+    this.client = client ?? new OpenAI({ apiKey, maxRetries: 0, timeout: this.requestTimeoutMs })
   }
 
   async analyze(
