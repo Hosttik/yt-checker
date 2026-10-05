@@ -198,6 +198,9 @@ describe('OpenAI contextual reviewer', () => {
 
     expect(result.complete).toBe(true)
     expect(result.requestCount).toBe(2)
+    expect(result.retryCount).toBe(1)
+    expect(result.missingBeforeRetry).toBe(1)
+    expect(result.missingAfterRetry).toBe(0)
     expect(result.reviewedCandidates).toBe(2)
     expect(result.reviewedEvents).toHaveLength(2)
     expect(result.usage.totalTokens).toBe(220)
@@ -242,6 +245,9 @@ describe('OpenAI contextual reviewer', () => {
 
     expect(result.complete).toBe(false)
     expect(result.requestCount).toBe(2)
+    expect(result.retryCount).toBe(1)
+    expect(result.missingBeforeRetry).toBe(1)
+    expect(result.missingAfterRetry).toBe(1)
     expect(result.reviewedCandidates).toBe(0)
     expect(result.reviewedEvents).toHaveLength(1)
     expect(result.reviewedEvents[0]?.review?.status).toBe('not_reviewed')
@@ -277,6 +283,9 @@ describe('OpenAI contextual reviewer', () => {
 
     expect(result.complete).toBe(false)
     expect(result.requestCount).toBe(1)
+    expect(result.retryCount).toBe(0)
+    expect(result.missingBeforeRetry).toBe(0)
+    expect(result.missingAfterRetry).toBe(0)
     expect(result.reviewedCandidates).toBe(1)
     expect(parse).toHaveBeenCalledTimes(1)
   })
