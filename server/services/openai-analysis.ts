@@ -1024,6 +1024,12 @@ function errorFrom(error: unknown): OpenAIAnalysisError {
   )
 }
 
+function outputTokenBudget(base: number, effort: OpenAIReasoningEffort): number {
+  if (effort === 'high') return base * 4
+  if (effort === 'medium') return base * 2
+  return base
+}
+
 export class OpenAIAnalysisProvider {
   private readonly client: OpenAI
 
@@ -1079,7 +1085,7 @@ export class OpenAIAnalysisProvider {
       prompt_cache_options: { mode: 'explicit' as const, ttl: '30m' as const },
       tools: [] as [],
       store: false,
-      max_output_tokens: 6144,
+      max_output_tokens: outputTokenBudget(6144, this.reasoningEffort),
     }
 
     const started = performance.now()
@@ -1255,7 +1261,7 @@ export class OpenAIAnalysisProvider {
         prompt_cache_options: { mode: 'explicit' as const, ttl: '30m' as const },
         tools: [] as [],
         store: false,
-        max_output_tokens: 8192,
+        max_output_tokens: outputTokenBudget(8192, this.reasoningEffort),
         text: {
           verbosity: 'low',
           format: zodTextFormat(OPENAI_REVIEW_SCHEMA, 'content_event_review'),
@@ -1564,7 +1570,7 @@ ${transcript.text}`
       prompt_cache_options: { mode: 'explicit' as const, ttl: '30m' as const },
       tools: [] as [],
       store: false,
-      max_output_tokens: 4096,
+      max_output_tokens: outputTokenBudget(4096, this.reasoningEffort),
       text: {
         verbosity: 'low',
         format: zodTextFormat(OPENAI_COVERAGE_SCHEMA, 'content_event_coverage'),
