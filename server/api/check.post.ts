@@ -700,7 +700,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   const legacySummaryBase = buildRuleSummary(videoResults, enabledRuleIds)
   const legacySummary = legacySummaryBase.map((item) => {
-    const canonical = channelReport.find((report) => report.category === item.ruleId)
+    const normalizedRuleCategories = normalizeRequestedCategories([item.ruleId])
+    const canonical = channelReport.find((report) => normalizedRuleCategories.includes(report.category))
     if (!canonical) return item
     const severity = canonical.level === 'none'
       ? null
