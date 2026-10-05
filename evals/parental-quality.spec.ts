@@ -170,6 +170,17 @@ interface VideoRunStat {
   sceneCount: number
   mainSceneCount: number
   detailSceneCount: number
+  displayedScenes: Array<{
+    attention: 'main' | 'details'
+    level: string
+    startMs: number
+    endMs: number
+    categories: ContentCategory[]
+    label: string
+    summary: string
+    mitigatingContext?: string
+    priorityReason?: string
+  }>
   rescuedCandidates: number
   rescueRejectedCandidates: number
 }
@@ -1117,6 +1128,17 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
           sceneCount: item.sceneCount,
           mainSceneCount: scenes.filter((scene) => scene.attention === 'main').length,
           detailSceneCount: scenes.filter((scene) => scene.attention === 'details').length,
+          displayedScenes: scenes.map((scene) => ({
+            attention: scene.attention,
+            level: scene.level,
+            startMs: scene.startMs,
+            endMs: scene.endMs,
+            categories: scene.categories,
+            label: scene.label,
+            summary: scene.summary,
+            mitigatingContext: scene.mitigatingContext,
+            priorityReason: scene.priorityReason,
+          })),
           rescuedCandidates: item.rescuedCandidates,
           rescueRejectedCandidates: item.rescueRejectedCandidates,
         }
