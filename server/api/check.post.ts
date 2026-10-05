@@ -29,12 +29,15 @@ import { captionLanguageResolution, captionSource } from '../domain/caption-lang
 import { normalizeTranscript } from '../domain/normalize-transcript'
 import { analyzeSpeechQuality, summarizeSpeechQuality } from '../domain/speech-quality'
 import {
+  OPENAI_COVERAGE_PROMPT_VERSION,
+  OPENAI_COVERAGE_SCHEMA_VERSION,
   OPENAI_PROMPT_VERSION,
   OPENAI_REVIEW_PROMPT_VERSION,
   OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisError,
   OpenAIAnalysisProvider,
+  type OpenAICoverageResult,
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
 import { ScanStorage } from '../services/scan-storage'
@@ -346,6 +349,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       let reviewedEvents = firstPassEvents
       let reviewResult: OpenAIReviewResult | undefined
       let reviewError: OpenAIAnalysisError | undefined
+      let coverageResult: OpenAICoverageResult | undefined
+      let coverageError: OpenAIAnalysisError | undefined
       let contentReview: VideoContentReview
 
       if (firstPassEvents.length === 0) {
@@ -456,6 +461,71 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         }
       }
 
+      if (!reviewDisabledAfterFailure && !reviewError) {
+        try {
+          openaiUsage.requests += 1
+          openaiStages.review.requests += 1
+          coverageResult = await reviewer.coverage(
+            normalized,
+            resolvedLanguage,
+            enabledCategories,
+            reviewedEvents,
+          )
+          addUsage(openaiUsage, coverageResult.usage)
+          addUsage(openaiStages.review, coverageResult.usage)
+          reviewedEvents = [...reviewedEvents, ...coverageResult.rescuedEvents]
+            .filter((classifiedEvent) =>
+              enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
+            )
+
+          contentReview = {
+            ...contentReview,
+            status: contentReview.status === 'not_needed' && coverageResult.rescuedCandidates > 0
+              ? 'completed'
+              : contentReview.status,
+            rescuedCount: coverageResult.rescuedCandidates,
+            rescueRejectedCount: coverageResult.rejectedCandidates,
+            reviewRequestCount: (contentReview.reviewRequestCount ?? 0) + coverageResult.requestCount,
+            coverageRequestCount: coverageResult.requestCount,
+            coveragePromptVersion: coverageResult.requestMetadata.promptVersion,
+            coverageSchemaVersion: coverageResult.requestMetadata.schemaVersion,
+            model: contentReview.model ?? coverageResult.requestMetadata.model,
+          }
+          logger.debug('content.coverage_completed', {
+            videoId: video.id,
+            rescued: coverageResult.rescuedCandidates,
+            rejected: coverageResult.rejectedCandidates,
+            requestCount: coverageResult.requestCount,
+            latencyMs: coverageResult.provider.latencyMs,
+          })
+        } catch (error) {
+          coverageError = error instanceof OpenAIAnalysisError
+            ? error
+            : new OpenAIAnalysisError('provider', 'OpenAI high-priority coverage failed.')
+          addUsage(openaiUsage, coverageError.usage)
+          addUsage(openaiStages.review, coverageError.usage)
+          contentReview = {
+            ...contentReview,
+            status: contentReview.status === 'failed' || contentReview.status === 'skipped_after_failure'
+              ? contentReview.status
+              : 'partial',
+            coverageRequestCount: 1,
+            coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
+            coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
+            error: {
+              type: coverageError.type,
+              message: 'High-priority coverage pass failed; existing findings were retained.',
+            },
+          }
+          logger.warn('content.coverage_failed', {
+            videoId: video.id,
+            type: coverageError.type,
+            status: coverageError.status ?? null,
+            code: coverageError.code ?? null,
+          })
+        }
+      }
+
       const semanticValidation = validateClassifiedEvents(reviewedEvents)
       for (const adjusted of semanticValidation.adjustments) {
         logger.debug('content.validation_adjusted', {
@@ -554,7 +624,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         reviewResult,
         reviewError,
       )
-      const videoUsage = combinedUsage(analysis.usage, reviewResult?.usage ?? reviewError?.usage)
+      const videoUsage = combinedUsage(
+        analysis.usage,
+        reviewResult?.usage ?? reviewError?.usage,
+        coverageResult?.usage ?? coverageError?.usage,
+      )
       const legacyVisibleEvents = policyEvents.filter((event) => event.displayLevel !== 'hidden')
       const violations = buildLegacyViolations(legacyVisibleEvents, enabledRuleIds)
       const detections = buildDetections(violations, enabledRuleIds)
