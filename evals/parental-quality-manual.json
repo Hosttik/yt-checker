@@ -83,6 +83,13 @@
       "violence",
       "scary_and_disturbing"
     ],
+    "matchingFindings": [
+      "violence.violent_threat",
+      "violence.dangerous_situation",
+      "violence.life_threatening_situation",
+      "scary_and_disturbing.confinement",
+      "scary_and_disturbing.intense_peril"
+    ],
     "showToParent": true,
     "priority": "main",
     "why": "Связанные персонажи находятся под угрозой приближающегося поезда, а опасность используется для принуждения.",
@@ -106,6 +113,11 @@
     "anchor": "Не волнуйся, я вас не трону, если ты мне поможешь",
     "categories": [
       "violence"
+    ],
+    "matchingFindings": [
+      "violence.violent_threat",
+      "violence.dangerous_situation",
+      "violence.life_threatening_situation"
     ],
     "showToParent": true,
     "priority": "main",
@@ -227,6 +239,12 @@
     "categories": [
       "violence",
       "scary_and_disturbing"
+    ],
+    "matchingFindings": [
+      "violence.dangerous_situation",
+      "violence.life_threatening_situation",
+      "scary_and_disturbing.confinement",
+      "scary_and_disturbing.intense_peril"
     ],
     "showToParent": true,
     "priority": "main",
