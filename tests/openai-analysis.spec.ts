@@ -275,6 +275,8 @@ describe('OpenAI content-event classifier', () => {
     expect(OPENAI_SYSTEM_PROMPT).toContain('Reuse the exact same sceneId')
     expect(OPENAI_SYSTEM_PROMPT).toContain('1-6 nearby segment indexes')
     expect(OPENAI_SYSTEM_PROMPT).toContain('coercive condition')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('conditioning release on compliance')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('Do not reduce that scene to benign negotiation')
     expect(OPENAI_SYSTEM_PROMPT).toContain('11 000 зомби')
     expect(OPENAI_SYSTEM_PROMPT).toContain('demonstration')
     expect(OPENAI_SYSTEM_PROMPT).toContain('ASR')
