@@ -398,6 +398,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             reviewedCount: reviewResult.reviewedCandidates,
             rejectedCount: reviewResult.rejectedCandidates,
             uncertainCount: reviewResult.uncertainCandidates,
+            rescuedCount: reviewResult.rescuedCandidates,
+            rescueRejectedCount: reviewResult.rescueRejectedCandidates,
             reviewRequestCount: reviewResult.requestCount,
             retryCount: reviewResult.retryCount,
             missingBeforeRetry: reviewResult.missingBeforeRetry,
@@ -414,6 +416,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             reviewed: contentReview.reviewedCount,
             rejected: contentReview.rejectedCount,
             uncertain: contentReview.uncertainCount,
+            rescued: contentReview.rescuedCount ?? 0,
+            rescueRejected: contentReview.rescueRejectedCount ?? 0,
             reviewRequestCount: contentReview.reviewRequestCount ?? 0,
             retryCount: contentReview.retryCount ?? 0,
             missingBeforeRetry: contentReview.missingBeforeRetry ?? 0,
@@ -675,6 +679,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     failedVideos: analyzedReviewStatuses.filter((review) => review.status === 'failed').length,
     skippedVideos: analyzedReviewStatuses.filter((review) => review.status === 'skipped_after_failure').length,
     notNeededVideos: analyzedReviewStatuses.filter((review) => review.status === 'not_needed').length,
+    rescuedEvents: analyzedReviewStatuses.reduce((sum, review) => sum + (review.rescuedCount ?? 0), 0),
+    rescueRejectedEvents: analyzedReviewStatuses.reduce((sum, review) => sum + (review.rescueRejectedCount ?? 0), 0),
   }
 
   const channelReport = buildChannelCategoryReports(
@@ -748,7 +754,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: legacySummary,
     videos: videoResults,
     limitations: [
-      'Each transcript is first analyzed for factual content events. Videos with detected candidates then receive one batched contextual review request over the original full transcript before deterministic backend display policy is applied.',
+      'Each transcript is first analyzed for factual content events. Videos with detected candidates then receive one batched contextual review request over the original full transcript; that review may also rescue a small number of sufficiently evidenced high-priority scenes missed by the first pass before deterministic backend display policy is applied.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
