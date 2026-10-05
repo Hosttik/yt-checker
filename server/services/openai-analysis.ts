@@ -655,8 +655,7 @@ function preserveFirstPassEpistemicState(
   }
 }
 
-function seriousDirectedFirstPassViolence(event: ClassifiedContentEvent): boolean {
-  if (event.category !== 'violence') return false
+function seriousFirstPassThreat(event: ClassifiedContentEvent): boolean {
   if (event.evidenceStrength === 'weak_context' || event.confidence < 0.7) return false
   if (event.assertionStatus === 'reported'
     || event.assertionStatus === 'hypothetical'
@@ -664,27 +663,43 @@ function seriousDirectedFirstPassViolence(event: ClassifiedContentEvent): boolea
     return false
   }
 
-  const directedTarget = event.details.targetType === 'person'
-    || event.details.targetType === 'human_like_character'
-    || event.details.targetType === 'animal'
-    || event.details.targetType === 'fantasy_creature'
-  if (!directedTarget) return false
+  if (event.category === 'violence') {
+    const directedTarget = event.details.targetType === 'person'
+      || event.details.targetType === 'human_like_character'
+      || event.details.targetType === 'animal'
+      || event.details.targetType === 'fantasy_creature'
+    if (!directedTarget) return false
 
-  const meaningfulHarm = event.details.harmLevel === 'threatened'
-    || event.details.harmLevel === 'attempted'
-    || event.details.harmLevel === 'actual'
+    const meaningfulHarm = event.details.harmLevel === 'threatened'
+      || event.details.harmLevel === 'attempted'
+      || event.details.harmLevel === 'actual'
 
-  if (event.subtype === 'violent_threat') {
-    return meaningfulHarm || event.details.actionPurpose === 'threat'
+    if (event.subtype === 'violent_threat') {
+      return meaningfulHarm || event.details.actionPurpose === 'threat'
+    }
+    if (event.subtype === 'life_threatening_situation') return meaningfulHarm
+    if (event.subtype === 'physical_attack') {
+      return event.details.harmLevel === 'attempted' || event.details.harmLevel === 'actual'
+    }
+
+    return meaningfulHarm
+      && (event.details.actionPurpose === 'attack' || event.details.actionPurpose === 'threat')
+      && (event.details.weaponRole === 'threatened_use' || event.details.weaponRole === 'used')
   }
-  if (event.subtype === 'life_threatening_situation') return meaningfulHarm
-  if (event.subtype === 'physical_attack') {
-    return event.details.harmLevel === 'attempted' || event.details.harmLevel === 'actual'
+
+  if (event.category === 'scary_and_disturbing') {
+    const coerciveOrImmediateSubtype = event.subtype === 'confinement'
+      || event.subtype === 'intense_peril'
+      || event.subtype === 'threatening_character'
+      || event.subtype === 'pursuit'
+    if (!coerciveOrImmediateSubtype || !event.details.threatPresent) return false
+
+    return event.details.fearIntensity === 'strong'
+      || (event.subtype === 'intense_peril' && event.severity === 'high')
+      || event.severity === 'high'
   }
 
-  return meaningfulHarm
-    && (event.details.actionPurpose === 'attack' || event.details.actionPurpose === 'threat')
-    && (event.details.weaponRole === 'threatened_use' || event.details.weaponRole === 'used')
+  return false
 }
 
 function reviewProvidesBenignContradiction(item: z.infer<typeof reviewItemSchema>): boolean {
@@ -705,7 +720,7 @@ function shouldRetainSeriousFirstPassAfterReview(
   original: ClassifiedContentEvent,
   item: z.infer<typeof reviewItemSchema>,
 ): boolean {
-  if (!seriousDirectedFirstPassViolence(original)) return false
+  if (!seriousFirstPassThreat(original)) return false
 
   const suppresses = item.verdict === 'rejected'
     || item.parentRelevance === 'minimal'
