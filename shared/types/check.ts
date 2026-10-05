@@ -70,6 +70,8 @@ export interface VideoContentReview {
   reviewedCount: number
   rejectedCount: number
   uncertainCount: number
+  rescuedCount?: number
+  rescueRejectedCount?: number
   reviewRequestCount?: number
   retryCount?: number
   missingBeforeRetry?: number
