@@ -393,6 +393,9 @@ export interface OpenAIReviewResult {
   uncertainCandidates: number
   complete: boolean
   requestCount: number
+  retryCount: number
+  missingBeforeRetry: number
+  missingAfterRetry: number
   outputText?: string
   usage: OpenAIUsage
   provider: OpenAIProviderMetadata
@@ -844,6 +847,9 @@ export class OpenAIAnalysisProvider {
         uncertainCandidates: 0,
         complete: true,
         requestCount: 0,
+        retryCount: 0,
+        missingBeforeRetry: 0,
+        missingAfterRetry: 0,
         usage: {
           inputTokens: 0,
           outputTokens: 0,
@@ -1074,6 +1080,9 @@ export class OpenAIAnalysisProvider {
           && !materializationFailure
           && reviewedCandidates === events.length,
         requestCount,
+        retryCount: Math.max(0, requestCount - 1),
+        missingBeforeRetry: missingItems.length,
+        missingAfterRetry: items.filter((item) => !byId.has(item.reviewItemId)).length,
         outputText: outputParts.length > 0
           ? outputParts.join('\n--- targeted review retry ---\n')
           : undefined,

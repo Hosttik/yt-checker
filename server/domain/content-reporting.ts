@@ -413,9 +413,20 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
     return true
   }
 
+  if (event.subtype === 'intense_peril') {
+    const meaningfulDistress = !review || review.distress === 'clear' || review.distress === 'strong'
+    const enactedOrSustained = !review
+      || review.aggressionDirection === 'actor_to_target'
+      || review.duration === 'sustained'
+      || review.repetition === 'repeated'
+      || review.repetition === 'pattern'
+      || review.consequence === 'injury_or_severe_harm'
+      || review.consequence === 'death'
+    return event.details.threatPresent && meaningfulDistress && enactedOrSustained
+  }
+
   if (event.subtype === 'threatening_character'
     || event.subtype === 'pursuit'
-    || event.subtype === 'intense_peril'
     || event.subtype === 'confinement') {
     const meaningfulDistress = !review || review.distress === 'clear' || review.distress === 'strong'
     return event.details.threatPresent && meaningfulDistress
