@@ -162,6 +162,41 @@ describe('OpenAI contextual reviewer', () => {
     expect(userText).toContain('[2] Теперь выход из деревни вам запрещён.')
   })
 
+  it('gives high-reasoning review enough output budget for reasoning plus structured JSON', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event = violentThreat('candidate_high_budget', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_high_budget',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[]}',
+      output_parsed: {
+        reviews: [confirmedReviewItem('review_0')],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 50, output_tokens: 20, total_tokens: 70 },
+    }))
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-6-luna',
+      undefined,
+      { responses: { parse } } as never,
+      'high',
+      180_000,
+    )
+
+    await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(parse).toHaveBeenCalledTimes(1)
+    const request = parse.mock.calls[0]?.[0] as {
+      reasoning?: { effort?: string }
+      max_output_tokens?: number
+    }
+    expect(request.reasoning?.effort).toBe('high')
+    expect(request.max_output_tokens).toBe(32_768)
+  })
+
   it('keeps candidate review and missed-event coverage as separate tasks', async () => {
     const transcript = normalizeTranscript([
       { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
