@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AggregateOpenAIUsage } from '../shared/types/check'
@@ -126,6 +126,30 @@ interface MetricSet {
   mainCases: number
   detailCases: number
   hiddenCases: number
+}
+
+interface RunOutput {
+  metrics: MetricSet
+  onePassMetrics: MetricSet
+  cardAudit: CardAudit
+  onePassCardAudit: CardAudit
+  firstPassSubstantialMisses: number
+  requests: number
+  tokens: number
+  latencyMs: number
+  detectorTokens: number
+  detectorLatencyMs: number
+  onePassSceneCount: number
+  sceneCount: number
+  priorities: Record<string, Priority>
+  levels: Record<string, ConcernLevel>
+  sceneSignatures: Record<string, string[]>
+}
+
+interface StabilityCheckpoint {
+  version: 1
+  key: string
+  runOutputs: RunOutput[]
 }
 
 interface VideoCoverageFile {
@@ -388,13 +412,52 @@ async function loadScan(scanDir: string): Promise<{ records: ScanRecord[]; resul
   return { records, result }
 }
 
+function isRateLimitError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (
+      ('type' in error && error.type === 'rate_limit')
+      || ('status' in error && error.status === 429)
+    ),
+  )
+}
+
+async function withRateLimitRetry<T>(
+  label: string,
+  task: () => Promise<T>,
+  maxRetries: number,
+  baseDelayMs: number,
+): Promise<{ value: T; retries: number }> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return { value: await task(), retries: attempt }
+    } catch (error) {
+      if (!isRateLimitError(error) || attempt >= maxRetries) throw error
+      const delayMs = Math.min(baseDelayMs * (2 ** attempt), 60_000)
+      console.warn(
+        `[quality] rate limit on ${label}; retry ${attempt + 1}/${maxRetries} in ${delayMs}ms`,
+      )
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs))
+    }
+  }
+}
+
 async function runCurrent(
   record: ScanRecord,
   detector: OpenAIAnalysisProvider,
   reviewer: OpenAIAnalysisProvider,
   profile: AnalysisProfile,
+  rateLimitRetries: number,
+  retryBaseDelayMs: number,
 ): Promise<NewVideoResult> {
-  const detection = await detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false)
+  const detectionAttempt = await withRateLimitRetry(
+    `${record.videoId}:detector`,
+    () => detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false),
+    rateLimitRetries,
+    retryBaseDelayMs,
+  )
+  const detection = detectionAttempt.value
   const onePassValidation = validateClassifiedEvents(detection.classifiedEvents)
   const onePassEvents = normalizeClassifiedEvents(onePassValidation.accepted)
     .map((event, index) => applyContentPolicy(
@@ -403,14 +466,20 @@ async function runCurrent(
       profile,
     ))
   let reviewed = detection.classifiedEvents
-  let requests = 1
+  let requests = 1 + detectionAttempt.retries
   let tokens = detection.usage.totalTokens
   let latencyMs = detection.provider.latencyMs
 
   if (reviewed.length > 0) {
-    const review = await reviewer.review(record.transcript, 'ru', ALL_CATEGORIES, reviewed)
+    const reviewAttempt = await withRateLimitRetry(
+      `${record.videoId}:review`,
+      () => reviewer.review(record.transcript, 'ru', ALL_CATEGORIES, reviewed),
+      rateLimitRetries,
+      retryBaseDelayMs,
+    )
+    const review = reviewAttempt.value
     reviewed = review.reviewedEvents
-    requests += review.requestCount
+    requests += review.requestCount + reviewAttempt.retries
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
   }
@@ -496,7 +565,10 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       : DEFAULT_SCAN_DIRS)
     const maxVideos = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_VIDEOS ?? 20)))
     const runs = Math.max(1, Math.min(5, Number(process.env.QUALITY_RUNS ?? 1)))
-    const concurrency = Math.max(1, Math.min(5, Number(process.env.QUALITY_CONCURRENCY ?? 3)))
+    const concurrency = Math.max(1, Math.min(5, Number(process.env.QUALITY_CONCURRENCY ?? 1)))
+    const rateLimitRetries = Math.max(0, Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? 5)))
+    const retryBaseDelayMs = Math.max(1_000, Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 10_000)))
+    const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
     const reviewModel = process.env.OPENAI_REVIEW_MODEL ?? model
     const profile: AnalysisProfile = 'normal'
@@ -542,29 +614,40 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       }
     })
 
-    const runOutputs: Array<{
-      metrics: MetricSet
-      onePassMetrics: MetricSet
-      cardAudit: CardAudit
-      onePassCardAudit: CardAudit
-      firstPassSubstantialMisses: number
-      requests: number
-      tokens: number
-      latencyMs: number
-      detectorTokens: number
-      detectorLatencyMs: number
-      onePassSceneCount: number
-      sceneCount: number
-      priorities: Record<string, Priority>
-      levels: Record<string, ConcernLevel>
-      sceneSignatures: Record<string, string[]>
-    }> = []
+    const outDir = resolve('benchmark-results/parental-quality')
+    await mkdir(outDir, { recursive: true })
+    const checkpointKey = createHash('sha256')
+      .update(JSON.stringify({
+        scanDirs,
+        selected: selected.map((record) => `${record.videoId}:${record.transcriptHash}`),
+        runs,
+        model,
+        reviewModel,
+        profile,
+      }))
+      .digest('hex')
+      .slice(0, 16)
+    const checkpointPath = resolve(outDir, `.stability-${checkpointKey}.checkpoint.json`)
+    let runOutputs: RunOutput[] = []
+
+    try {
+      const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
+      if (checkpoint.version === 1 && checkpoint.key === checkpointKey) {
+        runOutputs = checkpoint.runOutputs.slice(0, runs)
+      }
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      if (code !== 'ENOENT') throw error
+    }
 
     console.log(
-      `Quality eval: ${runs} run(s), ${selected.length} video(s), concurrency=${concurrency}, scans=${scanDirs.join(', ')}`,
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
     )
+    if (runOutputs.length > 0) {
+      console.log(`[quality] resumed from checkpoint: ${runOutputs.length}/${runs} completed run(s)`)
+    }
 
-    for (let run = 0; run < runs; run += 1) {
+    for (let run = runOutputs.length; run < runs; run += 1) {
       const detector = new OpenAIAnalysisProvider(apiKey, model)
       const reviewer = new OpenAIAnalysisProvider(apiKey, reviewModel)
       const newByKey = new Map<string, NewVideoResult>()
@@ -579,7 +662,14 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
             `[quality] run ${run + 1}/${runs} video ${index + 1}/${selected.length} started: ${record.videoId}`,
           )
           try {
-            const output = await runCurrent(record, detector, reviewer, profile)
+            const output = await runCurrent(
+              record,
+              detector,
+              reviewer,
+              profile,
+              rateLimitRetries,
+              retryBaseDelayMs,
+            )
             completedVideos += 1
             console.log(
               `[quality] run ${run + 1}/${runs} completed ${completedVideos}/${selected.length}: ${record.videoId} (${output.tokens} tokens, ${output.requests} request(s))`,
@@ -631,6 +721,20 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         levels: levels(applicableAnnotations, currentByVideo),
         sceneSignatures: displayedSceneSignatures(currentByVideo),
       })
+      await writeFile(
+        checkpointPath,
+        JSON.stringify({
+          version: 1,
+          key: checkpointKey,
+          runOutputs,
+        } satisfies StabilityCheckpoint, null, 2) + '\n',
+        'utf8',
+      )
+      console.log(`[quality] checkpoint saved: ${runOutputs.length}/${runs} completed run(s)`)
+      if (run + 1 < runs && runCooldownMs > 0) {
+        console.log(`[quality] cooling down for ${runCooldownMs}ms before next run`)
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, runCooldownMs))
+      }
     }
 
     let stability: number | null = null
@@ -691,6 +795,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         selectedRecords: selectedRecords.length,
         runs,
         concurrency,
+        rateLimitRetries,
+        retryBaseDelayMs,
+        runCooldownMs,
         annotations: applicableAnnotations.length,
         provisionalAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'provisional').length,
         humanConfirmedAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'human_confirmed').length,
@@ -757,8 +864,6 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       },
     }
 
-    const outDir = resolve('benchmark-results/parental-quality')
-    await mkdir(outDir, { recursive: true })
     const outputPath = resolve(
       outDir,
       `${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
@@ -766,6 +871,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     await writeFile(outputPath, JSON.stringify(report, null, 2) + '\n', 'utf8')
     console.log(JSON.stringify(report, null, 2))
     console.log(`Saved quality report: ${outputPath}`)
+    await rm(checkpointPath, { force: true })
 
     expect(current.metrics.shownCases).toBeGreaterThan(0)
     expect(current.metrics.substantialMisses).toBeLessThanOrEqual(current.onePassMetrics.substantialMisses)
