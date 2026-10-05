@@ -1362,10 +1362,20 @@ export class OpenAIAnalysisProvider {
         }
 
         try {
-          const materialized = item.event
+          let materialized = item.event
             ? materializeEvents([item.event], transcript, enabledCategories)[0]
             : undefined
-          if (materialized && !reviewCorrectionOverlapsOriginalScene(original, materialized)) {
+          if (item.verdict === 'confirmed'
+            && materialized
+            && !directEvidenceOverlaps(original, materialized, 5_000)) {
+            // "confirmed" means the original signal is correct. The reviewer may
+            // re-select tighter evidence, but it must not silently relocate the
+            // candidate to another part of a broad narrative scene.
+            materialized = original
+          }
+          if (item.verdict !== 'confirmed'
+            && materialized
+            && !reviewCorrectionOverlapsOriginalScene(original, materialized)) {
             materializationFailure = true
             reviewedEvents.push({
               ...original,
