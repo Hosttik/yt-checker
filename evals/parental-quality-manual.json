@@ -70,7 +70,8 @@
       "физическая травма без доказательств",
       "визуальное заточение, если оно не следует из речи"
     ],
-    "forbiddenFindings": []
+    "forbiddenFindings": [],
+    "expectedLevel": "high"
   },
   {
     "id": "railway-hostage-coercion",
@@ -94,7 +95,8 @@
       "сцена несущественна только потому, что действие происходит в Minecraft",
       "последующее спасение отменяет предшествующую угрозу"
     ],
-    "forbiddenFindings": []
+    "forbiddenFindings": [],
+    "expectedLevel": "high"
   },
   {
     "id": "conditional-hostage-threat",
@@ -117,7 +119,8 @@
       "безусловное успокоение",
       "отрицание угрозы из-за слов «не трону»"
     ],
-    "forbiddenFindings": []
+    "forbiddenFindings": [],
+    "expectedLevel": "high"
   },
   {
     "id": "ordinary-religious-exclamation",
@@ -236,6 +239,105 @@
     "forbiddenInterpretations": [
       "обычная игровая опасность без жертвы",
       "снижение до details только из-за fictional/game context"
+    ],
+    "forbiddenFindings": [],
+    "expectedLevel": "high"
+  },
+  {
+    "id": "reported-zombie-warning",
+    "annotationSource": "provisional",
+    "split": "tuning",
+    "sourceVideo": "7_bCIsH-XEc",
+    "anchor": "на нашу деревню прямо сейчас идёт 11.000 зомби",
+    "categories": [
+      "violence",
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "details",
+    "expectedLevel": "moderate",
+    "why": "Сообщение о будущей игровой угрозе полезно как контекст, но до непосредственного столкновения не должно занимать основную карточку.",
+    "requiredEvidence": [
+      "угроза сообщается со слов другого персонажа",
+      "непосредственное нападение в этом фрагменте ещё не происходит"
+    ],
+    "forbiddenInterpretations": [
+      "эмоциональная реакция превращает сообщённую угрозу в уже происходящее нападение"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "active-bunker-threat",
+    "annotationSource": "provisional",
+    "split": "tuning",
+    "sourceVideo": "7_bCIsH-XEc",
+    "anchor": "слышите, как они стучат по железной бункерной двери",
+    "categories": [
+      "violence",
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "expectedLevel": "moderate",
+    "why": "Угроза уже происходит непосредственно у персонажа: зомби скребутся и стучат в дверь укрытия.",
+    "requiredEvidence": [
+      "угроза происходит сейчас",
+      "зомби находятся у двери бункера",
+      "персонаж реагирует на непосредственную опасность"
+    ],
+    "forbiddenInterpretations": [
+      "будущая или только сообщённая угроза",
+      "обязательная высокая приоритетность без серьёзного вреда"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "active-black-hole-peril",
+    "annotationSource": "provisional",
+    "split": "tuning",
+    "sourceVideo": "wiuuBaYC8B8",
+    "anchor": "меня притягивают туда быстрее. Нужно за что-то ухватиться",
+    "categories": [
+      "violence",
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "expectedLevel": "moderate",
+    "why": "Персонаж непосредственно находится в игровой опасности и пытается удержаться, но подтверждённой неминуемой гибели или тяжёлого вреда нет.",
+    "requiredEvidence": [
+      "опасность происходит непосредственно с персонажем",
+      "персонаж пытается удержаться",
+      "угроза возникла случайно в игровом мире"
+    ],
+    "forbiddenInterpretations": [
+      "high только из-за напряжённости сцены",
+      "details только потому, что reviewer назвал сцену brief или single"
+    ],
+    "forbiddenFindings": []
+  },
+  {
+    "id": "directed-pitchfork-threat",
+    "annotationSource": "provisional",
+    "split": "tuning",
+    "sourceVideo": "_xR7fZ24O4g",
+    "anchor": "Достаём вилы и копья",
+    "categories": [
+      "violence",
+      "scary_and_disturbing"
+    ],
+    "showToParent": true,
+    "priority": "main",
+    "expectedLevel": "high",
+    "why": "Вооружённая группа направленно загоняет персонажа в тупик, а он просит остановиться и спасти его.",
+    "requiredEvidence": [
+      "вилы или копья используются как направленная угроза",
+      "конкретный персонаж оказывается целью",
+      "персонаж просит остановиться или о помощи"
+    ],
+    "forbiddenInterpretations": [
+      "обычное присутствие оружия",
+      "фактическое нанесение травмы без подтверждения"
     ],
     "forbiddenFindings": []
   }

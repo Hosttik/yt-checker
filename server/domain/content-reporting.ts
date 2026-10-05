@@ -400,10 +400,7 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
       const seriousConsequence = review?.consequence === 'threatened_harm'
         || review?.consequence === 'injury_or_severe_harm'
         || review?.consequence === 'death'
-      const sustained = review?.duration === 'sustained'
-        || review?.repetition === 'repeated'
-        || review?.repetition === 'pattern'
-      return Boolean(meaningfulDistress && seriousConsequence && sustained)
+      return Boolean(meaningfulDistress && seriousConsequence)
     }
 
     return false
@@ -415,14 +412,7 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
 
   if (event.subtype === 'intense_peril') {
     const meaningfulDistress = !review || review.distress === 'clear' || review.distress === 'strong'
-    const enactedOrSustained = !review
-      || review.aggressionDirection === 'actor_to_target'
-      || review.duration === 'sustained'
-      || review.repetition === 'repeated'
-      || review.repetition === 'pattern'
-      || review.consequence === 'injury_or_severe_harm'
-      || review.consequence === 'death'
-    return event.details.threatPresent && meaningfulDistress && enactedOrSustained
+    return event.details.threatPresent && meaningfulDistress
   }
 
   if (event.subtype === 'threatening_character'

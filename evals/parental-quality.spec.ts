@@ -40,6 +40,14 @@ const DEFAULT_SCAN_DIRS = [
 ]
 
 type Priority = 'hidden' | 'details' | 'main'
+type ConcernLevel = 'hidden' | 'low' | 'moderate' | 'high'
+
+const CONCERN_LEVEL_RANK: Record<ConcernLevel, number> = {
+  hidden: 0,
+  low: 1,
+  moderate: 2,
+  high: 3,
+}
 
 interface ManualCase {
   id: string
@@ -50,6 +58,7 @@ interface ManualCase {
   categories: ContentCategory[]
   showToParent: boolean
   priority: Priority
+  expectedLevel?: ConcernLevel
   why: string
   requiredEvidence: string[]
   forbiddenInterpretations: string[]
@@ -113,6 +122,7 @@ interface MetricSet {
   substantialMisses: number
   lowValueCards: number
   unsupportedClaims: number
+  levelMismatches: number
   mainCases: number
   detailCases: number
   hiddenCases: number
@@ -189,12 +199,29 @@ function eventMatches(event: Pick<ContentEvent, 'text' | 'reason'> | Pick<Classi
   return anchorOverlap(annotation.anchor, `${event.text} ${event.reason}`) >= 0.6
 }
 
+function matchingPresentationScenes(events: ContentEvent[], annotation: ManualCase) {
+  return buildPresentationScenes(events).filter((scene) =>
+    scene.events.some((event) => eventMatches(event, annotation)),
+  )
+}
+
 function actualPriority(events: ContentEvent[], annotation: ManualCase): Priority {
-  const matching = events.filter((event) => eventMatches(event, annotation))
-  const displayed = matching.filter((event) => event.displayLevel !== 'hidden')
-  if (displayed.some((event) => event.parentRelevance === 'moderate' || event.parentRelevance === 'high')) return 'main'
-  if (displayed.length > 0) return 'details'
+  const scenes = matchingPresentationScenes(events, annotation)
+  if (scenes.some((scene) => scene.attention === 'main')) return 'main'
+  if (scenes.length > 0) return 'details'
   return 'hidden'
+}
+
+function actualLevel(events: ContentEvent[], annotation: ManualCase): ConcernLevel {
+  return matchingPresentationScenes(events, annotation)
+    .reduce<ConcernLevel>((max, scene) => {
+      const level = scene.level === 'high'
+        ? 'high'
+        : scene.level === 'moderate'
+          ? 'moderate'
+          : 'low'
+      return CONCERN_LEVEL_RANK[level] > CONCERN_LEVEL_RANK[max] ? level : max
+    }, 'hidden')
 }
 
 function findingMatches(event: ContentEvent, pattern: string): boolean {
@@ -218,6 +245,7 @@ function metricsFor(
   let substantialMisses = 0
   let lowValueCards = 0
   let unsupportedClaims = 0
+  let levelMismatches = 0
   let mainCases = 0
   let detailCases = 0
   let hiddenCases = 0
@@ -239,6 +267,9 @@ function metricsFor(
       lowValueCards += 1
     }
     unsupportedClaims += unsupportedCount(events, annotation)
+    if (annotation.expectedLevel && actualLevel(events, annotation) !== annotation.expectedLevel) {
+      levelMismatches += 1
+    }
   }
 
   return {
@@ -249,6 +280,7 @@ function metricsFor(
     substantialMisses,
     lowValueCards,
     unsupportedClaims,
+    levelMismatches,
     mainCases,
     detailCases,
     hiddenCases,
@@ -420,6 +452,16 @@ function priorities(
   ]))
 }
 
+function levels(
+  annotations: ManualCase[],
+  eventsByVideo: Map<string, ContentEvent[]>,
+): Record<string, ConcernLevel> {
+  return Object.fromEntries(annotations.map((annotation) => [
+    annotation.id,
+    actualLevel(eventsByVideo.get(annotation.sourceVideo) ?? [], annotation),
+  ]))
+}
+
 describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', () => {
   it('compares saved baseline with two-pass contextual review without TranscriptAPI', async () => {
     const apiKey = process.env.OPENAI_API_KEY || process.env.NUXT_OPENAI_API_KEY
@@ -429,7 +471,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       ? process.env.QUALITY_SCAN_DIRS.split(',').map((item) => item.trim()).filter(Boolean)
       : DEFAULT_SCAN_DIRS)
     const maxVideos = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_VIDEOS ?? 20)))
-    const runs = Math.max(1, Math.min(3, Number(process.env.QUALITY_RUNS ?? 1)))
+    const runs = Math.max(1, Math.min(5, Number(process.env.QUALITY_RUNS ?? 1)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
     const reviewModel = process.env.OPENAI_REVIEW_MODEL ?? model
     const profile: AnalysisProfile = 'normal'
@@ -489,6 +531,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       onePassSceneCount: number
       sceneCount: number
       priorities: Record<string, Priority>
+      levels: Record<string, ConcernLevel>
       sceneSignatures: Record<string, string[]>
     }> = []
 
@@ -529,23 +572,29 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         onePassSceneCount: outputs.reduce((sum, item) => sum + item.onePassSceneCount, 0),
         sceneCount: outputs.reduce((sum, item) => sum + item.sceneCount, 0),
         priorities: priorities(applicableAnnotations, currentByVideo),
+        levels: levels(applicableAnnotations, currentByVideo),
         sceneSignatures: displayedSceneSignatures(currentByVideo),
       })
     }
 
     let stability: number | null = null
+    let levelStability: number | null = null
     let displayedCardStability: number | null = null
     if (runOutputs.length > 1) {
       let comparisons = 0
       let equal = 0
+      let levelEqual = 0
       const first = runOutputs[0]!.priorities
+      const firstLevels = runOutputs[0]!.levels
       for (const output of runOutputs.slice(1)) {
         for (const annotation of applicableAnnotations) {
           comparisons += 1
           if (first[annotation.id] === output.priorities[annotation.id]) equal += 1
+          if (firstLevels[annotation.id] === output.levels[annotation.id]) levelEqual += 1
         }
       }
       stability = comparisons === 0 ? null : equal / comparisons
+      levelStability = comparisons === 0 ? null : levelEqual / comparisons
 
       let cardComparisons = 0
       let cardSimilarity = 0
@@ -617,7 +666,22 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         ...current,
         repeatedRuns: runs,
         stability,
+        levelStability,
         displayedCardStability,
+        anchorStability: Object.fromEntries(applicableAnnotations.map((annotation) => {
+          const priorityCounts: Record<Priority, number> = { hidden: 0, details: 0, main: 0 }
+          const levelCounts: Record<ConcernLevel, number> = { hidden: 0, low: 0, moderate: 0, high: 0 }
+          for (const output of runOutputs) {
+            priorityCounts[output.priorities[annotation.id]!] += 1
+            levelCounts[output.levels[annotation.id]!] += 1
+          }
+          return [annotation.id, {
+            expectedPriority: annotation.priority,
+            expectedLevel: annotation.expectedLevel ?? null,
+            priorityCounts,
+            levelCounts,
+          }]
+        })),
         averageRequests: average(runOutputs.map((item) => item.requests)),
         averageTokens: average(runOutputs.map((item) => item.tokens)),
         averageLatencyMs: average(runOutputs.map((item) => item.latencyMs)),
