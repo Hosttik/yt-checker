@@ -70,6 +70,10 @@ export interface VideoContentReview {
   reviewedCount: number
   rejectedCount: number
   uncertainCount: number
+  reviewRequestCount?: number
+  retryCount?: number
+  missingBeforeRetry?: number
+  missingAfterRetry?: number
   model?: string
   promptVersion?: string
   schemaVersion?: string
@@ -256,7 +260,7 @@ export interface ChannelCheckResponse {
   videoReports: VideoContentReport[]
   channelReport: ChannelCategoryReport[]
 
-  // Legacy compatibility. Derived from contentEvents.
+  // Legacy compatibility. Mirrors canonical channelReport level/count semantics.
   summary: RuleSummary[]
   videos: VideoScanResult[]
 
