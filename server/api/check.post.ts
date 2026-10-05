@@ -48,6 +48,7 @@ import {
 } from '../services/transcript-api'
 import { createScanLogger } from '../utils/logger'
 import { mapWithConcurrency } from '../utils/concurrency'
+import { positiveIntegerEnv, Semaphore } from '../utils/semaphore'
 
 const languageSchema = z.string().trim().max(100).default('').refine((value) => {
   if (!value) return true
@@ -130,7 +131,12 @@ function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEv
   return events.map((event) => ({ ...event, review: undefined }))
 }
 
+const scanVideoConcurrency = positiveIntegerEnv('SCAN_VIDEO_CONCURRENCY', 10)
+const openAIRequestLimiter = new Semaphore(positiveIntegerEnv('OPENAI_GLOBAL_CONCURRENCY', 10))
+const transcriptRequestLimiter = new Semaphore(positiveIntegerEnv('TRANSCRIPT_GLOBAL_CONCURRENCY', 10))
+
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
+  const scanStartedAt = Date.now()
   const parsed = checkRequestSchema.safeParse(await readBody(event))
   if (!parsed.success) {
     throw createError({
@@ -210,7 +216,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
   let latest: Awaited<ReturnType<TranscriptApiClient['getLatestVideos']>>
   try {
-    latest = await transcriptProvider.getLatestVideos(request.channelUrl)
+    latest = await transcriptRequestLimiter.run(() => transcriptProvider.getLatestVideos(request.channelUrl))
   } catch (error) {
     logger.error('channel.latest.failed', { reason: transcriptReason(error) })
     throw createError({ statusCode: 502, statusMessage: 'Could not load this YouTube channel.' })
@@ -224,14 +230,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     desiredEligible = Number.POSITIVE_INFINITY,
   ): Promise<void> {
     const pending = videos.filter((video) => !inspectedIds.has(video.id))
-    const concurrency = 4
+    const concurrency = Math.min(scanVideoConcurrency, 10)
 
     for (let offset = 0; offset < pending.length && eligibleVideos.length < desiredEligible; offset += concurrency) {
       const batch = pending.slice(offset, offset + concurrency)
       const inspected = await mapWithConcurrency(batch, concurrency, async (video) => {
         inspectedIds.add(video.id)
         try {
-          const info = await transcriptProvider.getVideoInfo(video.id, languagePriority)
+          const info = await transcriptRequestLimiter.run(() => transcriptProvider.getVideoInfo(video.id, languagePriority))
           logger.debug('video.preflight.completed', {
             videoId: video.id,
             source,
@@ -262,7 +268,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
     usedChannelVideosFallback = true
     try {
-      const page = await transcriptProvider.getChannelVideos(request.channelUrl)
+      const page = await transcriptRequestLimiter.run(() => transcriptProvider.getChannelVideos(request.channelUrl))
       await inspectVideos(page.videos, 'fallback', Math.max(requiredCandidateCount, targetVideos + 2))
     } catch (error) {
       logger.warn('channel.fallback.failed', { reason: transcriptReason(error) })
@@ -290,23 +296,12 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   let transcriptCreditBudgetExhausted = false
   const transcriptCreditBudget = targetVideos
 
-  while (successfulAnalyses < targetVideos) {
-    if (transcriptProvider.getCreditUsage().transcriptCredits >= transcriptCreditBudget) {
-      transcriptCreditBudgetExhausted = true
-      break
-    }
-    if (candidateIndex >= eligibleVideos.length) {
-      await loadFallbackVideos(candidateIndex + 1)
-      if (candidateIndex >= eligibleVideos.length) break
-    }
-
-    const video = eligibleVideos[candidateIndex]!
-    candidateIndex += 1
+  async function processVideo(video: VideoMetadata): Promise<void> {
     transcriptAttempts += 1
     const url = `https://www.youtube.com/watch?v=${video.id}`
     let transcript
     try {
-      transcript = await transcriptProvider.getTranscript(video.id, languagePriority)
+      transcript = await transcriptRequestLimiter.run(() => transcriptProvider.getTranscript(video.id, languagePriority))
     } catch (error) {
       const unavailableReason = transcriptReason(error)
       videoResults.push({
@@ -321,25 +316,26 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       // A confirmed 404/not_available response costs 0 credits and is specific to this
       // video, so trying the next candidate is safe. Other failures are systemic or
       // ambiguous; stop instead of risking repeated requests or hidden billing.
-      if (unavailableReason === 'not_available') continue
+      if (unavailableReason === 'not_available') return
       stoppedForTranscriptProviderError = true
-      break
+      return
     }
 
     let normalized: ReturnType<typeof normalizeTranscript> | undefined
     try {
-      normalized = normalizeTranscript(transcript.segments)
-      if (!normalized.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
+      const normalizedTranscript = normalizeTranscript(transcript.segments)
+      normalized = normalizedTranscript
+      if (!normalizedTranscript.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
       openaiUsage.requests += 1
       openaiStages.detection.requests += 1
       const resolvedLanguage = transcript.language ?? languagePriority
       const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
-      const analysis = await analyzer.analyze(
-        normalized,
+      const analysis = await openAIRequestLimiter.run(() => analyzer.analyze(
+        normalizedTranscript,
         resolvedLanguage,
         enabledCategories,
         diagnosticAnalysis,
-      )
+      ))
       addUsage(openaiUsage, analysis.usage)
       addUsage(openaiStages.detection, analysis.usage)
 
@@ -381,12 +377,12 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         try {
           openaiUsage.requests += 1
           openaiStages.review.requests += 1
-          reviewResult = await reviewer.review(
-            normalized,
+          reviewResult = await openAIRequestLimiter.run(() => reviewer.review(
+            normalizedTranscript,
             resolvedLanguage,
             enabledCategories,
             firstPassEvents,
-          )
+          ))
           if (reviewResult.requestCount > 1) {
             openaiUsage.requests += reviewResult.requestCount - 1
             openaiStages.review.requests += reviewResult.requestCount - 1
@@ -461,16 +457,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         }
       }
 
-      if (!reviewDisabledAfterFailure && !reviewError) {
+      if (diagnosticAnalysis && !reviewDisabledAfterFailure && !reviewError) {
         try {
           openaiUsage.requests += 1
           openaiStages.review.requests += 1
-          coverageResult = await reviewer.coverage(
-            normalized,
+          coverageResult = await openAIRequestLimiter.run(() => reviewer.coverage(
+            normalizedTranscript,
             resolvedLanguage,
             enabledCategories,
             reviewedEvents,
-          )
+          ))
           addUsage(openaiUsage, coverageResult.usage)
           addUsage(openaiStages.review, coverageResult.usage)
           reviewedEvents = [...reviewedEvents, ...coverageResult.rescuedEvents]
@@ -616,7 +612,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       storage.recordOpenAISuccess(
         video.id,
         analysis,
-        normalized.text,
+        normalizedTranscript.text,
         policyEvents,
         semanticValidation.rejected,
         semanticValidation.adjustments,
@@ -703,9 +699,45 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       // stop the scan instead of spending more TranscriptAPI credits on videos we cannot
       // confidently classify.
       stoppedForOpenAIProviderError = true
+      return
+    }
+
+  }
+
+  while (successfulAnalyses < targetVideos) {
+    if (stoppedForOpenAIProviderError || stoppedForTranscriptProviderError) break
+
+    const usedTranscriptCredits = transcriptProvider.getCreditUsage().transcriptCredits
+    const remainingTranscriptCredits = transcriptCreditBudget - usedTranscriptCredits
+    if (remainingTranscriptCredits <= 0) {
+      transcriptCreditBudgetExhausted = true
       break
     }
+
+    const remainingVideos = targetVideos - successfulAnalyses
+    const desiredBatchSize = Math.min(
+      scanVideoConcurrency,
+      remainingVideos,
+      remainingTranscriptCredits,
+    )
+
+    if (eligibleVideos.length - candidateIndex < desiredBatchSize) {
+      await loadFallbackVideos(candidateIndex + desiredBatchSize)
+    }
+
+    const availableCandidates = eligibleVideos.length - candidateIndex
+    if (availableCandidates <= 0) break
+
+    const batchSize = Math.min(desiredBatchSize, availableCandidates)
+    const batch = eligibleVideos.slice(candidateIndex, candidateIndex + batchSize)
+    candidateIndex += batch.length
+
+    await mapWithConcurrency(batch, batch.length, processVideo)
   }
+
+  const videoOrder = new Map(eligibleVideos.map((video, index) => [video.id, index]))
+  videoResults.sort((left, right) => (videoOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+    - (videoOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER))
 
   const analyzedVideos = videoResults.filter((video) => video.status === 'analyzed').length
   const contentEvents = videoResults.flatMap((video) => contentEventsByVideo.get(video.id) ?? [])
@@ -830,7 +862,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: legacySummary,
     videos: videoResults,
     limitations: [
-      'Each transcript is first analyzed for factual content events. Videos with detected candidates then receive one batched contextual review request over the original full transcript; that review may also rescue a small number of sufficiently evidenced high-priority scenes missed by the first pass before deterministic backend display policy is applied.',
+      'Each transcript is analyzed once for factual content events. Videos with detected candidates receive one batched contextual review request over the original full transcript. The additional coverage pass runs only in diagnostic profile, not in the normal production scan.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
@@ -869,6 +901,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     failedVideos: result.failedVideos,
     openaiRequests: openaiUsage.requests,
     openaiTotalTokens: openaiUsage.totalTokens,
+    durationMs: Date.now() - scanStartedAt,
   })
   return result
 })

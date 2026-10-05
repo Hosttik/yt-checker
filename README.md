@@ -10,7 +10,7 @@
 TranscriptAPI
   → normalizeTranscript
   → OpenAI detector: factual candidates on the full transcript
-  → batched OpenAI reviewer over the same original full transcript
+  → batched OpenAI reviewer only when detector found candidates
   → semantic validation
   → deterministic parent policy
   → ContentEvent
@@ -19,7 +19,9 @@ TranscriptAPI
   → presentation
 ```
 
-Detector выполняет один full-transcript request. Второй request выполняется только если detector нашёл кандидаты; reviewer проверяет их одним батчем, а не отдельным запросом на каждую находку. При сбое reviewer первый проход сохраняется как неперепроверенный и UI явно показывает неполный review. После первой review-ошибки оставшиеся review-запросы в текущем scan отключаются. OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
+До 10 видео одного scan обрабатываются параллельно. Вызовы провайдеров дополнительно ограничены общими semaphore внутри Node-процесса, поэтому одновременные scan делят фиксированный лимит OpenAI/TranscriptAPI, а не умножают параллельность на число пользователей.
+
+Detector выполняет один full-transcript request. Второй request выполняется только если detector нашёл кандидаты; reviewer проверяет их одним батчем, а не отдельным запросом на каждую находку. Дополнительный coverage-pass отключён для обычного production-профиля и запускается только в diagnostic. При сбое reviewer первый проход сохраняется как неперепроверенный и UI явно показывает неполный review. После первой review-ошибки оставшиеся review-запросы в текущем scan отключаются. OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
 
 Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка. Платные transcript credits имеют жёсткий бюджет, равный `videoLimit`: при лимите 10 приложение не может потратить больше 10 credits на `/youtube/transcript`. Если transcript неожиданно недоступен и не был списан credit, берётся следующий caption-eligible кандидат. Любая ошибка OpenAI после платного transcript останавливает scan, чтобы не расходовать дополнительные TranscriptAPI credits. Платный fallback `/youtube/channel/videos` загружается только когда он нужен и добавляет максимум 1 credit в текущей реализации.
 
@@ -42,9 +44,16 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-6-luna
 OPENAI_REVIEW_MODEL=gpt-6-luna
 OPENAI_REASONING_EFFORT=low
+
+# Performance/concurrency defaults
+SCAN_VIDEO_CONCURRENCY=10
+OPENAI_GLOBAL_CONCURRENCY=10
+TRANSCRIPT_GLOBAL_CONCURRENCY=10
 ```
 
 `OPENAI_REASONING_EFFORT` намеренно принимает только `low`. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
+
+`SCAN_VIDEO_CONCURRENCY` ограничивает параллельность видео внутри одного scan. `OPENAI_GLOBAL_CONCURRENCY` и `TRANSCRIPT_GLOBAL_CONCURRENCY` — общие лимиты внутри одного Node-процесса для всех одновременно выполняющихся scan. Это простой MVP-предохранитель от burst-нагрузки; при горизонтальном масштабировании каждый процесс имеет собственный semaphore.
 
 ## OpenAI analyzer
 
