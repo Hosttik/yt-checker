@@ -4,7 +4,12 @@ import type { ChannelCheckResponse, ScanStorageMode, VideoContentReview } from '
 import type { ContentEvent } from '../../shared/types/content'
 import type { ContentValidationAdjustment, ContentValidationRejection } from '../domain/content-validation'
 import type { TranscriptApiExchange } from './transcript-api'
-import type { OpenAIAnalysisError, OpenAIAnalysisResult, OpenAIReviewResult } from './openai-analysis'
+import type {
+  OpenAIAnalysisError,
+  OpenAIAnalysisResult,
+  OpenAICoverageResult,
+  OpenAIReviewResult,
+} from './openai-analysis'
 
 interface OpenAIDiagnosticEntry {
   videoId: string
@@ -20,6 +25,7 @@ interface OpenAIDiagnosticEntry {
     validationAdjustments?: ContentValidationAdjustment[]
     reviewedClassifiedEvents?: OpenAIReviewResult['reviewedEvents']
     reviewDecisions?: OpenAIReviewResult['decisions']
+    coverageRescuedEvents?: OpenAICoverageResult['rescuedEvents']
   }
   usage?: OpenAIAnalysisResult['usage']
   review?: {
@@ -28,6 +34,15 @@ interface OpenAIDiagnosticEntry {
     provider?: OpenAIReviewResult['provider']
     usage?: OpenAIReviewResult['usage']
     outputText?: string
+    error?: { type: string; status?: number; code?: string; message: string }
+  }
+  coverage?: {
+    requestMetadata?: OpenAICoverageResult['requestMetadata']
+    provider?: OpenAICoverageResult['provider']
+    usage?: OpenAICoverageResult['usage']
+    outputText?: string
+    rescuedCandidates?: number
+    rejectedCandidates?: number
     error?: { type: string; status?: number; code?: string; message: string }
   }
   error?: { type: string; status?: number; code?: string; message: string }
@@ -63,6 +78,8 @@ export class ScanStorage {
     reviewStatus?: VideoContentReview,
     reviewResult?: OpenAIReviewResult,
     reviewError?: OpenAIAnalysisError,
+    coverageResult?: OpenAICoverageResult,
+    coverageError?: OpenAIAnalysisError,
   ): void {
     if (this.mode !== 'diagnostic') return
     this.openaiEntries.push({
@@ -79,6 +96,7 @@ export class ScanStorage {
         validationAdjustments,
         reviewedClassifiedEvents: reviewResult?.reviewedEvents,
         reviewDecisions: reviewResult?.decisions,
+        coverageRescuedEvents: coverageResult?.rescuedEvents,
       },
       usage: result.usage,
       review: reviewStatus
@@ -94,6 +112,24 @@ export class ScanStorage {
                   status: reviewError.status,
                   code: reviewError.code,
                   message: reviewError.message,
+                }
+              : undefined,
+          }
+        : undefined,
+      coverage: coverageResult || coverageError
+        ? {
+            requestMetadata: coverageResult?.requestMetadata,
+            provider: coverageResult?.provider ?? coverageError?.provider,
+            usage: coverageResult?.usage ?? coverageError?.usage,
+            outputText: coverageResult?.outputText ?? coverageError?.outputText,
+            rescuedCandidates: coverageResult?.rescuedCandidates,
+            rejectedCandidates: coverageResult?.rejectedCandidates,
+            error: coverageError
+              ? {
+                  type: coverageError.type,
+                  status: coverageError.status,
+                  code: coverageError.code,
+                  message: coverageError.message,
                 }
               : undefined,
           }
