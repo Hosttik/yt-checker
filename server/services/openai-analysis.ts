@@ -638,6 +638,15 @@ function materializeContextRanges(
   })
 }
 
+function reviewCorrectionOverlapsOriginalScene(
+  original: ClassifiedContentEvent,
+  corrected: ClassifiedContentEvent,
+): boolean {
+  const originalStart = original.sceneStartMs ?? original.startMs
+  const originalEnd = original.sceneEndMs ?? original.endMs
+  return corrected.startMs <= originalEnd && corrected.endMs >= originalStart
+}
+
 function preserveFirstPassEpistemicState(
   original: ClassifiedContentEvent,
   corrected: ClassifiedContentEvent,
@@ -1124,6 +1133,24 @@ export class OpenAIAnalysisProvider {
           const materialized = item.event
             ? materializeEvents([item.event], transcript, enabledCategories)[0]
             : undefined
+          if (materialized && !reviewCorrectionOverlapsOriginalScene(original, materialized)) {
+            materializationFailure = true
+            reviewedEvents.push({
+              ...original,
+              review: unreviewedReview(
+                'Contextual review moved the candidate to evidence outside the original first-pass scene; the first-pass event was retained.',
+              ),
+            })
+            decisions.push({
+              reviewItemId,
+              verdict: 'not_reviewed',
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              rationale: 'Review correction drifted outside the original scene; first-pass event retained.',
+            })
+            continue
+          }
           const corrected = preserveFirstPassEpistemicState(original, materialized ?? original)
           const review: ContentEventReview = {
             status: item.verdict === 'uncertain'
@@ -1149,7 +1176,7 @@ export class OpenAIAnalysisProvider {
           reviewedEvents.push({
             ...corrected,
             sourceCandidateId: original.sourceCandidateId,
-            sceneId: corrected.sceneId ?? original.sceneId,
+            sceneId: original.sceneId ?? corrected.sceneId,
             review,
           })
           decisions.push({
