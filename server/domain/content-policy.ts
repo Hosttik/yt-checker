@@ -332,11 +332,18 @@ function reviewedHighPriorityIsSupported(event: ClassifiedContentEvent): boolean
   }
 
   if (event.category === 'scary_and_disturbing') {
+    const fictional = event.context === 'game' || event.context === 'fiction'
+    const accidentalFictionalThreatOnly = fictional
+      && review.intent === 'accidental'
+      && review.aggressionDirection === 'none'
+      && review.consequence === 'threatened_harm'
+
     const immediatePeril = event.subtype === 'intense_peril'
       && event.details.threatPresent
       && event.details.fearIntensity === 'strong'
       && event.assertionStatus !== 'hypothetical'
       && event.assertionStatus !== 'negated'
+      && !accidentalFictionalThreatOnly
       && (hasSeriousConsequence
         || review.distress === 'strong'
         || review.duration === 'sustained')
