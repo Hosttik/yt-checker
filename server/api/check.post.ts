@@ -679,6 +679,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     failedVideos: analyzedReviewStatuses.filter((review) => review.status === 'failed').length,
     skippedVideos: analyzedReviewStatuses.filter((review) => review.status === 'skipped_after_failure').length,
     notNeededVideos: analyzedReviewStatuses.filter((review) => review.status === 'not_needed').length,
+    rescuedEvents: analyzedReviewStatuses.reduce((sum, review) => sum + (review.rescuedCount ?? 0), 0),
+    rescueRejectedEvents: analyzedReviewStatuses.reduce((sum, review) => sum + (review.rescueRejectedCount ?? 0), 0),
   }
 
   const channelReport = buildChannelCategoryReports(
