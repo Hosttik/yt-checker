@@ -421,6 +421,78 @@ describe('OpenAI contextual reviewer', () => {
     })
   })
 
+  it('retains a strongly supported scary confinement threat when reviewer suppresses it without benign contradiction', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Мы связаны и не можем двигаться, поезд уже едет сюда.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event: ClassifiedContentEvent = {
+      sourceCandidateId: 'candidate_scary_guard',
+      sceneId: 'scene_scary_guard',
+      category: 'scary_and_disturbing',
+      subtype: 'confinement',
+      severity: 'high',
+      context: 'game',
+      confidence: 0.96,
+      startMs: 10_000,
+      endMs: 11_000,
+      evidenceRanges: [{ startMs: 10_000, endMs: 11_000 }],
+      sceneStartMs: 10_000,
+      sceneEndMs: 11_000,
+      text: 'Мы связаны и не можем двигаться, поезд уже едет сюда.',
+      reason: 'Персонажи удерживаются на месте перед приближающейся опасностью.',
+      evidenceStrength: 'explicit',
+      evidenceSource: 'transcript',
+      engagementLevel: 'depiction',
+      portrayal: 'discouraged',
+      explicitness: 'mild',
+      assertionStatus: 'actual',
+      details: {
+        fearIntensity: 'strong',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: false,
+      },
+    }
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_scary_guard',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'rejected',
+          parentRelevance: 'minimal',
+          evidenceSufficiency: 'partial',
+          aggressionDirection: 'unclear',
+          intent: 'unclear',
+          consequence: 'unclear',
+          parentSummary: 'Reviewer не подтвердил сцену.',
+          rationale: 'Контекст интерпретирован неоднозначно.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['scary_and_disturbing'], [event])
+
+    expect(result.complete).toBe(false)
+    expect(result.rejectedCandidates).toBe(0)
+    expect(result.reviewedEvents).toHaveLength(1)
+    expect(result.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_scary_guard',
+      category: 'scary_and_disturbing',
+      subtype: 'confinement',
+      review: { status: 'not_reviewed' },
+    })
+  })
+
   it('preserves first-pass reported and mention provenance when review tries to upgrade the same candidate', async () => {
     const transcript = normalizeTranscript([
       { text: 'Админ сообщил, что к деревне идут тысячи зомби.', startMs: 10_000, endMs: 11_000 },
