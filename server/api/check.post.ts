@@ -323,14 +323,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
     let normalized: ReturnType<typeof normalizeTranscript> | undefined
     try {
-      normalized = normalizeTranscript(transcript.segments)
-      if (!normalized.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
+      const normalizedTranscript = normalizeTranscript(transcript.segments)
+      normalized = normalizedTranscript
+      if (!normalizedTranscript.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
       openaiUsage.requests += 1
       openaiStages.detection.requests += 1
       const resolvedLanguage = transcript.language ?? languagePriority
       const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
       const analysis = await openAIRequestLimiter.run(() => analyzer.analyze(
-        normalized,
+        normalizedTranscript,
         resolvedLanguage,
         enabledCategories,
         diagnosticAnalysis,
@@ -377,7 +378,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           openaiUsage.requests += 1
           openaiStages.review.requests += 1
           reviewResult = await openAIRequestLimiter.run(() => reviewer.review(
-            normalized,
+            normalizedTranscript,
             resolvedLanguage,
             enabledCategories,
             firstPassEvents,
@@ -461,7 +462,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           openaiUsage.requests += 1
           openaiStages.review.requests += 1
           coverageResult = await openAIRequestLimiter.run(() => reviewer.coverage(
-            normalized,
+            normalizedTranscript,
             resolvedLanguage,
             enabledCategories,
             reviewedEvents,
@@ -611,7 +612,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       storage.recordOpenAISuccess(
         video.id,
         analysis,
-        normalized.text,
+        normalizedTranscript.text,
         policyEvents,
         semanticValidation.rejected,
         semanticValidation.adjustments,
