@@ -23,7 +23,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.temporal-anchor-v2'
+const QUALITY_EVAL_VERSION = '2026-10-05.phase-diagnostics-v3'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -146,13 +146,16 @@ interface RunOutput {
   detectorLatencyMs: number
   onePassSceneCount: number
   sceneCount: number
+  firstPassPresence: Record<string, boolean>
+  onePassPriorities: Record<string, Priority>
+  onePassLevels: Record<string, ConcernLevel>
   priorities: Record<string, Priority>
   levels: Record<string, ConcernLevel>
   sceneSignatures: Record<string, string[]>
 }
 
 interface StabilityCheckpoint {
-  version: 2
+  version: 3
   key: string
   runOutputs: RunOutput[]
 }
@@ -269,17 +272,21 @@ function eventMatches(
   >,
   annotation: ManualCase,
 ): boolean {
+  if (!annotation.categories.includes(event.category)) return false
+
   if (annotation.anchorStartMs !== undefined && annotation.anchorEndMs !== undefined) {
-    if (!annotation.categories.includes(event.category)) return false
     const EVENT_MATCH_PADDING_MS = 5_000
     const startMs = event.sceneStartMs ?? event.startMs
     const endMs = event.sceneEndMs ?? event.endMs
-    return startMs <= annotation.anchorEndMs + EVENT_MATCH_PADDING_MS
+    const temporalMatch = startMs <= annotation.anchorEndMs + EVENT_MATCH_PADDING_MS
       && endMs >= annotation.anchorStartMs - EVENT_MATCH_PADDING_MS
+    if (temporalMatch) return true
   }
 
-  return annotation.categories.includes(event.category)
-    && anchorOverlap(annotation.anchor, `${event.text} ${event.reason}`) >= 0.6
+  // Saved baseline events can carry the provider's original timing while the
+  // replay transcript uses deterministic synthetic timing. Lexical rescue keeps
+  // baseline/reference matching usable without weakening the primary temporal path.
+  return anchorOverlap(annotation.anchor, `${event.text} ${event.reason}`) >= 0.6
 }
 
 function matchingPresentationScenes(events: ContentEvent[], annotation: ManualCase) {
@@ -614,6 +621,22 @@ function levels(
   ]))
 }
 
+function firstPassPresence(
+  annotations: ManualCase[],
+  eventsByVideo: Map<string, ClassifiedContentEvent[]>,
+): Record<string, boolean> {
+  return Object.fromEntries(annotations.map((annotation) => [
+    annotation.id,
+    (eventsByVideo.get(annotation.sourceVideo) ?? []).some((event) => eventMatches(event, annotation)),
+  ]))
+}
+
+const PRIORITY_RANK: Record<Priority, number> = {
+  hidden: 0,
+  details: 1,
+  main: 2,
+}
+
 describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', () => {
   it('compares saved baseline with two-pass contextual review without TranscriptAPI', async () => {
     const apiKey = process.env.OPENAI_API_KEY || process.env.NUXT_OPENAI_API_KEY
@@ -623,6 +646,12 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       ? process.env.QUALITY_SCAN_DIRS.split(',').map((item) => item.trim()).filter(Boolean)
       : DEFAULT_SCAN_DIRS)
     const maxVideos = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_VIDEOS ?? 20)))
+    const requestedVideoIds = new Set(
+      (process.env.QUALITY_VIDEO_IDS ?? '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
     const runs = Math.max(1, Math.min(5, Number(process.env.QUALITY_RUNS ?? 1)))
     const concurrency = Math.max(1, Math.min(5, Number(process.env.QUALITY_CONCURRENCY ?? 1)))
     const rateLimitRetries = Math.max(0, Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? 5)))
@@ -646,7 +675,16 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       const key = `${record.videoId}:${record.transcriptHash}`
       if (!unique.has(key)) unique.set(key, record)
     }
-    const selected = [...unique.values()].slice(0, maxVideos)
+    const selected = [...unique.values()]
+      .filter((record) => requestedVideoIds.size === 0 || requestedVideoIds.has(record.videoId))
+      .slice(0, maxVideos)
+    if (selected.length === 0) {
+      throw new Error(
+        requestedVideoIds.size > 0
+          ? `None of QUALITY_VIDEO_IDS were found in the selected saved scans: ${[...requestedVideoIds].join(', ')}`
+          : 'No saved transcripts were selected for quality evaluation.',
+      )
+    }
     const selectedKeys = new Set(selected.map((record) => `${record.videoId}:${record.transcriptHash}`))
     const selectedRecords = allRecords.filter((record) =>
       selectedKeys.has(`${record.videoId}:${record.transcriptHash}`),
@@ -706,7 +744,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 2 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 3 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -791,6 +829,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         detectorLatencyMs: outputs.reduce((sum, item) => sum + item.detectorLatencyMs, 0),
         onePassSceneCount: outputs.reduce((sum, item) => sum + item.onePassSceneCount, 0),
         sceneCount: outputs.reduce((sum, item) => sum + item.sceneCount, 0),
+        firstPassPresence: firstPassPresence(applicableAnnotations, firstPassByVideo),
+        onePassPriorities: priorities(applicableAnnotations, onePassByVideo),
+        onePassLevels: levels(applicableAnnotations, onePassByVideo),
         priorities: priorities(applicableAnnotations, currentByVideo),
         levels: levels(applicableAnnotations, currentByVideo),
         sceneSignatures: displayedSceneSignatures(currentByVideo),
@@ -798,7 +839,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 2,
+          version: 3,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -867,6 +908,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         scanDirs,
         selectedUniqueFullTranscripts: selected.length,
         selectedRecords: selectedRecords.length,
+        selectedVideoIds: selected.map((record) => record.videoId),
         runs,
         concurrency,
         rateLimitRetries,
@@ -921,17 +963,47 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         levelStability,
         displayedCardStability,
         anchorStability: Object.fromEntries(applicableAnnotations.map((annotation) => {
+          const onePassPriorityCounts: Record<Priority, number> = { hidden: 0, details: 0, main: 0 }
+          const onePassLevelCounts: Record<ConcernLevel, number> = { hidden: 0, low: 0, moderate: 0, high: 0 }
           const priorityCounts: Record<Priority, number> = { hidden: 0, details: 0, main: 0 }
           const levelCounts: Record<ConcernLevel, number> = { hidden: 0, low: 0, moderate: 0, high: 0 }
-          for (const output of runOutputs) {
-            priorityCounts[output.priorities[annotation.id]!] += 1
-            levelCounts[output.levels[annotation.id]!] += 1
-          }
+          let firstPassDetected = 0
+          let reviewDowngrades = 0
+          let reviewUpgrades = 0
+          const phaseRuns = runOutputs.map((output, index) => {
+            const detected = output.firstPassPresence[annotation.id] ?? false
+            const onePassPriority = output.onePassPriorities[annotation.id] ?? 'hidden'
+            const onePassLevel = output.onePassLevels[annotation.id] ?? 'hidden'
+            const finalPriority = output.priorities[annotation.id] ?? 'hidden'
+            const finalLevel = output.levels[annotation.id] ?? 'hidden'
+            if (detected) firstPassDetected += 1
+            onePassPriorityCounts[onePassPriority] += 1
+            onePassLevelCounts[onePassLevel] += 1
+            priorityCounts[finalPriority] += 1
+            levelCounts[finalLevel] += 1
+            if (PRIORITY_RANK[finalPriority] < PRIORITY_RANK[onePassPriority]) reviewDowngrades += 1
+            if (PRIORITY_RANK[finalPriority] > PRIORITY_RANK[onePassPriority]) reviewUpgrades += 1
+            return {
+              run: index + 1,
+              firstPassDetected: detected,
+              onePassPriority,
+              onePassLevel,
+              finalPriority,
+              finalLevel,
+            }
+          })
           return [annotation.id, {
             expectedPriority: annotation.priority,
             expectedLevel: annotation.expectedLevel ?? null,
+            firstPassDetected,
+            firstPassMissed: runs - firstPassDetected,
+            onePassPriorityCounts,
+            onePassLevelCounts,
             priorityCounts,
             levelCounts,
+            reviewDowngrades,
+            reviewUpgrades,
+            phaseRuns,
           }]
         })),
         averageRequests: average(runOutputs.map((item) => item.requests)),
@@ -946,6 +1018,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         lowValueCards: 'Annotated hidden cases shown at all, plus annotated details cases promoted to main.',
         unsupportedClaims: 'Machine-checkable forbidden category/subtype interpretations from the annotated set.',
         firstPassSubstantialMisses: 'Annotated main scenes not detected by the full-transcript first pass before review.',
+        phaseDiagnostics: 'Per-anchor detector presence, one-pass policy placement, final reviewed placement, and reviewer downgrade/upgrade counts across runs.',
         stability: 'Share of annotated anchors whose final priority is unchanged across repeated full-transcript runs.',
         displayedCardStability: 'Average Jaccard similarity of all displayed scene signatures across repeated runs.',
       },
