@@ -253,6 +253,72 @@ describe('parent relevance calibration', () => {
     expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
   })
 
+  it('keeps a reported future zombie threat in details even when characters discuss hiding', () => {
+    const event = applyContentPolicy(scary('intense_peril', {
+      severity: 'medium',
+      context: 'game',
+      assertionStatus: 'actual',
+      engagementLevel: 'depiction',
+      text: 'Нам сообщили, что к деревне идут 11 000 зомби. Мы не справимся, нужно прятаться в бункере.',
+      reason: 'Персонажи обсуждают сообщённую будущую угрозу и планируют укрыться.',
+      details: {
+        fearIntensity: 'moderate',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: true,
+      },
+      review: review({
+        recommendedParentRelevance: 'moderate',
+        aggressionDirection: 'unclear',
+        intent: 'unclear',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'unclear',
+        repetition: 'single',
+        highPriorityReason: undefined,
+        parentSummary: 'Жители считают, что не справятся с 11 000 зомби, и обсуждают укрытие в бункерах.',
+        mitigatingContext: 'Это игровая история; непосредственная атака в этом фрагменте не происходит.',
+      }),
+    }), 'reported-zombie-plan', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
+  })
+
+  it('keeps sustained accidental fictional peril on main but caps it below high', () => {
+    const event = applyContentPolicy(scary('intense_peril', {
+      severity: 'high',
+      context: 'game',
+      assertionStatus: 'actual',
+      engagementLevel: 'depiction',
+      text: 'Меня всё быстрее затягивает в чёрную дыру, даже за колодец не удержаться.',
+      reason: 'Игровая чёрная дыра продолжает затягивать персонажа.',
+      details: {
+        fearIntensity: 'strong',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: true,
+      },
+      review: review({
+        recommendedParentRelevance: 'high',
+        aggressionDirection: 'none',
+        intent: 'accidental',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'sustained',
+        repetition: 'repeated',
+        parentSummary: 'Чёрная дыра разрастается и затягивает рассказчика, который не может удержаться даже за колодец.',
+        mitigatingContext: 'Это происходит в Minecraft.',
+        highPriorityReason: 'Рассказчика всё быстрее тянет к разрастающейся чёрной дыре.',
+      }),
+    }), 'black-hole-peril', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+    const scene = buildPresentationScenes([event])[0]!
+    expect(scene.level).toBe('moderate')
+    expect(scene.attention).toBe('main')
+  })
+
   it('keeps sustained coercive confinement high', () => {
     const event = applyContentPolicy(scary('confinement', {
       severity: 'medium',
