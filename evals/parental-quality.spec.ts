@@ -807,6 +807,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const rateLimitRetries = Math.max(0, Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? 5)))
     const retryBaseDelayMs = Math.max(1_000, Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 10_000)))
     const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
+    const requestTimeoutMs = Math.max(60_000, Math.min(600_000, Number(process.env.QUALITY_OPENAI_TIMEOUT_MS ?? 60_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
     const reviewModel = process.env.OPENAI_REVIEW_MODEL ?? model
     const reasoningEffortRaw = process.env.QUALITY_REASONING_EFFORT ?? 'low'
@@ -891,6 +892,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         model,
         reviewModel,
         reasoningEffort,
+        requestTimeoutMs,
         profile,
       }))
       .digest('hex')
@@ -909,7 +911,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     }
 
     console.log(
-      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
     )
     if (runOutputs.length > 0) {
       console.log(`[quality] resumed from checkpoint: ${runOutputs.length}/${runs} completed run(s)`)
@@ -922,6 +924,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         undefined,
         undefined,
         reasoningEffort,
+        requestTimeoutMs,
       )
       const reviewer = new OpenAIAnalysisProvider(
         apiKey,
@@ -929,6 +932,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         undefined,
         undefined,
         reasoningEffort,
+        requestTimeoutMs,
       )
       const newByKey = new Map<string, NewVideoResult>()
       let completedVideos = 0
@@ -1097,6 +1101,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         rateLimitRetries,
         retryBaseDelayMs,
         runCooldownMs,
+        requestTimeoutMs,
         annotations: applicableAnnotations.length,
         provisionalAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'provisional').length,
         humanConfirmedAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'human_confirmed').length,

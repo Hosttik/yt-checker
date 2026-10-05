@@ -16,7 +16,7 @@
     "eval:classifier": "RUN_CLASSIFIER_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/classifier.spec.ts",
     "eval:parental-quality": "RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
     "eval:parental-quality:stability": "QUALITY_RUNS=5 QUALITY_CONCURRENCY=1 QUALITY_RATE_LIMIT_RETRIES=5 QUALITY_RETRY_BASE_MS=10000 QUALITY_RUN_COOLDOWN_MS=10000 RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
-    "eval:parental-quality:stability:high": "QUALITY_REASONING_EFFORT=high npm run eval:parental-quality:stability"
+    "eval:parental-quality:stability:high": "QUALITY_REASONING_EFFORT=high QUALITY_OPENAI_TIMEOUT_MS=180000 npm run eval:parental-quality:stability"
   },
   "dependencies": {
     "nuxt": "^4.0.0",
