@@ -15,6 +15,8 @@ import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
 import type { NormalizedTranscript } from '../server/domain/normalize-transcript'
 import {
+  OPENAI_COVERAGE_PROMPT_VERSION,
+  OPENAI_COVERAGE_SCHEMA_VERSION,
   OPENAI_PROMPT_VERSION,
   OPENAI_REVIEW_PROMPT_VERSION,
   OPENAI_REVIEW_SCHEMA_VERSION,
@@ -24,7 +26,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.coverage-rescue-v12'
+const QUALITY_EVAL_VERSION = '2026-10-05.dedicated-coverage-v13'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -167,7 +169,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 12
+  version: 13
   key: string
   runOutputs: RunOutput[]
 }
@@ -596,13 +598,25 @@ async function runCurrent(
     const review = reviewAttempt.value
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
-    rescuedEvents = review.rescuedEvents
-    rescuedCandidates = review.rescuedCandidates
-    rescueRejectedCandidates = review.rescueRejectedCandidates
     requests += review.requestCount + reviewAttempt.retries
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
   }
+
+  const coverageAttempt = await withRateLimitRetry(
+    `${record.videoId}:coverage`,
+    () => reviewer.coverage(record.transcript, 'ru', ALL_CATEGORIES, reviewed),
+    rateLimitRetries,
+    retryBaseDelayMs,
+  )
+  const coverage = coverageAttempt.value
+  rescuedEvents = coverage.rescuedEvents
+  rescuedCandidates = coverage.rescuedCandidates
+  rescueRejectedCandidates = coverage.rejectedCandidates
+  reviewed = [...reviewed, ...coverage.rescuedEvents]
+  requests += coverage.requestCount + coverageAttempt.retries
+  tokens += coverage.usage.totalTokens
+  latencyMs += coverage.provider.latencyMs
 
   const validation = validateClassifiedEvents(reviewed)
   const events = normalizeClassifiedEvents(validation.accepted)
@@ -879,7 +893,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 12 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 13 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -988,7 +1002,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 12,
+          version: 13,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1094,6 +1108,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         detectorSchema: OPENAI_SCHEMA_VERSION,
         reviewerPrompt: OPENAI_REVIEW_PROMPT_VERSION,
         reviewerSchema: OPENAI_REVIEW_SCHEMA_VERSION,
+        coveragePrompt: OPENAI_COVERAGE_PROMPT_VERSION,
+        coverageSchema: OPENAI_COVERAGE_SCHEMA_VERSION,
       },
       baselineByScan,
       baselineCombined,
