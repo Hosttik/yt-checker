@@ -106,4 +106,18 @@ describe('legacy compatibility projection', () => {
       affectedVideoCount: 1,
     }])
   })
+  it('excludes hidden canonical events from legacy violations and detections', () => {
+    const hidden = {
+      ...insult,
+      id: 'event-hidden',
+      sourceCandidateId: 'candidate-hidden',
+      displayLevel: 'hidden' as const,
+      parentRelevance: 'minimal' as const,
+    }
+
+    const violations = buildLegacyViolations([insult, hidden], ['insults'])
+    expect(violations).toHaveLength(1)
+    expect(buildDetections(violations, ['insults'])[0]?.count).toBe(1)
+  })
+
 })
