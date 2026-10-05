@@ -17,9 +17,9 @@ TranscriptAPI
   → scene aggregation (main / details)
   → channel aggregation
   → presentation
-
-Up to 10 videos from one channel scan are processed concurrently. Provider calls are additionally protected by process-wide semaphores, so simultaneous scans share a fixed OpenAI/TranscriptAPI concurrency budget instead of multiplying it per user.
 ```
+
+До 10 видео одного scan обрабатываются параллельно. Вызовы провайдеров дополнительно ограничены общими semaphore внутри Node-процесса, поэтому одновременные scan делят фиксированный лимит OpenAI/TranscriptAPI, а не умножают параллельность на число пользователей.
 
 Detector выполняет один full-transcript request. Второй request выполняется только если detector нашёл кандидаты; reviewer проверяет их одним батчем, а не отдельным запросом на каждую находку. Дополнительный coverage-pass отключён для обычного production-профиля и запускается только в diagnostic. При сбое reviewer первый проход сохраняется как неперепроверенный и UI явно показывает неполный review. После первой review-ошибки оставшиеся review-запросы в текущем scan отключаются. OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
 
