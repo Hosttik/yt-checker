@@ -41,6 +41,7 @@ export function buildLegacyViolations(
   requestedRuleIds: RuleId[],
 ): ViolationEvidence[] {
   return events
+    .filter((event) => event.displayLevel !== 'hidden')
     .filter((event) => requestedRuleIds.some((ruleId) => ruleMatchesEvent(ruleId, event)))
     .map((event) => ({
       category: preferredLegacyCategory(event, requestedRuleIds),
