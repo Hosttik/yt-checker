@@ -136,6 +136,7 @@ const openAIRequestLimiter = new Semaphore(positiveIntegerEnv('OPENAI_GLOBAL_CON
 const transcriptRequestLimiter = new Semaphore(positiveIntegerEnv('TRANSCRIPT_GLOBAL_CONCURRENCY', 10))
 
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
+  const scanStartedAt = Date.now()
   const parsed = checkRequestSchema.safeParse(await readBody(event))
   if (!parsed.success) {
     throw createError({
@@ -229,7 +230,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     desiredEligible = Number.POSITIVE_INFINITY,
   ): Promise<void> {
     const pending = videos.filter((video) => !inspectedIds.has(video.id))
-    const concurrency = 4
+    const concurrency = Math.min(scanVideoConcurrency, 10)
 
     for (let offset = 0; offset < pending.length && eligibleVideos.length < desiredEligible; offset += concurrency) {
       const batch = pending.slice(offset, offset + concurrency)
@@ -733,6 +734,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     await mapWithConcurrency(batch, batch.length, processVideo)
   }
 
+  const videoOrder = new Map(eligibleVideos.map((video, index) => [video.id, index]))
+  videoResults.sort((left, right) => (videoOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+    - (videoOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER))
+
   const analyzedVideos = videoResults.filter((video) => video.status === 'analyzed').length
   const contentEvents = videoResults.flatMap((video) => contentEventsByVideo.get(video.id) ?? [])
   const videoReports = videoResults
@@ -895,6 +900,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     failedVideos: result.failedVideos,
     openaiRequests: openaiUsage.requests,
     openaiTotalTokens: openaiUsage.totalTokens,
+    durationMs: Date.now() - scanStartedAt,
   })
   return result
 })
