@@ -23,7 +23,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.phase-diagnostics-v4'
+const QUALITY_EVAL_VERSION = '2026-10-05.phase-diagnostics-v5'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -148,6 +148,7 @@ interface RunOutput {
   sceneCount: number
   firstPassPresence: Record<string, boolean>
   firstPassSignatures: Record<string, string[]>
+  finalSignatures: Record<string, string[]>
   onePassPriorities: Record<string, Priority>
   onePassLevels: Record<string, ConcernLevel>
   priorities: Record<string, Priority>
@@ -156,7 +157,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 4
+  version: 5
   key: string
   runOutputs: RunOutput[]
 }
@@ -650,6 +651,24 @@ function firstPassSignatures(
   ]))
 }
 
+function finalSignatures(
+  annotations: ManualCase[],
+  eventsByVideo: Map<string, ContentEvent[]>,
+): Record<string, string[]> {
+  return Object.fromEntries(annotations.map((annotation) => [
+    annotation.id,
+    (eventsByVideo.get(annotation.sourceVideo) ?? [])
+      .filter((event) => eventMatches(event, annotation))
+      .map((event) => [
+        event.category,
+        event.subtype,
+        event.parentRelevance,
+        event.displayLevel,
+        event.review?.status ?? 'no_review',
+      ].join(':')),
+  ]))
+}
+
 const PRIORITY_RANK: Record<Priority, number> = {
   hidden: 0,
   details: 1,
@@ -763,7 +782,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 4 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 5 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -850,6 +869,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         sceneCount: outputs.reduce((sum, item) => sum + item.sceneCount, 0),
         firstPassPresence: firstPassPresence(applicableAnnotations, firstPassByVideo),
         firstPassSignatures: firstPassSignatures(applicableAnnotations, firstPassByVideo),
+        finalSignatures: finalSignatures(applicableAnnotations, currentByVideo),
         onePassPriorities: priorities(applicableAnnotations, onePassByVideo),
         onePassLevels: levels(applicableAnnotations, onePassByVideo),
         priorities: priorities(applicableAnnotations, currentByVideo),
@@ -859,7 +879,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 4,
+          version: 5,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1007,6 +1027,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
               run: index + 1,
               firstPassDetected: detected,
               firstPassSignatures: output.firstPassSignatures[annotation.id] ?? [],
+              finalSignatures: output.finalSignatures[annotation.id] ?? [],
               onePassPriority,
               onePassLevel,
               finalPriority,
