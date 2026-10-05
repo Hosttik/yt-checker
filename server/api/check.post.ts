@@ -623,6 +623,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         contentReview,
         reviewResult,
         reviewError,
+        coverageResult,
+        coverageError,
       )
       const videoUsage = combinedUsage(
         analysis.usage,
