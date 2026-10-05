@@ -17,8 +17,8 @@ import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
 export const OPENAI_PROMPT_VERSION = '2026-10-05.content-events-v7'
 export const OPENAI_SCHEMA_VERSION = '9'
-export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-04.parent-scene-review-v3'
-export const OPENAI_REVIEW_SCHEMA_VERSION = '2'
+export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-05.parent-scene-review-v4'
+export const OPENAI_REVIEW_SCHEMA_VERSION = '3'
 
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
@@ -241,8 +241,29 @@ const reviewItemSchema = z.object({
   rationale: z.string().min(1).max(500),
 })
 
+const missedHighPriorityEventSchema = z.object({
+  event: OPENAI_MODEL_EVENT_SCHEMA,
+  parentRelevance: z.literal('high'),
+  evidenceSufficiency: z.literal('sufficient'),
+  contextSegments: z.array(z.number().int().nonnegative()).max(8),
+  actor: z.string().min(1).max(100).nullable(),
+  target: z.string().min(1).max(100).nullable(),
+  aggressionDirection: z.enum(['none', 'actor_to_target', 'mutual', 'self_directed', 'unclear']),
+  intent: z.enum(['benign', 'rescue', 'protective', 'utility', 'accidental', 'aggressive', 'coercive', 'unclear']),
+  distress: z.enum(['none', 'mild', 'clear', 'strong', 'unclear']),
+  consequence: z.enum(['none', 'property_only', 'threatened_harm', 'injury_or_severe_harm', 'death', 'unclear']),
+  duration: z.enum(['momentary', 'brief', 'sustained', 'unclear']),
+  repetition: z.enum(['single', 'repeated', 'pattern', 'unclear']),
+  narrativeFraming: z.enum(['discouraged', 'neutral', 'humorous', 'endorsed', 'unclear']),
+  parentSummary: z.string().min(1).max(320),
+  mitigatingContext: z.string().min(1).max(280).nullable(),
+  highPriorityReason: z.string().min(1).max(280),
+  rationale: z.string().min(1).max(500),
+})
+
 export const OPENAI_REVIEW_SCHEMA = z.object({
   reviews: z.array(reviewItemSchema).max(120),
+  missedHighPriorityEvents: z.array(missedHighPriorityEventSchema).max(8),
 })
 
 export const OPENAI_SYSTEM_PROMPT = `You analyze spoken YouTube transcript content for a parental content checker.
@@ -369,6 +390,14 @@ Threats, coercion and bullying should remain parent-visible when supported. A we
 
 Do not convert frequency into severity. Do not convert confidence into relevance. Do not treat game/fiction context as automatic dismissal.
 For uncertain findings, prefer a restrained description and low/details relevance unless the direct evidence itself supports a serious threat that should not disappear because review is incomplete.
+
+Coverage rescue:
+- After reviewing every supplied hypothesis, scan the full transcript once for OBVIOUS HIGH-priority parent-relevant events in enabled categories that the first pass missed entirely.
+- Put those only in missedHighPriorityEvents. This is a recall safety net, not a second general detector.
+- A rescue event must have sufficient direct transcript evidence and must independently justify high relevance. Do not rescue moderate/low/minimal material, routine game combat, ordinary pursuit/fright, mild insults, non-targeted weapon presence, property-only destruction, or merely hypothetical/reported danger.
+- Do not duplicate, restate, or re-label a supplied hypothesis or the same underlying scene. If a supplied hypothesis covers the signal, handle it only through its review item.
+- Prefer an empty array over speculative rescue events. Return at most 8.
+- On a targeted retry for omitted reviewItemIds, missedHighPriorityEvents must be an empty array.
 `
 
 export interface OpenAIReviewDecision {
@@ -425,6 +454,8 @@ export interface OpenAIReviewResult {
   retryCount: number
   missingBeforeRetry: number
   missingAfterRetry: number
+  rescuedCandidates: number
+  rescueRejectedCandidates: number
   outputText?: string
   usage: OpenAIUsage
   provider: OpenAIProviderMetadata
@@ -665,6 +696,57 @@ function materializeContextRanges(
     const last = transcript.segments[cluster.at(-1)!]!
     return { startMs: first.startMs, endMs: last.endMs }
   })
+}
+
+function eventDirectRanges(
+  event: ClassifiedContentEvent,
+): Array<{ startMs: number; endMs: number }> {
+  return event.evidenceRanges?.length
+    ? event.evidenceRanges
+    : [{ startMs: event.startMs, endMs: event.endMs }]
+}
+
+function directEvidenceOverlaps(
+  left: ClassifiedContentEvent,
+  right: ClassifiedContentEvent,
+  paddingMs = 2_000,
+): boolean {
+  return eventDirectRanges(left).some((a) =>
+    eventDirectRanges(right).some((b) =>
+      a.startMs <= b.endMs + paddingMs && a.endMs >= b.startMs - paddingMs,
+    ),
+  )
+}
+
+function rescueDuplicatesKnownCandidate(
+  rescue: ClassifiedContentEvent,
+  originals: ClassifiedContentEvent[],
+): boolean {
+  return originals.some((original) =>
+    original.category === rescue.category && directEvidenceOverlaps(original, rescue),
+  )
+}
+
+function coverageReview(item: z.infer<typeof missedHighPriorityEventSchema>, transcript: NormalizedTranscript): ContentEventReview {
+  return {
+    status: 'confirmed',
+    recommendedParentRelevance: 'high',
+    evidenceSufficiency: 'sufficient',
+    contextRanges: materializeContextRanges(item.contextSegments, transcript),
+    actor: item.actor ?? undefined,
+    target: item.target ?? undefined,
+    aggressionDirection: item.aggressionDirection,
+    intent: item.intent,
+    distress: item.distress,
+    consequence: item.consequence,
+    duration: item.duration,
+    repetition: item.repetition,
+    narrativeFraming: item.narrativeFraming,
+    parentSummary: item.parentSummary,
+    mitigatingContext: item.mitigatingContext ?? undefined,
+    highPriorityReason: item.highPriorityReason,
+    rationale: item.rationale,
+  }
 }
 
 function reviewCorrectionOverlapsOriginalScene(
@@ -990,6 +1072,8 @@ export class OpenAIAnalysisProvider {
         retryCount: 0,
         missingBeforeRetry: 0,
         missingAfterRetry: 0,
+        rescuedCandidates: 0,
+        rescueRejectedCandidates: 0,
         usage: {
           inputTokens: 0,
           outputTokens: 0,
@@ -1027,7 +1111,7 @@ export class OpenAIAnalysisProvider {
     ) => {
       requestCount += 1
       const retryInstruction = retry
-        ? '\nThis is a retry ONLY for reviewItemIds omitted from the previous response. Return exactly these listed ids and no others.'
+        ? '\nThis is a retry ONLY for reviewItemIds omitted from the previous response. Return exactly these listed ids and no others. missedHighPriorityEvents MUST be an empty array.'
         : ''
       const dynamicInput = `Transcript language: ${language || 'unknown'}\nEnabled categories: ${enabledCategories.join(', ')}${retryInstruction}\n\nFirst-pass hypotheses (untrusted):\n${JSON.stringify(batchItems)}\n\nOriginal transcript:\n${transcript.text}`
       const response = await this.client.responses.parse({
@@ -1240,6 +1324,28 @@ export class OpenAIAnalysisProvider {
         }
       }
 
+      let rescuedCandidates = 0
+      let rescueRejectedCandidates = 0
+      const rescueItems = firstResponse.parsed.missedHighPriorityEvents ?? []
+      for (const item of rescueItems) {
+        try {
+          const rescued = materializeEvents([item.event], transcript, enabledCategories)[0]
+          if (!rescued
+            || rescueDuplicatesKnownCandidate(rescued, events)
+            || rescueDuplicatesKnownCandidate(rescued, reviewedEvents)) {
+            rescueRejectedCandidates += 1
+            continue
+          }
+          reviewedEvents.push({
+            ...rescued,
+            review: coverageReview(item, transcript),
+          })
+          rescuedCandidates += 1
+        } catch {
+          rescueRejectedCandidates += 1
+        }
+      }
+
       const reviewedCandidates = decisions.filter((item) => item.verdict !== 'not_reviewed').length
       const rejectedCandidates = decisions.filter((item) => item.verdict === 'rejected').length
       const uncertainCandidates = decisions.filter((item) => item.verdict === 'uncertain').length
@@ -1264,6 +1370,8 @@ export class OpenAIAnalysisProvider {
         retryCount: Math.max(0, requestCount - 1),
         missingBeforeRetry: missingItems.length,
         missingAfterRetry: items.filter((item) => !byId.has(item.reviewItemId)).length,
+        rescuedCandidates,
+        rescueRejectedCandidates,
         outputText: outputParts.length > 0
           ? outputParts.join('\n--- targeted review retry ---\n')
           : undefined,
