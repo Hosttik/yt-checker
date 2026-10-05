@@ -70,6 +70,8 @@ export interface VideoContentReview {
   reviewedCount: number
   rejectedCount: number
   uncertainCount: number
+  rescuedCount?: number
+  rescueRejectedCount?: number
   reviewRequestCount?: number
   retryCount?: number
   missingBeforeRetry?: number
@@ -95,6 +97,8 @@ export interface ContentReviewSummary {
   failedVideos: number
   skippedVideos: number
   notNeededVideos: number
+  rescuedEvents: number
+  rescueRejectedEvents: number
 }
 
 export interface TimelineRange { startMs: number; endMs: number }
