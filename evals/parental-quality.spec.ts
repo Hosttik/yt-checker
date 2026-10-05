@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AggregateOpenAIUsage } from '../shared/types/check'
@@ -10,6 +10,10 @@ import type {
   ContentEvent,
 } from '../shared/types/content'
 import { applyContentPolicy } from '../server/domain/content-policy'
+import {
+  estimateOpenAICostUsd,
+  GPT6_LUNA_STANDARD_PRICING,
+} from '../server/domain/openai-cost'
 import { normalizeClassifiedEvents } from '../server/domain/content-normalization'
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
@@ -27,7 +31,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.reasoning-comparison-v14'
+const QUALITY_EVAL_VERSION = '2026-10-05.cross-channel-cost-v15'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -95,6 +99,15 @@ interface DiagnosticEntry {
 }
 
 interface ScanResult {
+  channel?: { id: string; title: string }
+  analyzedVideos?: number
+  failedVideos?: number
+  creditUsage?: {
+    transcriptCredits: number
+    channelVideosCredits: number
+    totalCredits: number
+    freeRequests: number
+  }
   openaiUsage?: AggregateOpenAIUsage
 }
 
@@ -109,6 +122,7 @@ interface ScanRecord {
 }
 
 interface NewVideoResult {
+  scanName: string
   videoId: string
   transcriptHash: string
   firstPassEvents: ClassifiedContentEvent[]
@@ -125,6 +139,8 @@ interface NewVideoResult {
   requests: number
   tokens: number
   latencyMs: number
+  wallClockMs: number
+  usage: AggregateOpenAIUsage
 }
 
 interface MetricSet {
@@ -140,6 +156,22 @@ interface MetricSet {
   mainCases: number
   detailCases: number
   hiddenCases: number
+}
+
+interface VideoRunStat {
+  scanName: string
+  videoId: string
+  requests: number
+  usage: AggregateOpenAIUsage
+  openaiCostUsd: number
+  providerLatencyMs: number
+  wallClockMs: number
+  onePassSceneCount: number
+  sceneCount: number
+  mainSceneCount: number
+  detailSceneCount: number
+  rescuedCandidates: number
+  rescueRejectedCandidates: number
 }
 
 interface RunOutput {
@@ -167,10 +199,14 @@ interface RunOutput {
   priorities: Record<string, Priority>
   levels: Record<string, ConcernLevel>
   sceneSignatures: Record<string, string[]>
+  usage: AggregateOpenAIUsage
+  openaiCostUsd: number
+  wallClockMs: number
+  videoStats: VideoRunStat[]
 }
 
 interface StabilityCheckpoint {
-  version: 14
+  version: 15
   key: string
   runOutputs: RunOutput[]
 }
@@ -204,6 +240,45 @@ function zeroUsage(): AggregateOpenAIUsage {
     cacheWriteTokens: 0,
     totalTokens: 0,
   }
+}
+
+function addUsage(total: AggregateOpenAIUsage, usage: Partial<AggregateOpenAIUsage> | undefined): void {
+  if (!usage) return
+  total.requests += usage.requests ?? 0
+  total.inputTokens += usage.inputTokens ?? 0
+  total.outputTokens += usage.outputTokens ?? 0
+  total.reasoningTokens += usage.reasoningTokens ?? 0
+  total.cachedTokens += usage.cachedTokens ?? 0
+  total.cacheWriteTokens += usage.cacheWriteTokens ?? 0
+  total.totalTokens += usage.totalTokens ?? 0
+}
+
+function aggregateUsages(usages: Array<AggregateOpenAIUsage | undefined>): AggregateOpenAIUsage {
+  const total = zeroUsage()
+  for (const usage of usages) addUsage(total, usage)
+  return total
+}
+
+async function discoverSavedScanDirs(root = 'scan-results'): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true })
+  const candidates = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => resolve(root, entry.name))
+    .sort((a, b) => basename(b).localeCompare(basename(a)))
+
+  const valid: string[] = []
+  for (const dir of candidates) {
+    try {
+      await Promise.all([
+        access(resolve(dir, 'result.json')),
+        access(resolve(dir, 'openai-analysis.json')),
+      ])
+      valid.push(dir)
+    } catch {
+      // Ignore incomplete/non-diagnostic scan folders.
+    }
+  }
+  return valid
 }
 
 function parseTranscript(text: string): NormalizedTranscript {
@@ -503,7 +578,7 @@ function firstPassMisses(
   ).length
 }
 
-async function loadScan(scanDir: string): Promise<{ records: ScanRecord[]; result: ScanResult }> {
+async function loadScan(scanDir: string): Promise<{ scanDir: string; records: ScanRecord[]; result: ScanResult }> {
   const [diagnosticRaw, resultRaw] = await Promise.all([
     readFile(resolve(scanDir, 'openai-analysis.json'), 'utf8'),
     readFile(resolve(scanDir, 'result.json'), 'utf8'),
@@ -524,7 +599,7 @@ async function loadScan(scanDir: string): Promise<{ records: ScanRecord[]; resul
         baselineLatencyMs: entry.provider?.latencyMs ?? 0,
       }
     })
-  return { records, result }
+  return { scanDir, records, result }
 }
 
 function isRateLimitError(error: unknown): boolean {
@@ -566,6 +641,8 @@ async function runCurrent(
   rateLimitRetries: number,
   retryBaseDelayMs: number,
 ): Promise<NewVideoResult> {
+  const wallStarted = performance.now()
+  const usage = zeroUsage()
   const detectionAttempt = await withRateLimitRetry(
     `${record.videoId}:detector`,
     () => detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false),
@@ -573,6 +650,7 @@ async function runCurrent(
     retryBaseDelayMs,
   )
   const detection = detectionAttempt.value
+  addUsage(usage, { ...detection.usage, requests: 1 })
   const onePassValidation = validateClassifiedEvents(detection.classifiedEvents)
   const onePassEvents = normalizeClassifiedEvents(onePassValidation.accepted)
     .map((event, index) => applyContentPolicy(
@@ -597,6 +675,7 @@ async function runCurrent(
       retryBaseDelayMs,
     )
     const review = reviewAttempt.value
+    addUsage(usage, { ...review.usage, requests: review.requestCount })
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
     requests += review.requestCount + reviewAttempt.retries
@@ -611,6 +690,7 @@ async function runCurrent(
     retryBaseDelayMs,
   )
   const coverage = coverageAttempt.value
+  addUsage(usage, { ...coverage.usage, requests: coverage.requestCount })
   rescuedEvents = coverage.rescuedEvents
   rescuedCandidates = coverage.rescuedCandidates
   rescueRejectedCandidates = coverage.rejectedCandidates
@@ -626,7 +706,9 @@ async function runCurrent(
       `${record.videoId}:eval:${index}:${event.category}:${event.subtype}`,
       profile,
     ))
+  usage.requests = requests
   return {
+    scanName: record.scanName,
     videoId: record.videoId,
     transcriptHash: record.transcriptHash,
     firstPassEvents: detection.classifiedEvents,
@@ -643,6 +725,8 @@ async function runCurrent(
     requests,
     tokens,
     latencyMs,
+    wallClockMs: performance.now() - wallStarted,
+    usage,
   }
 }
 
@@ -792,10 +876,17 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const apiKey = process.env.OPENAI_API_KEY || process.env.NUXT_OPENAI_API_KEY
     if (!apiKey) throw new Error('OPENAI_API_KEY is required for paid quality evaluation.')
 
-    const scanDirs = (process.env.QUALITY_SCAN_DIRS
+    let scanDirs = process.env.QUALITY_SCAN_DIRS
       ? process.env.QUALITY_SCAN_DIRS.split(',').map((item) => item.trim()).filter(Boolean)
-      : DEFAULT_SCAN_DIRS)
-    const maxVideos = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_VIDEOS ?? 20)))
+      : DEFAULT_SCAN_DIRS
+    const discoverScans = process.env.QUALITY_DISCOVER_SCANS === '1'
+    if (discoverScans) scanDirs = await discoverSavedScanDirs()
+    const uniqueChannels = process.env.QUALITY_UNIQUE_CHANNELS === '1'
+    const maxScans = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_SCANS ?? (discoverScans ? 5 : scanDirs.length))))
+    const maxVideos = Math.max(1, Math.min(100, Number(process.env.QUALITY_MAX_VIDEOS ?? 50)))
+    const maxVideosPerScan = Math.max(1, Math.min(10, Number(process.env.QUALITY_MAX_VIDEOS_PER_SCAN ?? 10)))
+    const allowUnannotated = process.env.QUALITY_ALLOW_UNANNOTATED === '1'
+    const transcriptCreditUsd = Math.max(0, Number(process.env.QUALITY_TRANSCRIPT_CREDIT_USD ?? 0.005))
     const requestedVideoIds = new Set(
       (process.env.QUALITY_VIDEO_IDS ?? '')
         .split(',')
@@ -823,8 +914,19 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       readFile(resolve('evals/parental-quality-coverage.json'), 'utf8')
         .then((raw) => JSON.parse(raw) as VideoCoverageFile),
     ])
-    const loaded = await Promise.all(scanDirs.map(loadScan))
-    const allRecords = loaded.flatMap((item) => item.records)
+    let loaded = await Promise.all(scanDirs.map(loadScan))
+    if (uniqueChannels) {
+      const seenChannels = new Set<string>()
+      loaded = loaded.filter((item) => {
+        const channelKey = item.result.channel?.id ?? `scan:${basename(item.scanDir)}`
+        if (seenChannels.has(channelKey)) return false
+        seenChannels.add(channelKey)
+        return true
+      })
+    }
+    loaded = loaded.slice(0, maxScans)
+    scanDirs = loaded.map((item) => item.scanDir)
+    const allRecords = loaded.flatMap((item) => item.records.slice(0, maxVideosPerScan))
 
     const unique = new Map<string, ScanRecord>()
     for (const record of allRecords) {
@@ -853,8 +955,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         const transcript = transcriptByVideo.get(annotation.sourceVideo)
         return transcript ? resolveAnnotationAnchor(annotation, transcript) : annotation
       })
-    if (applicableAnnotations.length === 0) {
-      throw new Error('None of the annotated videos are present in the selected saved scans.')
+    if (applicableAnnotations.length === 0 && !allowUnannotated) {
+      throw new Error('None of the annotated videos are present in the selected saved scans. Set QUALITY_ALLOW_UNANNOTATED=1 for cross-channel diagnostics.')
     }
     const unresolvedAnchors = applicableAnnotations.filter((annotation) =>
       annotation.anchorStartMs === undefined || annotation.anchorEndMs === undefined,
@@ -865,17 +967,23 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       )
     }
 
-    const baselineByScan = loaded.map((item, scanIndex) => {
+    const baselineByScan = loaded.map((item) => {
       const records = item.records.filter((record) =>
         selectedKeys.has(`${record.videoId}:${record.transcriptHash}`),
       )
       const eventsByVideo = new Map(records.map((record) => [record.videoId, record.baselineEvents]))
       const scanAnnotations = applicableAnnotations.filter((annotation) => eventsByVideo.has(annotation.sourceVideo))
       return {
-        scan: basename(scanDirs[scanIndex]!),
+        scan: basename(item.scanDir),
+        channel: item.result.channel ?? null,
         metrics: metricsFor(scanAnnotations, eventsByVideo, true),
         cardAudit: cardAuditFor(scanAnnotations, eventsByVideo, coverage, true),
         usage: item.result.openaiUsage ?? zeroUsage(),
+        openaiCostUsd: estimateOpenAICostUsd(item.result.openaiUsage ?? zeroUsage()),
+        transcriptCredits: item.result.creditUsage?.totalCredits ?? 0,
+        transcriptApiCostUsd: (item.result.creditUsage?.totalCredits ?? 0) * transcriptCreditUsd,
+        analyzedVideos: item.result.analyzedVideos ?? records.length,
+        failedVideos: item.result.failedVideos ?? 0,
         latencyMs: records.reduce((sum, record) => sum + record.baselineLatencyMs, 0),
         annotations: scanAnnotations.map((item) => item.id),
       }
@@ -893,6 +1001,11 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         reviewModel,
         reasoningEffort,
         requestTimeoutMs,
+        discoverScans,
+        uniqueChannels,
+        maxScans,
+        maxVideosPerScan,
+        transcriptCreditUsd,
         profile,
       }))
       .digest('hex')
@@ -902,7 +1015,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 14 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 15 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -989,6 +1102,25 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         rescuedByVideo.set(record.videoId, output.rescuedEvents)
       }
       const outputs = [...newByKey.values()]
+      const runUsage = aggregateUsages(outputs.map((item) => item.usage))
+      const videoStats: VideoRunStat[] = outputs.map((item) => {
+        const scenes = buildPresentationScenes(item.events)
+        return {
+          scanName: item.scanName,
+          videoId: item.videoId,
+          requests: item.requests,
+          usage: item.usage,
+          openaiCostUsd: estimateOpenAICostUsd(item.usage),
+          providerLatencyMs: item.latencyMs,
+          wallClockMs: item.wallClockMs,
+          onePassSceneCount: item.onePassSceneCount,
+          sceneCount: item.sceneCount,
+          mainSceneCount: scenes.filter((scene) => scene.attention === 'main').length,
+          detailSceneCount: scenes.filter((scene) => scene.attention === 'details').length,
+          rescuedCandidates: item.rescuedCandidates,
+          rescueRejectedCandidates: item.rescueRejectedCandidates,
+        }
+      })
       runOutputs.push({
         metrics: metricsFor(applicableAnnotations, currentByVideo),
         onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
@@ -1021,11 +1153,15 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         priorities: priorities(applicableAnnotations, currentByVideo),
         levels: levels(applicableAnnotations, currentByVideo),
         sceneSignatures: displayedSceneSignatures(currentByVideo),
+        usage: runUsage,
+        openaiCostUsd: estimateOpenAICostUsd(runUsage),
+        wallClockMs: outputs.reduce((sum, item) => sum + item.wallClockMs, 0),
+        videoStats,
       })
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 14,
+          version: 15,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1088,6 +1224,42 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       true,
     )
     const current = runOutputs[0]!
+    const loadedByScanName = new Map(loaded.map((item) => [basename(item.scanDir), item]))
+    const videoStatsByScan = new Map<string, VideoRunStat[]>()
+    for (const stat of current.videoStats) {
+      const items = videoStatsByScan.get(stat.scanName) ?? []
+      items.push(stat)
+      videoStatsByScan.set(stat.scanName, items)
+    }
+    const channelEconomics = [...videoStatsByScan.entries()].map(([scanName, stats]) => {
+      const scan = loadedByScanName.get(scanName)
+      const usage = aggregateUsages(stats.map((item) => item.usage))
+      const openaiCostUsd = estimateOpenAICostUsd(usage)
+      const transcriptCredits = scan?.result.creditUsage?.totalCredits ?? 0
+      const transcriptApiCostUsd = transcriptCredits * transcriptCreditUsd
+      const sequentialWallClockMs = stats.reduce((sum, item) => sum + item.wallClockMs, 0)
+      const providerLatencyMs = stats.reduce((sum, item) => sum + item.providerLatencyMs, 0)
+      return {
+        scan: scanName,
+        channel: scan?.result.channel ?? null,
+        videosBenchmarked: stats.length,
+        savedScanAnalyzedVideos: scan?.result.analyzedVideos ?? scan?.records.length ?? stats.length,
+        savedScanFailedVideos: scan?.result.failedVideos ?? 0,
+        requests: stats.reduce((sum, item) => sum + item.requests, 0),
+        usage,
+        openaiCostUsd,
+        transcriptCredits,
+        transcriptApiCostUsd,
+        estimatedProviderCostUsd: openaiCostUsd + transcriptApiCostUsd,
+        sequentialWallClockMs,
+        providerLatencyMs,
+        averageVideoWallClockMs: sequentialWallClockMs / Math.max(1, stats.length),
+        mainSceneCount: stats.reduce((sum, item) => sum + item.mainSceneCount, 0),
+        detailSceneCount: stats.reduce((sum, item) => sum + item.detailSceneCount, 0),
+        rescuedCandidates: stats.reduce((sum, item) => sum + item.rescuedCandidates, 0),
+        rescueRejectedCandidates: stats.reduce((sum, item) => sum + item.rescueRejectedCandidates, 0),
+      }
+    })
 
     const report = {
       generatedAt: new Date().toISOString(),
@@ -1102,6 +1274,12 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         retryBaseDelayMs,
         runCooldownMs,
         requestTimeoutMs,
+        discoverScans,
+        uniqueChannels,
+        maxScans,
+        maxVideos,
+        maxVideosPerScan,
+        allowUnannotated,
         annotations: applicableAnnotations.length,
         provisionalAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'provisional').length,
         humanConfirmedAnnotations: applicableAnnotations.filter((item) => item.annotationSource === 'human_confirmed').length,
@@ -1123,6 +1301,19 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
             endMs: item.anchorEndMs ?? null,
           },
         ])),
+      },
+      pricing: {
+        openaiModel: model,
+        openaiStandardPerMillionTokens: GPT6_LUNA_STANDARD_PRICING,
+        transcriptCreditUsd,
+        transcriptApiPricingMode: 'configurable effective cost per successful credit',
+      },
+      economics: {
+        channels: channelEconomics,
+        currentRunOpenaiCostUsd: current.openaiCostUsd,
+        currentRunSequentialWallClockMs: current.wallClockMs,
+        averageOpenaiCostUsdPerRun: average(runOutputs.map((item) => item.openaiCostUsd)),
+        averageSequentialWallClockMsPerRun: average(runOutputs.map((item) => item.wallClockMs)),
       },
       versions: {
         qualityEval: QUALITY_EVAL_VERSION,
@@ -1204,6 +1395,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         averageRequests: average(runOutputs.map((item) => item.requests)),
         averageTokens: average(runOutputs.map((item) => item.tokens)),
         averageLatencyMs: average(runOutputs.map((item) => item.latencyMs)),
+        averageOpenaiCostUsd: average(runOutputs.map((item) => item.openaiCostUsd)),
+        averageSequentialWallClockMs: average(runOutputs.map((item) => item.wallClockMs)),
       },
       interpretation: {
         usefulWarningPrecision: 'Anchor-only metric: share of shown annotated anchors that are expected to be parent-visible. It is not card-level precision.',
@@ -1216,6 +1409,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         phaseDiagnostics: 'Per-anchor detector presence, one-pass policy placement, final reviewed placement, reviewer downgrade/upgrade counts, and high-priority coverage rescue counts across runs.',
         stability: 'Share of annotated anchors whose final priority is unchanged across repeated full-transcript runs.',
         displayedCardStability: 'Average Jaccard similarity of all displayed scene signatures across repeated runs.',
+        economics: 'OpenAI cost uses current GPT-6 Luna Standard token rates; TranscriptAPI cost uses saved credit usage multiplied by QUALITY_TRANSCRIPT_CREDIT_USD.',
       },
     }
 
