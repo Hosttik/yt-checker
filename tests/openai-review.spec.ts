@@ -290,4 +290,105 @@ describe('OpenAI contextual reviewer', () => {
     expect(parse).toHaveBeenCalledTimes(1)
   })
 
+
+  it('preserves first-pass reported and mention provenance when review tries to upgrade the same candidate', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Админ сообщил, что к деревне идут тысячи зомби.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event: ClassifiedContentEvent = {
+      sourceCandidateId: 'candidate_reported_1',
+      sceneId: 'scene_reported_1',
+      category: 'scary_and_disturbing',
+      subtype: 'intense_peril',
+      severity: 'medium',
+      context: 'game',
+      confidence: 0.98,
+      startMs: 10_000,
+      endMs: 11_000,
+      evidenceRanges: [{ startMs: 10_000, endMs: 11_000 }],
+      sceneStartMs: 10_000,
+      sceneEndMs: 11_000,
+      text: 'Админ сообщил, что к деревне идут тысячи зомби.',
+      reason: 'Персонаж пересказывает предупреждение о будущей угрозе.',
+      evidenceStrength: 'explicit',
+      evidenceSource: 'transcript',
+      engagementLevel: 'mention',
+      portrayal: 'neutral',
+      explicitness: 'mild',
+      assertionStatus: 'reported',
+      details: {
+        fearIntensity: 'moderate',
+        themePresent: true,
+        threatPresent: true,
+        supernatural: true,
+      },
+    }
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_epistemic_upgrade',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          reviewItemId: 'review_0',
+          verdict: 'corrected',
+          event: {
+            candidateId: 'candidate_reported_1',
+            sceneId: 'scene_reported_1',
+            category: 'scary_and_disturbing',
+            subtype: 'intense_peril',
+            severity: 'medium',
+            context: 'game',
+            confidence: 0.99,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'neutral',
+            explicitness: 'mild',
+            assertionStatus: 'actual',
+            evidenceSegments: [0],
+            sceneStartSegment: 0,
+            sceneEndSegment: 0,
+            reason: 'Жители обсуждают приближающуюся угрозу.',
+            details: {
+              fearIntensity: 'moderate',
+              themePresent: true,
+              threatPresent: true,
+              supernatural: true,
+            },
+          },
+          parentRelevance: 'moderate',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [],
+          actor: null,
+          target: 'жители',
+          aggressionDirection: 'unclear',
+          intent: 'unclear',
+          distress: 'clear',
+          consequence: 'threatened_harm',
+          duration: 'brief',
+          repetition: 'single',
+          narrativeFraming: 'neutral',
+          parentSummary: 'Жителям сообщают о приближении угрозы.',
+          mitigatingContext: null,
+          highPriorityReason: null,
+          rationale: 'Непосредственное нападение в этой реплике не описано.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['scary_and_disturbing'], [event])
+
+    expect(result.complete).toBe(true)
+    expect(result.reviewedEvents[0]?.assertionStatus).toBe('reported')
+    expect(result.reviewedEvents[0]?.engagementLevel).toBe('mention')
+    expect(result.reviewedEvents[0]?.review?.recommendedParentRelevance).toBe('moderate')
+  })
+
 })
