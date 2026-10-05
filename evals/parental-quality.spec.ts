@@ -24,7 +24,7 @@ import {
 } from '../server/services/openai-analysis'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.direct-evidence-v9'
+const QUALITY_EVAL_VERSION = '2026-10-05.coverage-rescue-v10'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -112,6 +112,8 @@ interface NewVideoResult {
   onePassEvents: ContentEvent[]
   events: ContentEvent[]
   reviewDecisions: OpenAIReviewDecision[]
+  rescuedCandidates: number
+  rescueRejectedCandidates: number
   onePassSceneCount: number
   sceneCount: number
   detectorTokens: number
@@ -153,6 +155,8 @@ interface RunOutput {
   firstPassSignatures: Record<string, string[]>
   finalSignatures: Record<string, string[]>
   reviewDecisions: Record<string, OpenAIReviewDecision[]>
+  rescuedCandidates: number
+  rescueRejectedCandidates: number
   onePassPriorities: Record<string, Priority>
   onePassLevels: Record<string, ConcernLevel>
   priorities: Record<string, Priority>
@@ -161,7 +165,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 9
+  version: 10
   key: string
   runOutputs: RunOutput[]
 }
@@ -573,6 +577,8 @@ async function runCurrent(
     ))
   let reviewed = detection.classifiedEvents
   let reviewDecisions: OpenAIReviewDecision[] = []
+  let rescuedCandidates = 0
+  let rescueRejectedCandidates = 0
   let requests = 1 + detectionAttempt.retries
   let tokens = detection.usage.totalTokens
   let latencyMs = detection.provider.latencyMs
@@ -587,6 +593,8 @@ async function runCurrent(
     const review = reviewAttempt.value
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
+    rescuedCandidates = review.rescuedCandidates
+    rescueRejectedCandidates = review.rescueRejectedCandidates
     requests += review.requestCount + reviewAttempt.retries
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
@@ -606,6 +614,8 @@ async function runCurrent(
     onePassEvents,
     events,
     reviewDecisions,
+    rescuedCandidates,
+    rescueRejectedCandidates,
     onePassSceneCount: buildPresentationScenes(onePassEvents).length,
     sceneCount: buildPresentationScenes(events).length,
     detectorTokens: detection.usage.totalTokens,
@@ -846,7 +856,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 9 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 10 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -941,6 +951,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
           firstPassByVideo,
           reviewDecisionsByVideo,
         ),
+        rescuedCandidates: outputs.reduce((sum, item) => sum + item.rescuedCandidates, 0),
+        rescueRejectedCandidates: outputs.reduce((sum, item) => sum + item.rescueRejectedCandidates, 0),
         onePassPriorities: priorities(applicableAnnotations, onePassByVideo),
         onePassLevels: levels(applicableAnnotations, onePassByVideo),
         priorities: priorities(applicableAnnotations, currentByVideo),
@@ -950,7 +962,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 9,
+          version: 10,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1133,7 +1145,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         lowValueCards: 'Annotated hidden cases shown at all, plus annotated details cases promoted to main.',
         unsupportedClaims: 'Machine-checkable forbidden category/subtype interpretations from the annotated set.',
         firstPassSubstantialMisses: 'Annotated main scenes not detected by the full-transcript first pass before review.',
-        phaseDiagnostics: 'Per-anchor detector presence, one-pass policy placement, final reviewed placement, and reviewer downgrade/upgrade counts across runs.',
+        phaseDiagnostics: 'Per-anchor detector presence, one-pass policy placement, final reviewed placement, reviewer downgrade/upgrade counts, and high-priority coverage rescue counts across runs.',
         stability: 'Share of annotated anchors whose final priority is unchanged across repeated full-transcript runs.',
         displayedCardStability: 'Average Jaccard similarity of all displayed scene signatures across repeated runs.',
       },

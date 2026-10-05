@@ -162,6 +162,164 @@ describe('OpenAI contextual reviewer', () => {
     expect(userText).toContain('[2] Теперь выход из деревни вам запрещён.')
   })
 
+  it('rescues a missed sufficiently evidenced high-priority scene in the existing review request', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Герой идёт по дороге.', startMs: 1_000, endMs: 2_000 },
+      { text: 'Я отпущу жителей только если ты выполнишь мои задания.', startMs: 10_000, endMs: 11_000 },
+      { text: 'Если откажешься, им конец.', startMs: 11_100, endMs: 12_000 },
+    ])
+    const firstPass = violentThreat('candidate_existing', 1_000)
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_rescue',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[{}]}',
+      output_parsed: {
+        reviews: [confirmedReviewItem('review_0')],
+        missedHighPriorityEvents: [{
+          event: {
+            candidateId: 'coverage_1_1',
+            sceneId: 'coverage_scene_1',
+            category: 'violence',
+            subtype: 'violent_threat',
+            severity: 'high',
+            context: 'game',
+            confidence: 0.98,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'discouraged',
+            explicitness: 'mild',
+            assertionStatus: 'threatened',
+            evidenceSegments: [1, 2],
+            sceneStartSegment: 1,
+            sceneEndSegment: 2,
+            reason: 'Персонаж ставит освобождение жителей в зависимость от выполнения требований и угрожает им вредом при отказе.',
+            details: {
+              harmLevel: 'threatened',
+              targetType: 'human_like_character',
+              weaponRole: 'none',
+              actionPurpose: 'threat',
+            },
+          },
+          parentRelevance: 'high',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [],
+          actor: 'антагонист',
+          target: 'жители',
+          aggressionDirection: 'actor_to_target',
+          intent: 'coercive',
+          distress: 'clear',
+          consequence: 'threatened_harm',
+          duration: 'brief',
+          repetition: 'single',
+          narrativeFraming: 'discouraged',
+          parentSummary: 'Антагонист удерживает жителей и ставит их освобождение в зависимость от выполнения требований.',
+          mitigatingContext: null,
+          highPriorityReason: 'Безопасность удерживаемых жителей используется для прямого принуждения.',
+          rationale: 'Прямые реплики подтверждают условное освобождение и угрозу вреда при отказе.',
+        }],
+      },
+      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    expect(result.complete).toBe(true)
+    expect(result.requestCount).toBe(1)
+    expect(parse).toHaveBeenCalledTimes(1)
+    expect(result.rescuedCandidates).toBe(1)
+    expect(result.rescueRejectedCandidates).toBe(0)
+    expect(result.reviewedEvents).toHaveLength(2)
+    expect(result.reviewedEvents[1]).toMatchObject({
+      sourceCandidateId: 'coverage_1_1',
+      category: 'violence',
+      subtype: 'violent_threat',
+      review: {
+        status: 'confirmed',
+        recommendedParentRelevance: 'high',
+        evidenceSufficiency: 'sufficient',
+        intent: 'coercive',
+      },
+    })
+  })
+
+  it('rejects a coverage rescue that duplicates direct evidence of an existing same-category candidate', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const firstPass = violentThreat('candidate_existing', 10_000)
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_rescue_duplicate',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[{}]}',
+      output_parsed: {
+        reviews: [confirmedReviewItem('review_0')],
+        missedHighPriorityEvents: [{
+          event: {
+            candidateId: 'coverage_duplicate',
+            sceneId: 'coverage_duplicate_scene',
+            category: 'violence',
+            subtype: 'violent_threat',
+            severity: 'high',
+            context: 'game',
+            confidence: 0.99,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'discouraged',
+            explicitness: 'mild',
+            assertionStatus: 'threatened',
+            evidenceSegments: [0],
+            sceneStartSegment: 0,
+            sceneEndSegment: 0,
+            reason: 'Персонаж угрожает жителям вредом.',
+            details: {
+              harmLevel: 'threatened',
+              targetType: 'human_like_character',
+              weaponRole: 'none',
+              actionPurpose: 'threat',
+            },
+          },
+          parentRelevance: 'high',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [],
+          actor: 'антагонист',
+          target: 'жители',
+          aggressionDirection: 'actor_to_target',
+          intent: 'coercive',
+          distress: 'clear',
+          consequence: 'threatened_harm',
+          duration: 'brief',
+          repetition: 'single',
+          narrativeFraming: 'discouraged',
+          parentSummary: 'Персонаж угрожает жителям.',
+          mitigatingContext: null,
+          highPriorityReason: 'Это направленная угроза вредом.',
+          rationale: 'Прямое доказательство совпадает с уже существующим candidate.',
+        }],
+      },
+      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
+
+    expect(result.rescuedCandidates).toBe(0)
+    expect(result.rescueRejectedCandidates).toBe(1)
+    expect(result.reviewedEvents).toHaveLength(1)
+  })
+
   it('retries only omitted review items and recovers a partial batch', async () => {
     const transcript = normalizeTranscript([
       { text: 'Первый эпизод.', startMs: 10_000, endMs: 11_000 },
@@ -211,6 +369,7 @@ describe('OpenAI contextual reviewer', () => {
     expect(retryText).toContain('review_1')
     expect(retryText).not.toContain('"reviewItemId":"review_0"')
     expect(retryText).toContain('retry ONLY for reviewItemIds omitted')
+    expect(retryText).toContain('missedHighPriorityEvents MUST be an empty array')
   })
 
   it('retains a first-pass candidate as not reviewed after one targeted retry also omits it', async () => {
