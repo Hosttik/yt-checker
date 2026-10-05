@@ -655,6 +655,64 @@ function preserveFirstPassEpistemicState(
   }
 }
 
+function seriousDirectedFirstPassViolence(event: ClassifiedContentEvent): boolean {
+  if (event.category !== 'violence') return false
+  if (event.evidenceStrength === 'weak_context' || event.confidence < 0.7) return false
+  if (event.assertionStatus === 'reported'
+    || event.assertionStatus === 'hypothetical'
+    || event.assertionStatus === 'negated') {
+    return false
+  }
+
+  const directedTarget = event.details.targetType === 'person'
+    || event.details.targetType === 'human_like_character'
+    || event.details.targetType === 'animal'
+    || event.details.targetType === 'fantasy_creature'
+  if (!directedTarget) return false
+
+  const meaningfulHarm = event.details.harmLevel === 'threatened'
+    || event.details.harmLevel === 'attempted'
+    || event.details.harmLevel === 'actual'
+
+  if (event.subtype === 'violent_threat') {
+    return meaningfulHarm || event.details.actionPurpose === 'threat'
+  }
+  if (event.subtype === 'life_threatening_situation') return meaningfulHarm
+  if (event.subtype === 'physical_attack') {
+    return event.details.harmLevel === 'attempted' || event.details.harmLevel === 'actual'
+  }
+
+  return meaningfulHarm
+    && (event.details.actionPurpose === 'attack' || event.details.actionPurpose === 'threat')
+    && (event.details.weaponRole === 'threatened_use' || event.details.weaponRole === 'used')
+}
+
+function reviewProvidesBenignContradiction(item: z.infer<typeof reviewItemSchema>): boolean {
+  const benignIntent = item.intent === 'benign'
+    || item.intent === 'rescue'
+    || item.intent === 'protective'
+    || item.intent === 'utility'
+    || item.intent === 'accidental'
+  const noSeriousConsequence = item.consequence === 'none' || item.consequence === 'property_only'
+
+  return item.evidenceSufficiency === 'sufficient'
+    && item.aggressionDirection === 'none'
+    && benignIntent
+    && noSeriousConsequence
+}
+
+function shouldRetainSeriousFirstPassAfterReview(
+  original: ClassifiedContentEvent,
+  item: z.infer<typeof reviewItemSchema>,
+): boolean {
+  if (!seriousDirectedFirstPassViolence(original)) return false
+
+  const suppresses = item.verdict === 'rejected'
+    || item.parentRelevance === 'minimal'
+    || item.parentRelevance === 'low'
+  return suppresses && !reviewProvidesBenignContradiction(item)
+}
+
 function unreviewedReview(rationale: string): ContentEventReview {
   return {
     status: 'not_reviewed',
@@ -1009,6 +1067,26 @@ export class OpenAIAnalysisProvider {
             originalCategory: original.category,
             originalSubtype: original.subtype,
             rationale: 'Missing review decision after completeness validation.',
+          })
+          continue
+        }
+
+        if (shouldRetainSeriousFirstPassAfterReview(original, item)) {
+          reviewedEvents.push({
+            ...original,
+            review: unreviewedReview(
+              'Contextual review attempted to suppress a strongly supported directed-violence event without a sufficient benign contradiction; the first-pass event was retained conservatively.',
+            ),
+          })
+          decisions.push({
+            reviewItemId,
+            verdict: 'not_reviewed',
+            originalCandidateId: original.sourceCandidateId,
+            originalCategory: original.category,
+            originalSubtype: original.subtype,
+            parentRelevance: item.parentRelevance,
+            evidenceSufficiency: item.evidenceSufficiency,
+            rationale: 'Unsafe reviewer downgrade was ignored; first-pass serious event retained.',
           })
           continue
         }

@@ -291,6 +291,136 @@ describe('OpenAI contextual reviewer', () => {
   })
 
 
+  it('retains a strongly supported violent threat when reviewer rejects it without a benign contradiction', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event = violentThreat('candidate_guard_reject', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_guard_reject',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'rejected',
+          parentRelevance: 'minimal',
+          evidenceSufficiency: 'partial',
+          aggressionDirection: 'unclear',
+          intent: 'unclear',
+          consequence: 'unclear',
+          parentSummary: 'Сцена отклонена.',
+          rationale: 'Reviewer не смог уверенно подтвердить угрозу.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(false)
+    expect(result.rejectedCandidates).toBe(0)
+    expect(result.reviewedEvents).toHaveLength(1)
+    expect(result.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_guard_reject',
+      subtype: 'violent_threat',
+      review: { status: 'not_reviewed' },
+    })
+    expect(result.decisions[0]).toMatchObject({
+      verdict: 'not_reviewed',
+      originalCandidateId: 'candidate_guard_reject',
+    })
+  })
+
+  it('allows reviewer to reject a serious first-pass hypothesis when sufficient context proves it benign', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+      { text: 'Это была репетиция, никто никому не угрожал.', startMs: 11_100, endMs: 12_000 },
+    ])
+    const event = violentThreat('candidate_guard_benign', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_guard_benign',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'rejected',
+          parentRelevance: 'minimal',
+          evidenceSufficiency: 'sufficient',
+          contextSegments: [1],
+          aggressionDirection: 'none',
+          intent: 'benign',
+          distress: 'none',
+          consequence: 'none',
+          parentSummary: 'Фраза оказалась частью безобидной репетиции.',
+          rationale: 'Полный контекст прямо отрицает реальную угрозу.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(true)
+    expect(result.rejectedCandidates).toBe(1)
+    expect(result.reviewedEvents).toHaveLength(0)
+    expect(result.decisions[0]?.verdict).toBe('rejected')
+  })
+
+  it('retains a strongly supported violent threat when reviewer confirms it but recommends low relevance without contradiction', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event = violentThreat('candidate_guard_low', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_guard_low',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'confirmed',
+          parentRelevance: 'low',
+          evidenceSufficiency: 'sufficient',
+          aggressionDirection: 'actor_to_target',
+          intent: 'coercive',
+          consequence: 'threatened_harm',
+          parentSummary: 'Персонаж ставит безопасность жителей в зависимость от выполнения условия.',
+          rationale: 'Угроза подтверждена, но reviewer ошибочно занизил relevance.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(false)
+    expect(result.reviewedEvents).toHaveLength(1)
+    expect(result.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_guard_low',
+      review: { status: 'not_reviewed' },
+    })
+  })
+
   it('preserves first-pass reported and mention provenance when review tries to upgrade the same candidate', async () => {
     const transcript = normalizeTranscript([
       { text: 'Админ сообщил, что к деревне идут тысячи зомби.', startMs: 10_000, endMs: 11_000 },
