@@ -874,10 +874,17 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const apiKey = process.env.OPENAI_API_KEY || process.env.NUXT_OPENAI_API_KEY
     if (!apiKey) throw new Error('OPENAI_API_KEY is required for paid quality evaluation.')
 
-    const scanDirs = (process.env.QUALITY_SCAN_DIRS
+    let scanDirs = process.env.QUALITY_SCAN_DIRS
       ? process.env.QUALITY_SCAN_DIRS.split(',').map((item) => item.trim()).filter(Boolean)
-      : DEFAULT_SCAN_DIRS)
-    const maxVideos = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_VIDEOS ?? 20)))
+      : DEFAULT_SCAN_DIRS
+    const discoverScans = process.env.QUALITY_DISCOVER_SCANS === '1'
+    if (discoverScans) scanDirs = await discoverSavedScanDirs()
+    const uniqueChannels = process.env.QUALITY_UNIQUE_CHANNELS === '1'
+    const maxScans = Math.max(1, Math.min(20, Number(process.env.QUALITY_MAX_SCANS ?? (discoverScans ? 5 : scanDirs.length))))
+    const maxVideos = Math.max(1, Math.min(100, Number(process.env.QUALITY_MAX_VIDEOS ?? 50)))
+    const maxVideosPerScan = Math.max(1, Math.min(10, Number(process.env.QUALITY_MAX_VIDEOS_PER_SCAN ?? 10)))
+    const allowUnannotated = process.env.QUALITY_ALLOW_UNANNOTATED === '1'
+    const transcriptCreditUsd = Math.max(0, Number(process.env.QUALITY_TRANSCRIPT_CREDIT_USD ?? 0.005))
     const requestedVideoIds = new Set(
       (process.env.QUALITY_VIDEO_IDS ?? '')
         .split(',')
@@ -905,8 +912,19 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       readFile(resolve('evals/parental-quality-coverage.json'), 'utf8')
         .then((raw) => JSON.parse(raw) as VideoCoverageFile),
     ])
-    const loaded = await Promise.all(scanDirs.map(loadScan))
-    const allRecords = loaded.flatMap((item) => item.records)
+    let loaded = await Promise.all(scanDirs.map(loadScan))
+    if (uniqueChannels) {
+      const seenChannels = new Set<string>()
+      loaded = loaded.filter((item) => {
+        const channelKey = item.result.channel?.id ?? `scan:${basename(item.scanDir)}`
+        if (seenChannels.has(channelKey)) return false
+        seenChannels.add(channelKey)
+        return true
+      })
+    }
+    loaded = loaded.slice(0, maxScans)
+    scanDirs = loaded.map((item) => item.scanDir)
+    const allRecords = loaded.flatMap((item) => item.records.slice(0, maxVideosPerScan))
 
     const unique = new Map<string, ScanRecord>()
     for (const record of allRecords) {
@@ -935,8 +953,8 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         const transcript = transcriptByVideo.get(annotation.sourceVideo)
         return transcript ? resolveAnnotationAnchor(annotation, transcript) : annotation
       })
-    if (applicableAnnotations.length === 0) {
-      throw new Error('None of the annotated videos are present in the selected saved scans.')
+    if (applicableAnnotations.length === 0 && !allowUnannotated) {
+      throw new Error('None of the annotated videos are present in the selected saved scans. Set QUALITY_ALLOW_UNANNOTATED=1 for cross-channel diagnostics.')
     }
     const unresolvedAnchors = applicableAnnotations.filter((annotation) =>
       annotation.anchorStartMs === undefined || annotation.anchorEndMs === undefined,
@@ -954,10 +972,16 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       const eventsByVideo = new Map(records.map((record) => [record.videoId, record.baselineEvents]))
       const scanAnnotations = applicableAnnotations.filter((annotation) => eventsByVideo.has(annotation.sourceVideo))
       return {
-        scan: basename(scanDirs[scanIndex]!),
+        scan: basename(item.scanDir),
+        channel: item.result.channel ?? null,
         metrics: metricsFor(scanAnnotations, eventsByVideo, true),
         cardAudit: cardAuditFor(scanAnnotations, eventsByVideo, coverage, true),
         usage: item.result.openaiUsage ?? zeroUsage(),
+        openaiCostUsd: estimateOpenAICostUsd(item.result.openaiUsage ?? zeroUsage()),
+        transcriptCredits: item.result.creditUsage?.totalCredits ?? 0,
+        transcriptApiCostUsd: (item.result.creditUsage?.totalCredits ?? 0) * transcriptCreditUsd,
+        analyzedVideos: item.result.analyzedVideos ?? records.length,
+        failedVideos: item.result.failedVideos ?? 0,
         latencyMs: records.reduce((sum, record) => sum + record.baselineLatencyMs, 0),
         annotations: scanAnnotations.map((item) => item.id),
       }
