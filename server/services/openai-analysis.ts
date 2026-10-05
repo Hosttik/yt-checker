@@ -1496,7 +1496,7 @@ export class OpenAIAnalysisProvider {
       }
       throw safeError
     }
-
+  }
 
   async coverage(
     transcript: NormalizedTranscript,
@@ -1596,6 +1596,5 @@ ${transcript.text}`
       provider: providerMetadata(response, started),
       requestMetadata: metadata,
     }
-  }
   }
 }
