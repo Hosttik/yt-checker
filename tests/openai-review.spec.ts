@@ -753,6 +753,82 @@ describe('OpenAI contextual reviewer', () => {
     })
   })
 
+  it('keeps confirmed-event direct evidence anchored to the original signal', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+      { text: 'Другая часть того же большого сюжета.', startMs: 20_000, endMs: 21_000 },
+      { text: 'Позже снова говорят о жителях.', startMs: 30_000, endMs: 31_000 },
+    ])
+    const event = {
+      ...violentThreat('candidate_confirmed_anchor', 10_000),
+      sceneStartMs: 10_000,
+      sceneEndMs: 31_000,
+    }
+
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_confirmed_anchor',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}],"missedHighPriorityEvents":[]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'confirmed',
+          event: {
+            candidateId: 'candidate_confirmed_anchor',
+            sceneId: 'scene_candidate_confirmed_anchor',
+            category: 'violence',
+            subtype: 'violent_threat',
+            severity: 'high',
+            context: 'game',
+            confidence: 0.99,
+            evidenceStrength: 'explicit',
+            engagementLevel: 'depiction',
+            portrayal: 'discouraged',
+            explicitness: 'mild',
+            assertionStatus: 'threatened',
+            evidenceSegments: [2],
+            sceneStartSegment: 0,
+            sceneEndSegment: 2,
+            reason: 'Поздняя реплика ошибочно выбрана как прямое доказательство исходной угрозы.',
+            details: {
+              harmLevel: 'threatened',
+              targetType: 'human_like_character',
+              weaponRole: 'none',
+              actionPurpose: 'threat',
+            },
+          },
+          parentRelevance: 'high',
+          evidenceSufficiency: 'sufficient',
+          aggressionDirection: 'actor_to_target',
+          intent: 'coercive',
+          consequence: 'threatened_harm',
+          highPriorityReason: 'Направленная угроза используется для принуждения.',
+          parentSummary: 'Персонаж угрожает жителям.',
+          rationale: 'Семантика подтверждена, но evidence был перевыбран слишком далеко.',
+        }],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(true)
+    expect(result.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_confirmed_anchor',
+      startMs: 10_000,
+      endMs: 11_000,
+      evidenceRanges: [{ startMs: 10_000, endMs: 11_000 }],
+      review: { status: 'confirmed', recommendedParentRelevance: 'high' },
+    })
+  })
+
   it('retains the first-pass event when a reviewer correction drifts to a disjoint scene', async () => {
     const transcript = normalizeTranscript([
       { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
