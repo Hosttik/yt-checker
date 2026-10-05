@@ -576,7 +576,7 @@ function firstPassMisses(
   ).length
 }
 
-async function loadScan(scanDir: string): Promise<{ records: ScanRecord[]; result: ScanResult }> {
+async function loadScan(scanDir: string): Promise<{ scanDir: string; records: ScanRecord[]; result: ScanResult }> {
   const [diagnosticRaw, resultRaw] = await Promise.all([
     readFile(resolve(scanDir, 'openai-analysis.json'), 'utf8'),
     readFile(resolve(scanDir, 'result.json'), 'utf8'),
@@ -597,7 +597,7 @@ async function loadScan(scanDir: string): Promise<{ records: ScanRecord[]; resul
         baselineLatencyMs: entry.provider?.latencyMs ?? 0,
       }
     })
-  return { records, result }
+  return { scanDir, records, result }
 }
 
 function isRateLimitError(error: unknown): boolean {
@@ -639,6 +639,8 @@ async function runCurrent(
   rateLimitRetries: number,
   retryBaseDelayMs: number,
 ): Promise<NewVideoResult> {
+  const wallStarted = performance.now()
+  const usage = zeroUsage()
   const detectionAttempt = await withRateLimitRetry(
     `${record.videoId}:detector`,
     () => detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false),
@@ -646,6 +648,7 @@ async function runCurrent(
     retryBaseDelayMs,
   )
   const detection = detectionAttempt.value
+  addUsage(usage, { ...detection.usage, requests: 1 })
   const onePassValidation = validateClassifiedEvents(detection.classifiedEvents)
   const onePassEvents = normalizeClassifiedEvents(onePassValidation.accepted)
     .map((event, index) => applyContentPolicy(
@@ -670,6 +673,7 @@ async function runCurrent(
       retryBaseDelayMs,
     )
     const review = reviewAttempt.value
+    addUsage(usage, { ...review.usage, requests: review.requestCount })
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
     requests += review.requestCount + reviewAttempt.retries
@@ -684,6 +688,7 @@ async function runCurrent(
     retryBaseDelayMs,
   )
   const coverage = coverageAttempt.value
+  addUsage(usage, { ...coverage.usage, requests: coverage.requestCount })
   rescuedEvents = coverage.rescuedEvents
   rescuedCandidates = coverage.rescuedCandidates
   rescueRejectedCandidates = coverage.rejectedCandidates
@@ -699,7 +704,9 @@ async function runCurrent(
       `${record.videoId}:eval:${index}:${event.category}:${event.subtype}`,
       profile,
     ))
+  usage.requests = requests
   return {
+    scanName: record.scanName,
     videoId: record.videoId,
     transcriptHash: record.transcriptHash,
     firstPassEvents: detection.classifiedEvents,
@@ -716,6 +723,8 @@ async function runCurrent(
     requests,
     tokens,
     latencyMs,
+    wallClockMs: performance.now() - wallStarted,
+    usage,
   }
 }
 
