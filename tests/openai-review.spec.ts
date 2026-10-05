@@ -231,6 +231,8 @@ describe('OpenAI contextual reviewer', () => {
     const result = await provider.review(transcript, 'ru', ['violence'], [firstPass])
 
     expect(result.complete).toBe(true)
+    expect(result.requestCount).toBe(1)
+    expect(parse).toHaveBeenCalledTimes(1)
     expect(result.rescuedCandidates).toBe(1)
     expect(result.rescueRejectedCandidates).toBe(0)
     expect(result.reviewedEvents).toHaveLength(2)
