@@ -569,11 +569,23 @@ export function materializeEvents(
       if (item.category === 'substances' && item.subtype !== item.details.substance) {
         throw new OpenAIAnalysisError('schema', 'OpenAI returned inconsistent substance subtype/details.')
       }
-      if (item.evidenceSegments.some((index) => index < item.sceneStartSegment || index > item.sceneEndSegment)) {
-        throw new OpenAIAnalysisError('schema', 'OpenAI evidence lies outside its scene.')
-      }
       const range = materializeEvidence(item.evidenceSegments, transcript)
-      const sceneRange = materializeRange(item.sceneStartSegment, item.sceneEndSegment, transcript)
+      const declaredSceneRange = materializeRange(
+        item.sceneStartSegment,
+        item.sceneEndSegment,
+        transcript,
+      )
+      const evidenceStartSegment = Math.min(...item.evidenceSegments)
+      const evidenceEndSegment = Math.max(...item.evidenceSegments)
+      const evidenceOutsideDeclaredScene = evidenceStartSegment < item.sceneStartSegment
+        || evidenceEndSegment > item.sceneEndSegment
+      const sceneRange = evidenceOutsideDeclaredScene
+        ? materializeRange(
+            Math.min(item.sceneStartSegment, evidenceStartSegment),
+            Math.max(item.sceneEndSegment, evidenceEndSegment),
+            transcript,
+          )
+        : declaredSceneRange
       const common = {
         sourceCandidateId: item.candidateId,
         sceneId: item.sceneId ?? undefined,
