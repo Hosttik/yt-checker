@@ -18,6 +18,8 @@ export interface BatchedReviewerOptions {
   batchMaxEstimatedTokens?: number
   coalesceMs?: number
   batchConcurrency?: number
+  batchMaxItems?: number
+  batchMaxCandidates?: number
   estimatedPromptTokens?: number
 }
 
@@ -80,24 +82,47 @@ function distributeUsage(usage: OpenAIUsage, weights: number[]): OpenAIUsage[] {
   }))
 }
 
-function packJobs(jobs: PendingReview[], maxTokens: number): PendingReview[][] {
+function packJobs(
+  jobs: PendingReview[],
+  maxTokens: number,
+  maxItems: number,
+  maxCandidates: number,
+): PendingReview[][] {
   const batches: PendingReview[][] = []
   let current: PendingReview[] = []
   let currentTokens = 0
+  let currentCandidates = 0
 
   for (const job of jobs) {
     const overflow = current.length > 0
-      && (currentTokens + job.estimatedTokens > maxTokens || current.length >= 32)
+      && (
+        currentTokens + job.estimatedTokens > maxTokens
+        || current.length >= maxItems
+        || currentCandidates + job.events.length > maxCandidates
+      )
     if (overflow) {
       batches.push(current)
       current = []
       currentTokens = 0
+      currentCandidates = 0
     }
     current.push(job)
     currentTokens += job.estimatedTokens
+    currentCandidates += job.events.length
   }
   if (current.length > 0) batches.push(current)
   return batches
+}
+
+function mergedUsage(left: OpenAIUsage, right?: OpenAIUsage): OpenAIUsage {
+  return {
+    inputTokens: left.inputTokens + (right?.inputTokens ?? 0),
+    outputTokens: left.outputTokens + (right?.outputTokens ?? 0),
+    reasoningTokens: left.reasoningTokens + (right?.reasoningTokens ?? 0),
+    cachedTokens: left.cachedTokens + (right?.cachedTokens ?? 0),
+    cacheWriteTokens: left.cacheWriteTokens + (right?.cacheWriteTokens ?? 0),
+    totalTokens: left.totalTokens + (right?.totalTokens ?? 0),
+  }
 }
 
 /**
@@ -109,6 +134,8 @@ export class BatchedOpenAIReviewer {
   private readonly batchMaxEstimatedTokens: number
   private readonly coalesceMs: number
   private readonly batchConcurrency: number
+  private readonly batchMaxItems: number
+  private readonly batchMaxCandidates: number
   private readonly estimatedPromptTokens: number
   private readonly pending: PendingReview[] = []
   private timer?: ReturnType<typeof setTimeout>
@@ -121,7 +148,9 @@ export class BatchedOpenAIReviewer {
   ) {
     this.batchMaxEstimatedTokens = positive(options.batchMaxEstimatedTokens, 70_000)
     this.coalesceMs = Math.max(0, Math.floor(options.coalesceMs ?? 100))
-    this.batchConcurrency = positive(options.batchConcurrency, 1)
+    this.batchConcurrency = positive(options.batchConcurrency, 2)
+    this.batchMaxItems = positive(options.batchMaxItems, 4)
+    this.batchMaxCandidates = positive(options.batchMaxCandidates, 12)
     this.estimatedPromptTokens = positive(options.estimatedPromptTokens, 20_000)
   }
 
@@ -162,7 +191,12 @@ export class BatchedOpenAIReviewer {
   private async flush(): Promise<void> {
     const jobs = this.pending.splice(0, this.pending.length)
     if (jobs.length === 0) return
-    const batches = packJobs(jobs, this.batchMaxEstimatedTokens)
+    const batches = packJobs(
+      jobs,
+      this.batchMaxEstimatedTokens,
+      this.batchMaxItems,
+      this.batchMaxCandidates,
+    )
 
     try {
       const resolvedBatches = await mapWithConcurrency(
@@ -186,7 +220,7 @@ export class BatchedOpenAIReviewer {
           const byId = new Map(response.items.map((item) => [item.itemId, item]))
           const usages = distributeUsage(response.usage, batch.map((job) => job.estimatedTokens))
 
-          return batch.map((job, index) => {
+          const base = batch.map((job, index) => {
             const result = byId.get(`review_job_${job.id}`)
             if (!result) throw new Error(`Missing OpenAI review batch result for review_job_${job.id}.`)
             return {
@@ -199,6 +233,66 @@ export class BatchedOpenAIReviewer {
               provider: response.provider,
             }
           })
+
+          const recovered: ResolvedReview[] = []
+          for (const item of base) {
+            if (item.result.complete) {
+              recovered.push(item)
+              continue
+            }
+
+            let fallbackAttempts = 0
+            try {
+              const fallback = await this.scheduler.run(
+                this.estimatedPromptTokens + item.job.estimatedTokens,
+                async () => {
+                  fallbackAttempts += 1
+                  return this.provider.review(
+                    item.job.transcript,
+                    item.job.language,
+                    item.job.enabledCategories,
+                    item.job.events,
+                  )
+                },
+              )
+              recovered.push({
+                job: item.job,
+                result: {
+                  itemId: `review_job_${item.job.id}`,
+                  reviewedEvents: fallback.reviewedEvents,
+                  decisions: fallback.decisions,
+                  totalCandidates: fallback.totalCandidates,
+                  reviewedCandidates: fallback.reviewedCandidates,
+                  rejectedCandidates: fallback.rejectedCandidates,
+                  uncertainCandidates: fallback.uncertainCandidates,
+                  complete: fallback.complete,
+                },
+                usage: mergedUsage(item.usage, fallback.usage),
+                requestCount: item.requestCount
+                  + fallbackAttempts
+                  + Math.max(0, fallback.requestCount - 1),
+                provider: {
+                  ...fallback.provider,
+                  latencyMs: item.provider.latencyMs + fallback.provider.latencyMs,
+                },
+              })
+            } catch (error) {
+              const fallbackError = error as { usage?: OpenAIUsage; provider?: OpenAIProviderMetadata }
+              recovered.push({
+                ...item,
+                usage: mergedUsage(item.usage, fallbackError.usage),
+                requestCount: item.requestCount + fallbackAttempts,
+                provider: fallbackError.provider
+                  ? {
+                      ...fallbackError.provider,
+                      latencyMs: item.provider.latencyMs + fallbackError.provider.latencyMs,
+                    }
+                  : item.provider,
+              })
+            }
+          }
+
+          return recovered
         },
       )
 
@@ -237,7 +331,37 @@ export class BatchedOpenAIReviewer {
         })
       }
     } catch (error) {
-      for (const job of jobs) job.reject(error)
+      const shared = error as {
+        usage?: OpenAIUsage
+        provider?: OpenAIProviderMetadata
+        requestCount?: number
+        message?: string
+        status?: number
+        code?: string
+        type?: string
+      }
+      const usages = distributeUsage(
+        shared.usage ?? {
+          inputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          cachedTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 0,
+        },
+        jobs.map((job) => job.estimatedTokens),
+      )
+      for (let index = 0; index < jobs.length; index += 1) {
+        const cloned = Object.assign(new Error(shared.message ?? 'Batched contextual review failed.'), {
+          type: shared.type ?? 'provider',
+          status: shared.status,
+          code: shared.code,
+          usage: usages[index],
+          provider: shared.provider,
+          requestCount: index === 0 ? (shared.requestCount ?? 1) : 0,
+        })
+        jobs[index]!.reject(cloned)
+      }
     }
   }
 
