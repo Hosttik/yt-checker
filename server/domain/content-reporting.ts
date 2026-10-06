@@ -431,6 +431,20 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
   )
 }
 
+function eventEvidenceStatus(event: ContentEvent): 'verified' | 'uncertain' | 'unreviewed' {
+  const review = event.review
+  if (!review || review.status === 'not_reviewed') return 'unreviewed'
+  if (review.status === 'uncertain' || review.evidenceSufficiency !== 'sufficient') return 'uncertain'
+  return 'verified'
+}
+
+function sceneEvidenceStatus(events: ContentEvent[]): 'verified' | 'uncertain' | 'unreviewed' {
+  const statuses = events.map(eventEvidenceStatus)
+  if (statuses.length > 0 && statuses.every((status) => status === 'verified')) return 'verified'
+  if (statuses.some((status) => status === 'uncertain')) return 'uncertain'
+  return 'unreviewed'
+}
+
 function sceneAttention(events: ContentEvent[], level: ReportLevel): 'main' | 'details' {
   if (level === 'high') return 'main'
   if (level !== 'moderate') return 'details'
@@ -496,14 +510,13 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
     .map((scene) => {
       const compactEvidence = evidenceRanges(scene.events)
       const level = maxReportLevel(scene.events.map(eventLevel))
-      const reviewedCount = scene.events.filter((event) =>
-        event.review && event.review.status !== 'not_reviewed',
-      ).length
-      const reviewStatus = reviewedCount === 0
+      const verifiedCount = scene.events.filter((event) => eventEvidenceStatus(event) === 'verified').length
+      const reviewStatus = verifiedCount === 0
         ? 'unreviewed' as const
-        : reviewedCount === scene.events.length
+        : verifiedCount === scene.events.length
           ? 'reviewed' as const
           : 'mixed' as const
+      const evidenceStatus = sceneEvidenceStatus(scene.events)
       return {
         sceneId: scene.sceneId,
         startMs: compactEvidence[0]?.startMs ?? scene.contextStartMs,
@@ -511,12 +524,15 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
         level,
         attention: sceneAttention(scene.events, level),
         reviewStatus,
+        evidenceStatus,
         categories: sceneCategories(scene.events),
         evidenceRanges: compactEvidence,
         label: sceneLabel(scene.events),
         summary: sceneSummary(scene.events),
         mitigatingContext: sceneMitigatingContext(scene.events),
-        priorityReason: level === 'high' ? scenePriorityReason(scene.events) : undefined,
+        priorityReason: level === 'high' && evidenceStatus === 'verified'
+          ? scenePriorityReason(scene.events)
+          : undefined,
         events: scene.events,
       }
     })
@@ -568,6 +584,99 @@ export function buildVideoCategoryReports(
 
 export function buildChannelCategoryReports(
   eventsByVideo: Array<{ videoId: string; events: ContentEvent[] }>,
+  enabledCategories: ContentCategory[],
+  analyzedVideos: number,
+  _profile: AnalysisProfile,
+): ChannelCategoryReport[] {
+  return enabledCategories.map((category) => {
+    const perVideo = eventsByVideo.map(({ videoId, events }) => {
+      const categoryEvents = events.filter((event) => event.category === category)
+      const categoryScenes = buildPresentationScenes(events)
+        .filter((scene) => scene.categories.includes(category))
+      return { videoId, events: categoryEvents, scenes: categoryScenes }
+    })
+    const raw = perVideo.flatMap((item) => item.events)
+    const displayed = raw.filter((event) => event.displayLevel !== 'hidden')
+    const displayedScenes = perVideo.flatMap((item) => item.scenes)
+    const verifiedMainScenes = displayedScenes.filter((scene) =>
+      scene.attention === 'main' && scene.evidenceStatus === 'verified',
+    )
+
+    const rawAffectedVideos = perVideo.filter((item) => item.events.length > 0).length
+    const affectedVideos = perVideo.filter((item) => item.scenes.length > 0).length
+    const highlightedVideos = perVideo.filter((item) =>
+      item.scenes.some((scene) =>
+        scene.attention === 'main'
+        && scene.evidenceStatus === 'verified'
+        && scene.level === 'high',
+      ),
+    ).length
+    const moderatePlusAffectedVideos = perVideo.filter((item) =>
+      item.scenes.some((scene) =>
+        scene.attention === 'main'
+        && scene.evidenceStatus === 'verified'
+        && (scene.level === 'moderate' || scene.level === 'high'),
+      ),
+    ).length
+
+    const peakConcern: ReportLevel = verifiedMainScenes.length > 0
+      ? maxReportLevel(verifiedMainScenes.map((scene) => scene.level))
+      : displayedScenes.length > 0
+        ? 'low'
+        : 'none'
+    const affectedRatio = analyzedVideos > 0 ? affectedVideos / analyzedVideos : 0
+    const prevalence = prevalenceLevel(affectedVideos, analyzedVideos)
+    const moderatePlusAffectedRatio = analyzedVideos > 0 ? moderatePlusAffectedVideos / analyzedVideos : 0
+    const moderatePlusPrevalence = prevalenceLevel(moderatePlusAffectedVideos, analyzedVideos)
+
+    // Parent concern is derived from final, verified main scenes. Frequency of
+    // details is reported separately through prevalence and must not promote a
+    // low-value pattern into a stronger warning.
+    const level: ReportLevel = verifiedMainScenes.length > 0
+      ? maxReportLevel(verifiedMainScenes.map((scene) => scene.level))
+      : displayedScenes.length > 0
+        ? 'low'
+        : 'none'
+
+    const subtypeMap = new Map<string, { eventCount: number; videoIds: Set<string> }>()
+    for (const item of perVideo) {
+      for (const event of item.events) {
+        const current = subtypeMap.get(event.subtype) ?? { eventCount: 0, videoIds: new Set<string>() }
+        current.eventCount += 1
+        current.videoIds.add(item.videoId)
+        subtypeMap.set(event.subtype, current)
+      }
+    }
+
+    const policy = policyFor(category)
+    const presentationEvents = displayed.length > 0 ? displayed : raw
+    return {
+      category,
+      label: policy.getLabel(presentationEvents),
+      level,
+      peakConcern,
+      prevalence,
+      affectedRatio,
+      moderatePlusPrevalence,
+      moderatePlusAffectedRatio,
+      moderatePlusAffectedVideos,
+      analyzedVideos,
+      rawAffectedVideos,
+      affectedVideos,
+      highlightedVideos,
+      rawEventCount: raw.length,
+      displayedEventCount: displayed.length,
+      subtypeStats: [...subtypeMap.entries()]
+        .map(([subtype, value]) => ({
+          subtype,
+          eventCount: value.eventCount,
+          videoCount: value.videoIds.size,
+        }))
+        .sort((a, b) => b.eventCount - a.eventCount || a.subtype.localeCompare(b.subtype)),
+      summary: policy.summarize(raw, displayed),
+    }
+  })
+}>,
   enabledCategories: ContentCategory[],
   analyzedVideos: number,
   _profile: AnalysisProfile,
