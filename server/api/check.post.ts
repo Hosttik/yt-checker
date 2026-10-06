@@ -42,6 +42,7 @@ import {
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
 import { BatchedOpenAIAnalyzer, estimateTextTokens } from '../services/openai-batched-analyzer'
+import { BatchedOpenAIReviewer } from '../services/openai-batched-reviewer'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
@@ -208,7 +209,12 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
     batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
   })
-  const reviewer = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
+  const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
+  const reviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
+    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
+    coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
+    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 1),
+  })
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
@@ -391,22 +397,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       } else {
         let scheduledReviewAttempts = 0
         try {
-          const reviewContext = buildReviewContextText(normalizedTranscript, firstPassEvents)
-          const estimatedReviewTokens = 20_000
-            + estimateTextTokens(reviewContext)
-            + estimateTextTokens(JSON.stringify(firstPassEvents))
-          reviewResult = await openAIRequestScheduler.run(estimatedReviewTokens, async () => {
-            scheduledReviewAttempts += 1
-            return reviewer.review(
-              normalizedTranscript,
-              resolvedLanguage,
-              enabledCategories,
-              firstPassEvents,
-            )
-          })
-          const reviewRequests = scheduledReviewAttempts + Math.max(0, reviewResult.requestCount - 1)
-          openaiUsage.requests += reviewRequests
-          openaiStages.review.requests += reviewRequests
+          reviewResult = await reviewer.review(
+            normalizedTranscript,
+            resolvedLanguage,
+            enabledCategories,
+            firstPassEvents,
+          )
+          openaiUsage.requests += reviewResult.requestCount
+          openaiStages.review.requests += reviewResult.requestCount
           addUsage(openaiUsage, reviewResult.usage)
           addUsage(openaiStages.review, reviewResult.usage)
           reviewedEvents = reviewResult.reviewedEvents.filter((classifiedEvent) =>
@@ -449,8 +447,6 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           reviewError = error instanceof OpenAIAnalysisError
             ? error
             : new OpenAIAnalysisError('provider', 'OpenAI contextual review failed.')
-          openaiUsage.requests += scheduledReviewAttempts
-          openaiStages.review.requests += scheduledReviewAttempts
           addUsage(openaiUsage, reviewError.usage)
           addUsage(openaiStages.review, reviewError.usage)
           // A transient per-video rate limit/timeout must not disable review for
@@ -489,7 +485,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             16_000 + estimateTextTokens(normalizedTranscript.text),
             async () => {
               scheduledCoverageAttempts += 1
-              return reviewer.coverage(
+              return reviewerProvider.coverage(
                 normalizedTranscript,
                 resolvedLanguage,
                 enabledCategories,
