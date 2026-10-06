@@ -37,12 +37,11 @@ import {
   OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisError,
-  OpenAIAnalysisProvider,
   type OpenAICoverageResult,
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
-import { BatchedOpenAIAnalyzer, estimateTextTokens } from '../services/openai-batched-analyzer'
-import { BatchedOpenAIReviewer } from '../services/openai-batched-reviewer'
+import { estimateTextTokens } from '../services/openai-batched-analyzer'
+import { createOpenAIAnalysisStack } from '../services/openai-analysis-stack'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
