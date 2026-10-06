@@ -65,7 +65,7 @@ describe('BatchedOpenAIAnalyzer', () => {
     expect(estimateTextTokens('こんにちは')).toBeGreaterThan(estimateTextTokens('hello'))
   })
 
-  it('coalesces ten short videos into one provider request', async () => {
+  it('splits ten short videos into two five-item provider requests by default', async () => {
     const { provider, analyzeBatch } = fakeProvider()
     const scheduler = new ProviderScheduler({ concurrency: 5, maxRetries: 0 })
     const analyzer = new BatchedOpenAIAnalyzer(provider, scheduler, {
@@ -73,6 +73,7 @@ describe('BatchedOpenAIAnalyzer', () => {
       chunkMaxEstimatedTokens: 30_000,
       batchMaxEstimatedTokens: 70_000,
       batchConcurrency: 2,
+      batchMaxItems: 5,
       estimatedPromptTokens: 1,
     })
 
@@ -80,11 +81,11 @@ describe('BatchedOpenAIAnalyzer', () => {
       analyzer.analyze(transcript(`video-${index}`), 'any', ['violence'], false),
     ))
 
-    expect(analyzeBatch).toHaveBeenCalledTimes(1)
-    expect(analyzeBatch.mock.calls[0]?.[0]).toHaveLength(10)
-    expect(results.reduce((sum, result) => sum + result.requestCount, 0)).toBe(1)
-    expect(results.reduce((sum, result) => sum + result.usage.inputTokens, 0)).toBe(1_000)
-    expect(results.reduce((sum, result) => sum + result.usage.totalTokens, 0)).toBe(1_100)
+    expect(analyzeBatch).toHaveBeenCalledTimes(2)
+    expect(analyzeBatch.mock.calls.map((call) => call[0].length)).toEqual([5, 5])
+    expect(results.reduce((sum, result) => sum + result.requestCount, 0)).toBe(2)
+    expect(results.reduce((sum, result) => sum + result.usage.inputTokens, 0)).toBe(2_000)
+    expect(results.reduce((sum, result) => sum + result.usage.totalTokens, 0)).toBe(2_200)
   })
 
   it('splits a long transcript while preserving original segment indexes', () => {

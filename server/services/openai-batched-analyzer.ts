@@ -19,6 +19,7 @@ export interface BatchedAnalyzerOptions {
   chunkOverlapMs?: number
   coalesceMs?: number
   batchConcurrency?: number
+  batchMaxItems?: number
   estimatedPromptTokens?: number
 }
 
@@ -135,14 +136,21 @@ export function transcriptChunks(
   return chunks
 }
 
-function packChunks(chunks: TranscriptChunk[], batchMaxEstimatedTokens: number): TranscriptChunk[][] {
+function packChunks(
+  chunks: TranscriptChunk[],
+  batchMaxEstimatedTokens: number,
+  batchMaxItems: number,
+): TranscriptChunk[][] {
   const batches: TranscriptChunk[][] = []
   let current: TranscriptChunk[] = []
   let currentTokens = 0
 
   for (const chunk of chunks) {
     const wouldOverflow = current.length > 0
-      && (currentTokens + chunk.estimatedTokens > batchMaxEstimatedTokens || current.length >= 32)
+      && (
+        currentTokens + chunk.estimatedTokens > batchMaxEstimatedTokens
+        || current.length >= batchMaxItems
+      )
     if (wouldOverflow) {
       batches.push(current)
       current = []
@@ -251,6 +259,7 @@ export class BatchedOpenAIAnalyzer {
   private readonly chunkOverlapMs: number
   private readonly coalesceMs: number
   private readonly batchConcurrency: number
+  private readonly batchMaxItems: number
   private readonly estimatedPromptTokens: number
   private readonly pending: PendingJob[] = []
   private timer?: ReturnType<typeof setTimeout>
@@ -269,6 +278,7 @@ export class BatchedOpenAIAnalyzer {
     this.chunkOverlapMs = Math.max(0, Math.floor(options.chunkOverlapMs ?? 90_000))
     this.coalesceMs = Math.max(0, Math.floor(options.coalesceMs ?? 100))
     this.batchConcurrency = positive(options.batchConcurrency, 2)
+    this.batchMaxItems = Math.min(32, positive(options.batchMaxItems, 5))
     this.estimatedPromptTokens = positive(options.estimatedPromptTokens, 12_000)
   }
 
@@ -329,7 +339,11 @@ export class BatchedOpenAIAnalyzer {
       this.chunkMaxEstimatedTokens,
       this.chunkOverlapMs,
     ))
-    const batches = packChunks(chunks, this.batchMaxEstimatedTokens)
+    const batches = packChunks(
+      chunks,
+      this.batchMaxEstimatedTokens,
+      this.batchMaxItems,
+    )
 
     try {
       const perBatch = await mapWithConcurrency(
