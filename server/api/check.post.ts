@@ -249,28 +249,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
   )
   const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
-  const detectorProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
-  const batchedAnalyzer = new BatchedOpenAIAnalyzer(detectorProvider, openAIRequestScheduler, {
-    chunkMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_MAX_ESTIMATED_TOKENS', 30_000),
-    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
-    batchMaxItems: positiveIntegerEnv('OPENAI_DETECTOR_BATCH_MAX_ITEMS', 5),
-    chunkOverlapMs: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_OVERLAP_MS', 90_000),
-    coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
-    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
+  const analysisStack = createOpenAIAnalysisStack({
+    apiKey: openaiApiKey,
+    detectorModel: openaiModel,
+    reviewerModel: openaiReviewModel,
+    scheduler: openAIRequestScheduler,
+    batchingEnabled,
+    reasoningEffort: 'low',
     onSchedulerTiming: recordSchedulerTiming,
   })
-  const analyzer = batchingEnabled ? batchedAnalyzer : detectorProvider
-  const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
-  const batchedReviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
-    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
-    batchMaxItems: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ITEMS', 4),
-    batchMaxCandidates: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_CANDIDATES', 24),
-    batchMaxScenes: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_SCENES', 8),
-    coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
-    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 2),
-    onSchedulerTiming: recordSchedulerTiming,
-  })
-  const reviewer = batchingEnabled ? batchedReviewer : reviewerProvider
+  const { analyzer, reviewer, reviewerProvider } = analysisStack
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
