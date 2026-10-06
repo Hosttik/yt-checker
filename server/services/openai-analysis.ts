@@ -1284,9 +1284,12 @@ export class OpenAIAnalysisProvider {
               : undefined,
             sceneId: event.sceneId ? `${item.itemId}:${event.sceneId}` : undefined,
           }))
-        const rejectedCandidates = diagnostic && 'rejectedCandidates' in item
-          ? materializeRejectedCandidates(item.rejectedCandidates, source.transcript, enabledCategories)
-              .map((candidate) => ({
+        const rejectedCandidates = diagnostic
+          ? materializeRejectedCandidates(
+              diagnosticAnalysisBatchItemSchema.parse(item).rejectedCandidates,
+              source.transcript,
+              enabledCategories,
+            ).map((candidate) => ({
                 ...candidate,
                 candidateId: `${item.itemId}:${candidate.candidateId}`,
                 sceneId: candidate.sceneId ? `${item.itemId}:${candidate.sceneId}` : undefined,
