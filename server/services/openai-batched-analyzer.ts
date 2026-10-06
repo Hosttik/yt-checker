@@ -271,7 +271,7 @@ export class BatchedOpenAIAnalyzer {
     private readonly scheduler: ProviderScheduler,
     private readonly options: BatchedAnalyzerOptions = {},
   ) {
-    this.chunkMaxEstimatedTokens = positive(this.this.options.chunkMaxEstimatedTokens, 30_000)
+    this.chunkMaxEstimatedTokens = positive(this.options.chunkMaxEstimatedTokens, 30_000)
     this.batchMaxEstimatedTokens = Math.max(
       this.chunkMaxEstimatedTokens,
       positive(this.options.batchMaxEstimatedTokens, 70_000),
