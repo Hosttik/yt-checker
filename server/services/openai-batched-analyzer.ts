@@ -2,7 +2,7 @@ import type { OpenAIUsage } from '../../shared/types/check'
 import type { ClassifiedContentEvent, ContentCategory, RejectedContentCandidate } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 import { mapWithConcurrency } from '../utils/concurrency'
-import type { ProviderScheduler } from '../utils/provider-scheduler'
+import type { ProviderScheduler, ProviderSchedulerTiming } from '../utils/provider-scheduler'
 import {
   OPENAI_PROMPT_VERSION,
   OPENAI_SCHEMA_VERSION,
@@ -21,6 +21,7 @@ export interface BatchedAnalyzerOptions {
   batchConcurrency?: number
   batchMaxItems?: number
   estimatedPromptTokens?: number
+  onSchedulerTiming?: (timing: ProviderSchedulerTiming) => void
 }
 
 interface TranscriptChunk {
@@ -268,18 +269,18 @@ export class BatchedOpenAIAnalyzer {
   constructor(
     private readonly provider: OpenAIAnalysisProvider,
     private readonly scheduler: ProviderScheduler,
-    options: BatchedAnalyzerOptions = {},
+    private readonly options: BatchedAnalyzerOptions = {},
   ) {
-    this.chunkMaxEstimatedTokens = positive(options.chunkMaxEstimatedTokens, 30_000)
+    this.chunkMaxEstimatedTokens = positive(this.this.options.chunkMaxEstimatedTokens, 30_000)
     this.batchMaxEstimatedTokens = Math.max(
       this.chunkMaxEstimatedTokens,
-      positive(options.batchMaxEstimatedTokens, 70_000),
+      positive(this.options.batchMaxEstimatedTokens, 70_000),
     )
-    this.chunkOverlapMs = Math.max(0, Math.floor(options.chunkOverlapMs ?? 90_000))
-    this.coalesceMs = Math.max(0, Math.floor(options.coalesceMs ?? 100))
-    this.batchConcurrency = positive(options.batchConcurrency, 2)
-    this.batchMaxItems = Math.min(32, positive(options.batchMaxItems, 5))
-    this.estimatedPromptTokens = positive(options.estimatedPromptTokens, 12_000)
+    this.chunkOverlapMs = Math.max(0, Math.floor(this.options.chunkOverlapMs ?? 90_000))
+    this.coalesceMs = Math.max(0, Math.floor(this.options.coalesceMs ?? 100))
+    this.batchConcurrency = positive(this.options.batchConcurrency, 2)
+    this.batchMaxItems = Math.min(32, positive(this.options.batchMaxItems, 5))
+    this.estimatedPromptTokens = positive(this.options.estimatedPromptTokens, 12_000)
   }
 
   analyze(
@@ -365,6 +366,7 @@ export class BatchedOpenAIAnalyzer {
               scheduledAttempts += 1
               return this.provider.analyzeBatch(input, categories, diagnostic)
             },
+            this.options.onSchedulerTiming,
           )
           const byId = new Map(response.items.map((item) => [item.itemId, item]))
           const usages = distributeUsage(response.usage, batch.map((chunk) => chunk.estimatedTokens))
