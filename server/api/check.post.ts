@@ -278,6 +278,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     reviewModel: openaiReviewModel,
     reasoningEffort: 'low',
     batchingEnabled,
+    analysisManifest: {
+      detectorPromptVersion: OPENAI_PROMPT_VERSION,
+      detectorSchemaVersion: OPENAI_SCHEMA_VERSION,
+      reviewerPromptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+      reviewerSchemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+      coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
+      coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
+      coverageEnabled: diagnosticAnalysis,
+      batching: analysisStack.manifest,
+    },
   })
 
   let latest: Awaited<ReturnType<TranscriptApiClient['getLatestVideos']>>
@@ -934,6 +944,21 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       ),
       reviewFallbackRequests,
       coverageRequests,
+    },
+    analysisManifest: {
+      detectorModel: openaiModel,
+      reviewerModel: openaiReviewModel,
+      reasoningEffort: 'low',
+      profile,
+      requestedLanguage: languagePriority || 'auto',
+      detectorPromptVersion: OPENAI_PROMPT_VERSION,
+      detectorSchemaVersion: OPENAI_SCHEMA_VERSION,
+      reviewerPromptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+      reviewerSchemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+      coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
+      coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
+      coverageEnabled: diagnosticAnalysis,
+      batching: analysisStack.manifest,
     },
     timings: {
       totalMs: Date.now() - scanStartedAt,
