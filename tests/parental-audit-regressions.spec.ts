@@ -127,6 +127,20 @@ function reviewedFantasyCombat(id: string): ContentEvent {
 }
 
 describe('parental audit regressions', () => {
+  it.each(['repeated', 'single'] as const)('shows confirmed distress at moderate attention only with supported repetition: %s', repetition => {
+    const classified: ClassifiedContentEvent = {
+      ...scaryEvent(verifiedReview({ recommendedParentRelevance: 'moderate', distress: 'clear', repetition,
+        duration: 'brief', intent: 'unclear', consequence: 'none' })),
+      category: 'scary_and_disturbing', subtype: 'disturbing_theme', severity: 'medium',
+      confidence: 0.98, evidenceStrength: 'explicit',
+      details: { fearIntensity: 'moderate', themePresent: true, threatPresent: false, supernatural: false },
+    }
+    const event = applyContentPolicy(classified, 'distress', 'normal')
+    const scene = buildPresentationScenes([event])[0]!
+    expect(scene.level).toBe('moderate')
+    expect(scene.attention).toBe(repetition === 'repeated' ? 'main' : 'details')
+  })
+
   it('does not use an uncertain headline for a verified scene at the same relevance', () => {
     const verified = reviewedInsult('verified')
     const pending = reviewedInsult('pending')

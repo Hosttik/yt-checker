@@ -21,7 +21,8 @@
     "eval:parental-quality:cross-channel": "QUALITY_REASONING_EFFORT=low QUALITY_RUNS=1 QUALITY_DISCOVER_SCANS=1 QUALITY_UNIQUE_CHANNELS=1 QUALITY_MAX_SCANS=5 QUALITY_MAX_VIDEOS_PER_SCAN=10 QUALITY_MAX_VIDEOS=50 QUALITY_ALLOW_UNANNOTATED=1 RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
     "eval:parental-quality:detector-batch1": "OPENAI_DETECTOR_BATCH_MAX_ITEMS=1 QUALITY_ORDER_MODE=rotate QUALITY_RUNS=5 npm run eval:parental-quality",
     "eval:parental-quality:detector-batch5": "OPENAI_DETECTOR_BATCH_MAX_ITEMS=5 QUALITY_ORDER_MODE=rotate QUALITY_RUNS=5 npm run eval:parental-quality",
-    "eval:detector-stability": "RUN_DETECTOR_STABILITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/detector-stability.spec.ts"
+    "eval:detector-stability": "RUN_DETECTOR_STABILITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/detector-stability.spec.ts",
+    "eval:coverage-replay": "RUN_COVERAGE_REPLAY=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/coverage-replay.spec.ts"
   },
   "dependencies": {
     "nuxt": "^4.0.0",

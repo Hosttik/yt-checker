@@ -38,6 +38,10 @@ interface OpenAIDiagnosticEntry {
     error?: { type: string; status?: number; code?: string; message: string }
   }
   coverage?: {
+    verificationComplete?: boolean
+    verificationRequestCount?: number
+    verification?: OpenAIReviewResult
+    verificationError?: OpenAICoverageResult['verificationError']
     requestMetadata?: OpenAICoverageResult['requestMetadata']
     provider?: OpenAICoverageResult['provider']
     usage?: OpenAICoverageResult['usage']
@@ -121,6 +125,10 @@ export class ScanStorage {
         : undefined,
       coverage: coverageResult || coverageError
         ? {
+            verificationComplete: coverageResult?.verificationComplete,
+            verificationRequestCount: coverageResult?.verificationRequestCount,
+            verification: coverageResult?.verification,
+            verificationError: coverageResult?.verificationError,
             requestMetadata: coverageResult?.requestMetadata,
             provider: coverageResult?.provider ?? coverageError?.provider,
             usage: coverageResult?.usage ?? coverageError?.usage,

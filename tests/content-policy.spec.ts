@@ -1,3 +1,4 @@
+import { notReviewedReview } from '../server/domain/content-review-state'
 import { describe, expect, it } from 'vitest'
 import type { ClassifiedContentEvent, ContentEvent } from '../shared/types/content'
 import { applyContentPolicy } from '../server/domain/content-policy'
@@ -192,6 +193,7 @@ describe('deterministic content policy', () => {
     }), 'event_rails', 'normal')
 
     expect(event.parentRelevance).toBe('high')
+    event.review = { ...notReviewedReview('Verified life-threatening scene fixture.'), status: 'confirmed', evidenceSufficiency: 'sufficient' }
     const channel = buildChannelCategoryReports(
       [{ videoId: 'one', events: [event] }],
       ['violence'],
@@ -362,7 +364,8 @@ describe('multi-label presentation and aggregation', () => {
 
     expect(channel?.rawAffectedVideos).toBe(10)
     expect(channel?.affectedVideos).toBe(3)
-    expect(channel?.level).toBe('low')
+    expect(channel?.level).toBe('none')
+    expect(channel?.pendingReviewVideos).toBe(3)
   })
 
   it('does not escalate many hidden minimal weapon mentions into a worse normal report', () => {

@@ -238,6 +238,25 @@ function overlapRatio(a: DraftScene, b: DraftScene): number {
   return overlap / shorter
 }
 
+function reviewedRolesConflict(left: ContentEvent[], right: ContentEvent[]): boolean {
+  const established = (event: ContentEvent) => event.review
+    && (event.review.status === 'confirmed' || event.review.status === 'corrected')
+    && event.review.evidenceSufficiency === 'sufficient'
+  return left.some(a => right.some(b => {
+    if (!established(a) || !established(b)) return false
+    const actorA = normalizedReviewValue(a.review?.actor)
+    const actorB = normalizedReviewValue(b.review?.actor)
+    const targetA = normalizedReviewValue(a.review?.target)
+    const targetB = normalizedReviewValue(b.review?.target)
+    const reversed = actorA && targetA && actorA !== targetA && actorA === targetB && targetA === actorB
+    const hostile = (event: ContentEvent) => event.review?.intent === 'aggressive' || event.review?.intent === 'coercive'
+    const helpful = (event: ContentEvent) => ['benign', 'rescue', 'protective', 'utility'].includes(event.review?.intent ?? '')
+    const oppositeIntent = (helpful(a) && hostile(b)) || (helpful(b) && hostile(a))
+    // Preserve changes of roles/purpose even if the model reused one broad scene.
+    return Boolean(reversed || (oppositeIntent && actorA && actorA === actorB))
+  }))
+}
+
 function mergeOverlappingScenes(scenes: DraftScene[]): DraftScene[] {
   const merged: DraftScene[] = []
 
@@ -245,6 +264,7 @@ function mergeOverlappingScenes(scenes: DraftScene[]): DraftScene[] {
     const match = merged.find((candidate) =>
       !candidate.originSceneIds.some((origin) => scene.originSceneIds.includes(origin))
       && scenesAreCompatible(candidate, scene)
+      && !reviewedRolesConflict(candidate.events, scene.events)
       && overlapRatio(candidate, scene) >= 0.4,
     )
 
@@ -297,7 +317,8 @@ function sceneHasDirectedCoercion(scene: DraftScene): boolean {
 function scenesBelongToSameStoryArc(a: DraftScene, b: DraftScene): boolean {
   const STORY_ARC_GAP_MS = 90_000
   const gap = b.contextStartMs - a.contextEndMs
-  if (gap < 0 || gap > STORY_ARC_GAP_MS || !scenesAreCompatible(a, b)) return false
+  if (gap < 0 || gap > STORY_ARC_GAP_MS || !scenesAreCompatible(a, b)
+    || reviewedRolesConflict(a.events, b.events)) return false
 
   const sameActor = scenesShareReviewValue(a, b, 'actor')
   const sameTarget = scenesShareReviewValue(a, b, 'target')
@@ -439,12 +460,8 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
 
 function eventEvidenceStatus(event: ContentEvent): 'verified' | 'uncertain' | 'unreviewed' {
   const review = event.review
-  // Final production events now carry an explicit not_reviewed state on
-  // reviewer degradation. Missing review is kept as a backwards-compatible
-  // established state for legacy fixtures/one-pass diagnostics.
-  if (review?.status === 'not_reviewed') return 'unreviewed'
+  if (!review || review.status === 'not_reviewed') return 'unreviewed'
   if (event.confidence < 0.55 || event.evidenceStrength === 'weak_context') return 'uncertain'
-  if (!review) return 'verified'
   if (review.status === 'uncertain' || review.evidenceSufficiency !== 'sufficient') return 'uncertain'
   return 'verified'
 }
@@ -520,7 +537,8 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
         continue
       }
       const currentEnd = Math.max(...current.map(eventEvidenceEnd))
-      if (eventEvidenceStart(event) <= currentEnd + MAX_SCENE_GAP_MS) current.push(event)
+      if (eventEvidenceStart(event) <= currentEnd + MAX_SCENE_GAP_MS
+        && !reviewedRolesConflict(current, [event])) current.push(event)
       else clusters.push([event])
     }
 
@@ -631,29 +649,32 @@ export function buildChannelCategoryReports(
       // Category concern must come from that category's own evidence and
       // relevance, not a serious neighbouring label in a multi-label scene.
       const categoryScenes = buildPresentationScenes(categoryEvents)
-      return { videoId, events: categoryEvents, scenes: categoryScenes }
+      return {
+        videoId, events: categoryEvents, scenes: categoryScenes,
+        verifiedScenes: buildPresentationScenes(categoryEvents.filter(event => eventEvidenceStatus(event) === 'verified')),
+        pendingScenes: buildPresentationScenes(categoryEvents.filter(event => eventEvidenceStatus(event) !== 'verified')),
+      }
     })
     const raw = perVideo.flatMap((item) => item.events)
     const displayed = raw.filter((event) => event.displayLevel !== 'hidden')
-    const displayedScenes = perVideo.flatMap((item) => item.scenes)
-    const verifiedScenes = displayedScenes.filter((scene) => scene.evidenceStatus === 'verified')
+    const verifiedScenes = perVideo.flatMap(item => item.verifiedScenes)
     const verifiedMainScenes = verifiedScenes.filter((scene) => scene.attention === 'main')
-    const pendingReviewScenes = displayedScenes.filter((scene) => scene.evidenceStatus !== 'verified')
+    const pendingReviewScenes = perVideo.flatMap(item => item.pendingScenes)
 
     const rawAffectedVideos = perVideo.filter((item) => item.events.length > 0).length
     const affectedVideos = perVideo.filter((item) => item.scenes.length > 0).length
     const highlightedVideos = perVideo.filter((item) =>
-      item.scenes.some((scene) =>
+      item.verifiedScenes.some((scene) =>
         scene.attention === 'main'
         && scene.evidenceStatus === 'verified'
         && scene.level === 'high',
       ),
     ).length
     const pendingReviewVideos = perVideo.filter((item) =>
-      item.scenes.some((scene) => scene.evidenceStatus !== 'verified'),
+      item.pendingScenes.length > 0,
     ).length
     const moderatePlusAffectedVideos = perVideo.filter((item) =>
-      item.scenes.some((scene) =>
+      item.verifiedScenes.some((scene) =>
         scene.attention === 'main'
         && scene.evidenceStatus === 'verified'
         && (scene.level === 'moderate' || scene.level === 'high'),

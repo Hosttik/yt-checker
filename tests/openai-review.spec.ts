@@ -299,7 +299,7 @@ describe('OpenAI contextual reviewer', () => {
     const request = parse.mock.calls[0]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
     const developerText = request.input?.find((item) => item.role === 'developer')?.content[0]?.text ?? ''
     const userText = request.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
-    expect(developerText).toContain('dedicated HIGH-PRIORITY coverage pass')
+    expect(developerText).toContain('dedicated PARENT-ATTENTION coverage pass')
     expect(developerText).toContain('For a Russian transcript')
     expect(developerText).toContain('must be natural Russian, not English')
     expect(userText).toContain('Covered direct-evidence segment indexes: [0]')
@@ -312,7 +312,7 @@ describe('OpenAI contextual reviewer', () => {
       subtype: 'violent_threat',
       review: {
         status: 'confirmed',
-        recommendedParentRelevance: 'high',
+        recommendedParentRelevance: 'moderate',
         evidenceSufficiency: 'sufficient',
         intent: 'coercive',
       },

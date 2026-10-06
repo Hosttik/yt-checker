@@ -13,14 +13,15 @@ import type {
   RejectedContentCandidate,
 } from '../../shared/types/content'
 import { CONTENT_CATEGORIES } from '../../shared/types/content'
+import { markEventsNotReviewed } from '../domain/content-review-state'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
 export const OPENAI_PROMPT_VERSION = '2026-10-06.content-events-batch-v9'
 export const OPENAI_SCHEMA_VERSION = '10'
-export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-06.parent-scene-review-v9'
+export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-06.parent-scene-review-v10'
 export const OPENAI_REVIEW_SCHEMA_VERSION = '5'
-export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-06.high-priority-coverage-v2'
-export const OPENAI_COVERAGE_SCHEMA_VERSION = '1'
+export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-06.parent-attention-coverage-v3'
+export const OPENAI_COVERAGE_SCHEMA_VERSION = '2'
 
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high'
 
@@ -312,7 +313,7 @@ const missedHighPriorityEventSchema = z.object({
   narrativeFraming: z.enum(['discouraged', 'neutral', 'humorous', 'endorsed', 'unclear']),
   parentSummary: z.string().min(1).max(320),
   mitigatingContext: z.string().min(1).max(280).nullable(),
-  highPriorityReason: z.string().min(1).max(280),
+  highPriorityReason: z.string().min(1).max(280).nullable(),
   rationale: z.string().min(1).max(500),
 })
 
@@ -461,6 +462,7 @@ Use high selectively. Ordinary game pursuit, routine monster combat, news that m
 
 Calibrate relevance from the whole scene: actions and participants, who acts against whom, intent/coercion, consequences, expressed fear/distress, intensity, duration, repetition, fictional/game/real context, narrative stance when evidenced, and evidence sufficiency.
 A one-off mild tease such as calling characters "глупые и наивные" is normally low/minimal unless it participates in a sustained pattern of humiliation, especially where the target suffers or asks for it to stop. Repeated mild mockery can describe communication style without becoming a severe warning.
+A repeated unwanted action despite clear pleas to stop can merit moderate attention without physical injury. If the transcript supports distress but no physical harm/danger, correct a violence/dangerous_situation hypothesis to scary_and_disturbing/disturbing_theme with fearIntensity=moderate, themePresent=true and threatPresent=false when that category is enabled; do not invent harm. violence/dangerous_situation with harmLevel=none is invalid. Repeated distress must be supported by the surrounding action, not inferred from an isolated "stop" or a request to end a harmless performance. Use low/minimal if the context only establishes ordinary play or mild teasing.
 Threats, coercion and bullying should remain parent-visible when supported. A weapon used for rescue or ordinary utility, and routine construction/demolition without danger or aggression, are normally minimal. Characters tied to rails in front of an approaching train remain highly relevant even in a game. Do not lower a supported weapon threat merely because the corrected subtype is dangerous_situation rather than violent_threat: relevance follows scene facts, not taxonomy wording.
 
 Do not convert frequency into severity. Do not convert confidence into relevance. Do not treat game/fiction context as automatic dismissal.
@@ -469,9 +471,9 @@ For uncertain findings, prefer a restrained description and low/details relevanc
 The supplied transcript context may contain gaps between local scene windows. Do not interpret a gap as missing speech inside a shown scene. Coverage is handled by a separate dedicated pass over the full transcript. In this contextual-review response always return missedHighPriorityEvents as an empty array.
 `
 
-export const OPENAI_COVERAGE_SYSTEM_PROMPT = `You perform a dedicated HIGH-PRIORITY coverage pass for a parental YouTube content checker.
+export const OPENAI_COVERAGE_SYSTEM_PROMPT = `You perform a dedicated PARENT-ATTENTION coverage pass for a parental YouTube content checker.
 
-Your only job is recall of serious parent-relevant events that an earlier detector/reviewer did not already cover. This is not a general detector and not a summary.
+Your only job is recall of concrete parent-relevant scenes that an earlier detector/reviewer did not already cover. This is not a general detector and not a summary.
 
 Rules:
 - Analyze only enabled categories.
@@ -479,11 +481,12 @@ Rules:
 - Return at most 8 missedHighPriorityEvents.
 - Every returned event must have sufficient direct transcript evidence using 1-6 evidenceSegments.
 - Prefer no result over a weak or speculative result.
-- Do not return routine game combat, ordinary pursuit/fright, mild insults, non-targeted weapon presence, property-only destruction, merely reported/hypothetical danger, or other ordinary moderate/low material.
+- Do not return routine game combat, ordinary pursuit/fright, mild insults, non-targeted weapon presence, property-only destruction, merely reported/hypothetical danger, or other low-value material. A request to stop alone is not evidence of danger.
+- Also look for sustained or repeated unwanted actions directed at a character who clearly asks for help or asks the actor to stop, while the surrounding speech establishes continuation, repetition or coercion. These can merit moderate attention even without injury or a lethal threat. Describe the unwanted action and distress without inventing harm, cruelty or a physical attack. Distinguish a passing exclamation, consensual play, and an action that actually stops.
 - Strong candidates include directed coercion with threatened harm, immediate potentially lethal peril with helpless targets, directed weapon threats/attacks, severe actual harm, explicit severe sexual/self-harm/substance/gambling content, or comparably strong facts.
 - coveredEvidenceSegments identifies direct evidence already represented by accepted/reviewed events. Never return an event whose direct evidence materially overlaps those covered segments.
 - Same actors or same broader story arc do NOT make a later distinct event a duplicate. A later explicit threat/coercive condition with different direct evidence is eligible.
-- parentRelevance may be moderate or high when facts are serious but borderline; the server independently validates structural seriousness and will reject weak rescue candidates.
+- parentRelevance=moderate for supported repeated distress without exceptional danger; high requires a concrete escalation. highPriorityReason must be null for moderate. Your outputs are hypotheses: a separate reviewer will verify/correct/reject them before they are treated as verified.
 - Write every human-readable field in the transcript language. For a Russian transcript, event.reason, actor, target, parentSummary, mitigatingContext, highPriorityReason and rationale must be natural Russian, not English.
 - Use the same event taxonomy and evidence discipline as the detector. event.reason must be supported by event.evidenceSegments themselves.
 `
@@ -532,6 +535,10 @@ function reviewDecisionSemanticFields(item: z.infer<typeof reviewItemSchema>) {
 }
 
 export interface OpenAICoverageResult {
+  verificationComplete?: boolean
+  verificationRequestCount?: number
+  verificationError?: { type: AnalysisErrorType; message: string }
+  verification?: OpenAIReviewResult
   rescuedEvents: ClassifiedContentEvent[]
   rescuedCandidates: number
   rejectedCandidates: number
@@ -916,12 +923,18 @@ function coverageRescueIsStructurallySerious(
     return false
   }
 
+  const repeatedDirectedDistress = (item.distress === 'clear' || item.distress === 'strong')
+    && (item.repetition === 'repeated' || item.repetition === 'pattern' || item.duration === 'sustained')
+    && item.aggressionDirection === 'actor_to_target'
+    && (item.intent === 'aggressive' || item.intent === 'coercive' || item.intent === 'unclear')
+  if (repeatedDirectedDistress && (event.category === 'scary_and_disturbing'
+    || event.category === 'violence' || event.category === 'insults')) return true
+
   const seriousConsequence = item.consequence === 'threatened_harm'
     || item.consequence === 'injury_or_severe_harm'
     || item.consequence === 'death'
-  if (!seriousConsequence) return false
-
   if (event.category === 'violence') {
+    if (!seriousConsequence) return false
     const directedTarget = event.details.targetType === 'person'
       || event.details.targetType === 'human_like_character'
       || event.details.targetType === 'animal'
@@ -968,7 +981,7 @@ function coverageRescueIsStructurallySerious(
 function coverageReview(item: z.infer<typeof missedHighPriorityEventSchema>, transcript: NormalizedTranscript): ContentEventReview {
   return {
     status: 'confirmed',
-    recommendedParentRelevance: 'high',
+    recommendedParentRelevance: item.parentRelevance,
     evidenceSufficiency: 'sufficient',
     contextRanges: materializeContextRanges(item.contextSegments, transcript),
     actor: item.actor ?? undefined,
@@ -982,7 +995,7 @@ function coverageReview(item: z.infer<typeof missedHighPriorityEventSchema>, tra
     narrativeFraming: item.narrativeFraming,
     parentSummary: item.parentSummary,
     mitigatingContext: item.mitigatingContext ?? undefined,
-    highPriorityReason: item.highPriorityReason,
+    highPriorityReason: item.highPriorityReason ?? undefined,
     rationale: item.rationale,
   }
 }
@@ -2237,6 +2250,49 @@ export class OpenAIAnalysisProvider {
             }
       }
       throw safeError
+    }
+  }
+
+  /** Coverage proposes hypotheses; a separate local review decides what survives. */
+  async verifiedCoverage(
+    transcript: NormalizedTranscript,
+    language: string,
+    enabledCategories: ContentCategory[],
+    existingEvents: ClassifiedContentEvent[],
+    schedule: <T>(task: () => Promise<T>) => Promise<T> = task => task(),
+  ): Promise<OpenAICoverageResult> {
+    const started = performance.now()
+    const proposal = await schedule(() => this.coverage(transcript, language, enabledCategories, existingEvents))
+    if (proposal.rescuedEvents.length === 0) return { ...proposal, verificationComplete: true, verificationRequestCount: 0 }
+    // Do not prime the second reviewer with coverage's self-assigned confirmed/high.
+    const candidates = proposal.rescuedEvents.map(({ review: _review, ...event }) => event as ClassifiedContentEvent)
+    try {
+      const verification = await schedule(() => this.review(transcript, language, enabledCategories, candidates))
+      const events = verification.reviewedEvents.filter(event => !rescueDuplicatesKnownCandidate(event, existingEvents))
+      return {
+        ...proposal,
+        verification,
+        verificationRequestCount: verification.requestCount,
+        verificationComplete: verification.complete && verification.uncertainCandidates === 0,
+        rescuedEvents: events,
+        rescuedCandidates: events.length,
+        rejectedCandidates: proposal.rejectedCandidates + verification.rejectedCandidates,
+        requestCount: proposal.requestCount + verification.requestCount,
+        usage: mergedUsage(proposal.usage, verification.usage),
+        provider: { ...proposal.provider, latencyMs: Math.round(performance.now() - started) },
+      }
+    } catch (error) {
+      const failure = error instanceof OpenAIAnalysisError ? error : undefined
+      return {
+        ...proposal,
+        verificationComplete: false,
+        verificationRequestCount: failure?.requestCount || 1,
+        verificationError: { type: failure?.type ?? 'provider', message: 'Coverage verification failed.' },
+        rescuedEvents: markEventsNotReviewed(candidates, 'Coverage verification failed; this finding is unverified.'),
+        requestCount: proposal.requestCount + (failure?.requestCount || 1),
+        usage: mergedUsage(proposal.usage, failure?.usage),
+        provider: { ...proposal.provider, latencyMs: Math.round(performance.now() - started) },
+      }
     }
   }
 

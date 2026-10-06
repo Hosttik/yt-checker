@@ -80,7 +80,7 @@ describe('Audit: regression acceptance criteria', () => {
     } as ClassifiedContentEvent
     const videos = [0, 1, 2].map(id => ({ videoId: String(id), events: [applyContentPolicy(event, String(id), 'strict')] }))
     expect(videos.every(v => v.events[0]!.parentRelevance === 'minimal')).toBe(true)
-    expect(buildChannelCategoryReports(videos, ['violence'], 3, 'strict')[0]!.level).toBe('low')
+    expect(buildChannelCategoryReports(videos, ['violence'], 3, 'strict')[0]!.level).toBe('none')
   })
 
   it('reviewer can correct a mistaken hypothetical assertion into an actual attack', async () => {

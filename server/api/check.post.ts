@@ -41,7 +41,7 @@ import {
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
 import { estimateTextTokens } from '../services/openai-batched-analyzer'
-import { createOpenAIAnalysisStack } from '../services/openai-analysis-stack'
+import { createOpenAIAnalysisStack, coverageEnabledForProfile } from '../services/openai-analysis-stack'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
@@ -265,6 +265,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const enabledCategories = normalizeRequestedCategories(enabledRuleIds)
   const profile = request.profile as AnalysisProfile
   const diagnosticAnalysis = profile === 'diagnostic'
+  const coverageEnabled = coverageEnabledForProfile(profile)
 
   logger.info('scan.started', {
     storageMode,
@@ -285,7 +286,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       reviewerSchemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
       coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
       coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
-      coverageEnabled: diagnosticAnalysis,
+      coverageEnabled,
       batching: analysisStack.manifest,
     },
   })
@@ -539,22 +540,25 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         }
       }
 
-      if (diagnosticAnalysis && !reviewDisabledAfterFailure && !reviewError) {
+      if (coverageEnabled && !reviewDisabledAfterFailure) {
         let scheduledCoverageAttempts = 0
         try {
-          coverageResult = await timed(coverageIntervals, () => openAIRequestScheduler.run(
-            16_000 + estimateTextTokens(normalizedTranscript.text),
-            async () => {
-              scheduledCoverageAttempts += 1
-              return reviewerProvider.coverage(
-                normalizedTranscript,
-                resolvedLanguage,
-                enabledCategories,
-                reviewedEvents,
-              )
-            },
-            recordSchedulerTiming,
+          coverageResult = await timed(coverageIntervals, () => reviewerProvider.verifiedCoverage(
+            normalizedTranscript,
+            resolvedLanguage,
+            enabledCategories,
+            reviewedEvents,
+            task => openAIRequestScheduler.run(
+              16_000 + estimateTextTokens(normalizedTranscript.text),
+              async () => {
+                scheduledCoverageAttempts += 1
+                return task()
+              },
+              recordSchedulerTiming,
+            ),
           ))
+          // Include internal review retries in addition to scheduled calls.
+          scheduledCoverageAttempts += Math.max(0, (coverageResult.verificationRequestCount ?? 0) - 1)
           openaiUsage.requests += scheduledCoverageAttempts
           openaiStages.review.requests += scheduledCoverageAttempts
           coverageRequests += scheduledCoverageAttempts
@@ -568,9 +572,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           contentReview = {
             ...contentReview,
             coverageStatus: 'completed',
-            status: contentReview.status === 'not_needed' && coverageResult.rescuedCandidates > 0
-              ? 'completed'
-              : contentReview.status,
+            status: coverageResult.verificationComplete === false
+              ? 'partial'
+              : contentReview.status === 'not_needed' && coverageResult.rescuedCandidates > 0
+                ? 'completed'
+                : contentReview.status,
             rescuedCount: coverageResult.rescuedCandidates,
             rescueRejectedCount: coverageResult.rejectedCandidates,
             reviewRequestCount: (contentReview.reviewRequestCount ?? 0) + coverageResult.requestCount,
@@ -601,7 +607,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             status: contentReview.status === 'failed' || contentReview.status === 'skipped_after_failure'
               ? contentReview.status
               : 'partial',
-            coverageRequestCount: 1,
+            coverageRequestCount: scheduledCoverageAttempts,
             coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
             coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
             error: {
@@ -961,7 +967,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       reviewerSchemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
       coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
       coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
-      coverageEnabled: diagnosticAnalysis,
+      coverageEnabled,
       batching: analysisStack.manifest,
     },
     timings: {
@@ -993,7 +999,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: legacySummary,
     videos: videoResults,
     limitations: [
-      'Transcripts are split and coalesced into language-agnostic token-aware detector batches. Videos with detected candidates are contextually reviewed using local transcript windows; the additional coverage pass runs only in diagnostic profile, not in the normal production scan.',
+      'Transcripts are split and coalesced into language-agnostic token-aware detector batches. Videos with detected candidates are contextually reviewed using local transcript windows; the additional coverage pass runs in diagnostic profile or when OPENAI_COVERAGE_ENABLED=true, and its proposals undergo separate contextual review.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted

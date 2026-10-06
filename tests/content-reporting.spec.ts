@@ -1,3 +1,4 @@
+import { notReviewedReview } from '../server/domain/content-review-state'
 import { describe, expect, it } from 'vitest'
 import type { ContentEvent } from '../shared/types/content'
 import {
@@ -10,6 +11,7 @@ type ViolenceEvent = Extract<ContentEvent, { category: 'violence' }>
 
 function violenceEvent(overrides: Partial<ViolenceEvent> = {}): ViolenceEvent {
   return {
+    review: { ...notReviewedReview('Verified reporting fixture.'), status: 'confirmed', evidenceSufficiency: 'sufficient' },
     id: 'event-visible',
     sourceCandidateId: 'candidate-visible',
     sceneId: 'scene-visible',
@@ -41,6 +43,42 @@ function violenceEvent(overrides: Partial<ViolenceEvent> = {}): ViolenceEvent {
 }
 
 describe('content reporting', () => {
+  it.each(['shared scene', 'overlapping scenes', 'adjacent scenes'])('preserves actor/target reversal in %s', (mode) => {
+    const first = violenceEvent({
+      sceneId: 'first', sceneStartMs: 0, sceneEndMs: mode === 'adjacent scenes' ? 3000 : 20000,
+      review: { ...violenceEvent().review!, actor: 'Злодей', target: 'Житель', intent: 'coercive' },
+    })
+    const second = violenceEvent({
+      id: 'second', sceneId: mode === 'shared scene' ? 'first' : 'second', startMs: 6000, endMs: 7000,
+      sceneStartMs: mode === 'adjacent scenes' ? 5000 : 0, sceneEndMs: 20000,
+      review: { ...violenceEvent().review!, actor: 'Житель', target: 'Злодей', intent: 'aggressive' },
+    })
+    expect(buildPresentationScenes([first, second])).toHaveLength(2)
+  })
+
+  it('keeps verified concern and pending concern separate within one category and scene', () => {
+    const verified = violenceEvent({ parentRelevance: 'high', displayLevel: 'highlight' })
+    const pending = violenceEvent({ id: 'pending', review: undefined, parentRelevance: 'high', displayLevel: 'summary' })
+    const report = buildChannelCategoryReports([{ videoId: 'mixed', events: [verified, pending] }], ['violence'], 1, 'normal')[0]!
+    expect(report).toMatchObject({ level: 'high', pendingReviewVideos: 1, pendingReviewPeakConcern: 'high' })
+  })
+
+  it('separates a later rescue by the same actor from their earlier threat', () => {
+    const first = violenceEvent({ review: { ...violenceEvent().review!, actor: 'Страж', target: 'Житель', intent: 'coercive' } })
+    const second = violenceEvent({ id: 'rescue', startMs: 5000, endMs: 6000,
+      review: { ...violenceEvent().review!, actor: 'Страж', target: 'Житель', intent: 'rescue' } })
+    expect(buildPresentationScenes([first, second])).toHaveLength(2)
+  })
+
+  it('treats legacy findings without review metadata as unverified', () => {
+    const event = violenceEvent({ review: undefined, parentRelevance: 'high', displayLevel: 'highlight' })
+    expect(buildPresentationScenes([event])[0]?.evidenceStatus).toBe('unreviewed')
+    const report = buildChannelCategoryReports([{ videoId: 'legacy', events: [event] }], ['violence'], 1, 'normal')[0]!
+    expect(report.level).toBe('none')
+    expect(report.pendingReviewPeakConcern).toBe('high')
+    expect(report.pendingReviewVideos).toBe(1)
+  })
+
   it('does not let a hidden finding raise or leak into the visible category report', () => {
     const visible = violenceEvent()
     const hidden = violenceEvent({

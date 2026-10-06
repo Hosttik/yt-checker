@@ -35,13 +35,14 @@ import {
 import { estimateTextTokens } from '../server/services/openai-batched-analyzer'
 import {
   createOpenAIAnalysisStack,
+  coverageEnabledForProfile,
   openAIBatchingManifestFromEnv,
   type ContentAnalyzer,
   type ContentReviewer,
 } from '../server/services/openai-analysis-stack'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-06.production-timing-v18'
+const QUALITY_EVAL_VERSION = '2026-10-06.verified-coverage-v19'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -232,7 +233,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 18
+  version: 19
   key: string
   runOutputs: RunOutput[]
 }
@@ -654,13 +655,14 @@ async function runCurrent(
 
   if (coverageEnabled) {
     let scheduledCoverageAttempts = 0
-    const coverage = await scheduler.run(
-      16_000 + estimateTextTokens(record.transcript.text),
-      async () => {
+    const coverage = await coverageProvider.verifiedCoverage(
+      record.transcript, language, ALL_CATEGORIES, reviewed,
+      task => scheduler.run(16_000 + estimateTextTokens(record.transcript.text), async () => {
         scheduledCoverageAttempts += 1
-        return coverageProvider.coverage(record.transcript, language, ALL_CATEGORIES, reviewed)
-      },
+        return task()
+      }),
     )
+    scheduledCoverageAttempts += Math.max(0, (coverage.verificationRequestCount ?? 0) - 1)
     addUsage(usage, { ...coverage.usage, requests: scheduledCoverageAttempts })
     rescuedEvents = coverage.rescuedEvents
     rescuedCandidates = coverage.rescuedCandidates
@@ -880,7 +882,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       50,
       Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 1_000)),
     )
-    const coverageEnabled = process.env.QUALITY_ENABLE_COVERAGE === '1'
+    const coverageEnabled = process.env.QUALITY_ENABLE_COVERAGE === undefined
+      ? coverageEnabledForProfile('normal')
+      : process.env.QUALITY_ENABLE_COVERAGE === '1'
     const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
     const batchingManifest = openAIBatchingManifestFromEnv(batchingEnabled)
     const orderMode = process.env.QUALITY_ORDER_MODE ?? 'stable'
@@ -1012,7 +1016,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 18 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 19 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1180,7 +1184,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 18,
+          version: 19,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',

@@ -119,3 +119,8 @@ export type ContentReviewer = {
     events: Parameters<OpenAIAnalysisProvider['review']>[3],
   ): ReturnType<OpenAIAnalysisProvider['review']>
 }
+
+/** Normal-profile rollout is opt-in until recall and false warnings are measured. */
+export function coverageEnabledForProfile(profile: string): boolean {
+  return profile === 'diagnostic' || process.env.OPENAI_COVERAGE_ENABLED === 'true'
+}
