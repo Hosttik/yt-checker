@@ -18,6 +18,7 @@ import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../dom
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
 import { normalizeClassifiedEvents } from '../domain/content-normalization'
+import { markEventsNotReviewed } from '../domain/content-review-state'
 import { validateClassifiedEvents } from '../domain/content-validation'
 import {
   buildChannelCategoryReports,
@@ -128,10 +129,6 @@ function combinedUsage(...items: Array<OpenAIUsage | undefined>): OpenAIUsage {
   for (const item of items) addUsage(total, item)
   const { requests: _requests, ...usage } = total
   return usage
-}
-
-function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEvent[] {
-  return events.map((event) => ({ ...event, review: undefined }))
 }
 
 interface TimingInterval {
@@ -442,7 +439,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           uncertainCount: 0,
         }
       } else if (reviewDisabledAfterFailure) {
-        reviewedEvents = unreviewedEvents(firstPassEvents)
+        reviewedEvents = markEventsNotReviewed(firstPassEvents, 'Contextual review was skipped after an earlier reviewer failure in this scan.')
         contentReview = {
           status: 'skipped_after_failure',
           candidateCount: firstPassEvents.length,
@@ -520,7 +517,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           // the rest of a concurrent scan. Only an authentication failure is
           // systemic enough to stop scheduling more review requests.
           reviewDisabledAfterFailure = reviewError.type === 'authentication'
-          reviewedEvents = unreviewedEvents(firstPassEvents)
+          reviewedEvents = markEventsNotReviewed(firstPassEvents, 'Contextual review failed; the first-pass finding remains unverified.')
           contentReview = {
             status: 'failed',
             candidateCount: firstPassEvents.length,
