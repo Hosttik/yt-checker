@@ -139,6 +139,145 @@ describe('OpenAI scene-level batch review', () => {
     expect(userText).toContain('video_review_1')
   })
 
+  it('keeps threat and rescue phases candidate-specific inside one broad scene', async () => {
+    const parse = vi.fn().mockResolvedValue({
+      id: 'resp_scene_phases',
+      status: 'completed',
+      output_text: '{}',
+      output_parsed: {
+        items: [{
+          itemId: 'video',
+          scenes: [sceneOutput([
+            {
+              reviewItemId: 'video_review_0',
+              verdict: 'confirmed',
+              event: null,
+              parentRelevance: 'high',
+              evidenceSufficiency: 'sufficient',
+              actor: 'читер',
+              target: 'жители',
+              aggressionDirection: 'actor_to_target',
+              intent: 'coercive',
+              distress: 'strong',
+              consequence: 'threatened_harm',
+              duration: 'sustained',
+              repetition: 'single',
+              narrativeFraming: 'discouraged',
+              parentSummary: 'Читер удерживает жителей и угрожает им.',
+              mitigatingContext: null,
+              highPriorityReason: 'Жителей принуждают угрозой серьёзного вреда.',
+              rationale: 'Threat phase is supported.',
+            },
+            {
+              reviewItemId: 'video_review_1',
+              verdict: 'corrected',
+              event: {
+                candidateId: 'candidate_rescue',
+                sceneId: 'shared_scene',
+                category: 'violence',
+                subtype: 'dangerous_situation',
+                severity: 'low',
+                context: 'game',
+                confidence: 0.98,
+                evidenceStrength: 'explicit',
+                engagementLevel: 'depiction',
+                portrayal: 'discouraged',
+                explicitness: 'mild',
+                assertionStatus: 'actual',
+                evidenceSegments: [1],
+                sceneStartSegment: 0,
+                sceneEndSegment: 1,
+                reason: 'Компот освобождает связанных жителей.',
+                details: {
+                  harmLevel: 'none',
+                  targetType: 'human_like_character',
+                  weaponRole: 'none',
+                  actionPurpose: 'rescue',
+                },
+              },
+              parentRelevance: 'minimal',
+              evidenceSufficiency: 'sufficient',
+              actor: 'Компот',
+              target: 'жители',
+              aggressionDirection: 'none',
+              intent: 'rescue',
+              distress: 'none',
+              consequence: 'none',
+              duration: 'brief',
+              repetition: 'single',
+              narrativeFraming: 'discouraged',
+              parentSummary: 'Компот освобождает связанных жителей.',
+              mitigatingContext: 'Опасная ситуация заканчивается спасением.',
+              highPriorityReason: null,
+              rationale: 'Rescue phase is distinct from the captor action.',
+            },
+          ])],
+        }],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+    })
+
+    const provider = new OpenAIAnalysisProvider(
+      'secret',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as unknown as OpenAI,
+    )
+    const transcript = normalizeTranscript([
+      { text: 'Я вас не отпущу, поезд уже едет.', startMs: 1_000, endMs: 2_000 },
+      { text: 'Я развязал жителей, бегите отсюда.', startMs: 3_000, endMs: 4_000 },
+    ])
+    const threat = {
+      ...baseViolence('candidate_threat', 'shared_scene'),
+      subtype: 'violent_threat' as const,
+      assertionStatus: 'threatened' as const,
+      details: {
+        harmLevel: 'threatened' as const,
+        targetType: 'human_like_character' as const,
+        weaponRole: 'none' as const,
+        actionPurpose: 'threat' as const,
+      },
+    }
+    const rescueHypothesis = {
+      ...baseViolence('candidate_rescue', 'shared_scene'),
+      startMs: 3_000,
+      endMs: 4_000,
+      evidenceRanges: [{ startMs: 3_000, endMs: 4_000 }],
+      sceneStartMs: 1_000,
+      sceneEndMs: 4_000,
+      subtype: 'dangerous_situation' as const,
+      details: {
+        harmLevel: 'none' as const,
+        targetType: 'human_like_character' as const,
+        weaponRole: 'none' as const,
+        actionPurpose: 'rescue' as const,
+      },
+    }
+
+    const result = await provider.reviewBatch([{
+      itemId: 'video',
+      transcript,
+      language: 'ru',
+      enabledCategories: ['violence'],
+      events: [threat, rescueHypothesis],
+    }])
+
+    expect(result.items[0]?.complete).toBe(true)
+    expect(result.items[0]?.reviewedEvents).toHaveLength(2)
+    expect(result.items[0]?.reviewedEvents[0]?.review).toMatchObject({
+      actor: 'читер',
+      intent: 'coercive',
+      parentSummary: 'Читер удерживает жителей и угрожает им.',
+    })
+    expect(result.items[0]?.reviewedEvents[1]?.review).toMatchObject({
+      actor: 'Компот',
+      intent: 'rescue',
+      parentSummary: 'Компот освобождает связанных жителей.',
+      mitigatingContext: 'Опасная ситуация заканчивается спасением.',
+    })
+  })
+
   it('accepts a low-relevance rejection when review finds no directed aggression or harm', async () => {
     const parse = vi.fn().mockResolvedValue({
       id: 'resp_downgrade',
