@@ -359,7 +359,7 @@ export class BatchedOpenAIReviewer {
             || shared.type === 'timeout'
             || shared.type === 'schema'
             || shared.type === 'provider'
-            || shared.type === 'configuration'
+            || shared.type === 'server'
             ? shared.type
             : 'provider',
           shared.message ?? 'Batched contextual review failed.',
