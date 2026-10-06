@@ -289,6 +289,16 @@ export const OPENAI_REVIEW_SCHEMA = z.object({
   missedHighPriorityEvents: z.array(missedHighPriorityEventSchema).max(8),
 })
 
+const batchReviewContainerSchema = z.object({
+  itemId: z.string().min(1).max(120),
+  reviews: z.array(reviewItemSchema).max(120),
+})
+
+export const OPENAI_BATCH_REVIEW_SCHEMA = z.object({
+  items: z.array(batchReviewContainerSchema).min(1).max(32),
+  missedHighPriorityEvents: z.array(missedHighPriorityEventSchema).max(0),
+})
+
 export const OPENAI_COVERAGE_SCHEMA = z.object({
   missedHighPriorityEvents: z.array(missedHighPriorityEventSchema).max(8),
 })
@@ -499,6 +509,33 @@ export interface OpenAICoverageResult {
     schemaVersion: string
     stage: 'coverage'
   }
+}
+
+export interface OpenAIReviewBatchInput {
+  itemId: string
+  transcript: NormalizedTranscript
+  language: string
+  enabledCategories: ContentCategory[]
+  events: ClassifiedContentEvent[]
+}
+
+export interface OpenAIReviewBatchItemResult {
+  itemId: string
+  reviewedEvents: ClassifiedContentEvent[]
+  decisions: OpenAIReviewDecision[]
+  totalCandidates: number
+  reviewedCandidates: number
+  rejectedCandidates: number
+  uncertainCandidates: number
+  complete: boolean
+}
+
+export interface OpenAIReviewBatchResult {
+  items: OpenAIReviewBatchItemResult[]
+  outputText?: string
+  usage: OpenAIUsage
+  provider: OpenAIProviderMetadata
+  requestCount: number
 }
 
 export interface OpenAIReviewResult {
@@ -1417,6 +1454,304 @@ export class OpenAIAnalysisProvider {
       }
 
       await this.observer?.error?.(safeError, metadata, transcript.text)
+      throw safeError
+    }
+  }
+
+  async reviewBatch(inputs: OpenAIReviewBatchInput[]): Promise<OpenAIReviewBatchResult> {
+    if (inputs.length === 0) {
+      throw new OpenAIAnalysisError('schema', 'Review batch must contain at least one item.')
+    }
+    if (inputs.some((input) => input.events.length === 0)) {
+      throw new OpenAIAnalysisError('schema', 'Review batch items must contain at least one candidate.')
+    }
+
+    const started = performance.now()
+    const requestItems = inputs.map((input) => ({
+      itemId: input.itemId,
+      language: input.language || 'unknown',
+      enabledCategories: input.enabledCategories,
+      hypotheses: input.events.map((event, index) => ({
+        reviewItemId: `${input.itemId}_review_${index}`,
+        candidateId: event.sourceCandidateId ?? `candidate_${index}`,
+        sceneId: event.sceneId ?? null,
+        category: event.category,
+        subtype: event.subtype,
+        severity: event.severity,
+        context: event.context,
+        confidence: event.confidence,
+        evidenceStrength: event.evidenceStrength,
+        assertionStatus: event.assertionStatus,
+        reason: event.reason,
+        directEvidenceText: event.text,
+        details: event.details,
+      })),
+      reviewContext: buildReviewContextText(input.transcript, input.events),
+    }))
+
+    const dynamicInput = [
+      'Review every batch item independently.',
+      'Return exactly one outer item for every supplied itemId and exactly one review for every supplied reviewItemId.',
+      'Never move evidence or context between outer items. Segment indexes are local to that outer item transcript.',
+      'missedHighPriorityEvents MUST be an empty array; coverage is a separate diagnostic pass.',
+      '',
+      ...requestItems.flatMap((item) => [
+        `ITEM_START ${item.itemId}`,
+        `Transcript language: ${item.language}`,
+        `Enabled categories: ${item.enabledCategories.join(', ')}`,
+        `First-pass hypotheses (untrusted): ${JSON.stringify(item.hypotheses)}`,
+        'Original transcript context (segment indexes stay global within this item):',
+        item.reviewContext,
+        `ITEM_END ${item.itemId}`,
+        '',
+      ]),
+    ].join('\n')
+
+    let responseForError: {
+      id?: string
+      status?: string | null
+      prompt_cache_diagnostics?: unknown
+      output_text?: string
+      usage?: Parameters<typeof usageOf>[0]['usage']
+    } | undefined
+
+    try {
+      const response = await this.client.responses.parse({
+        model: this.model,
+        reasoning: { effort: this.reasoningEffort },
+        input: [
+          {
+            role: 'developer' as const,
+            content: [{
+              type: 'input_text' as const,
+              text: OPENAI_REVIEW_SYSTEM_PROMPT,
+              prompt_cache_breakpoint: { mode: 'explicit' as const },
+            }],
+          },
+          {
+            role: 'user' as const,
+            content: [{ type: 'input_text' as const, text: dynamicInput }],
+          },
+        ],
+        prompt_cache_options: { mode: 'explicit' as const, ttl: '30m' as const },
+        tools: [] as [],
+        store: false,
+        max_output_tokens: outputTokenBudget(Math.min(32_768, 4_096 + inputs.reduce(
+          (sum, input) => sum + input.events.length * 1_024,
+          0,
+        )), this.reasoningEffort),
+        text: {
+          verbosity: 'low',
+          format: zodTextFormat(OPENAI_BATCH_REVIEW_SCHEMA, 'content_event_review_batch'),
+        },
+      })
+      responseForError = response
+      if (response.status !== 'completed' || !response.output_parsed) {
+        throw new OpenAIAnalysisError('schema', 'OpenAI review batch response was incomplete, refused, or empty.')
+      }
+
+      const parsedContainers = response.output_parsed.items
+      const expectedIds = new Set(inputs.map((input) => input.itemId))
+      const returnedIds = parsedContainers.map((item) => item.itemId)
+      const returnedIdSet = new Set(returnedIds)
+      if (returnedIds.length !== returnedIdSet.size
+        || returnedIdSet.size !== expectedIds.size
+        || returnedIds.some((itemId) => !expectedIds.has(itemId))) {
+        throw new OpenAIAnalysisError('schema', 'OpenAI review batch did not return exactly the requested item ids.')
+      }
+
+      const parsedById = new Map(parsedContainers.map((item) => [item.itemId, item.reviews]))
+      const items: OpenAIReviewBatchItemResult[] = inputs.map((input) => {
+        const parsed = parsedById.get(input.itemId) ?? []
+        const byId = new Map(parsed.map((item) => [item.reviewItemId, item]))
+        const expectedReviewIds = input.events.map((_, index) => `${input.itemId}_review_${index}`)
+        const knownIds = new Set(expectedReviewIds)
+        const duplicateIds = parsed.length !== byId.size
+        const unknownIds = parsed.some((item) => !knownIds.has(item.reviewItemId))
+        let materializationFailure = false
+        const reviewedEvents: ClassifiedContentEvent[] = []
+        const decisions: OpenAIReviewDecision[] = []
+
+        for (let index = 0; index < input.events.length; index += 1) {
+          const original = input.events[index]!
+          const reviewItemId = expectedReviewIds[index]!
+          const item = byId.get(reviewItemId)
+
+          if (!item) {
+            reviewedEvents.push({
+              ...original,
+              review: unreviewedReview('Batched contextual review did not return a decision for this candidate.'),
+            })
+            decisions.push({
+              reviewItemId,
+              verdict: 'not_reviewed',
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              rationale: 'Missing batched review decision after completeness validation.',
+            })
+            continue
+          }
+
+          if (shouldRetainSeriousFirstPassAfterReview(original, item)) {
+            reviewedEvents.push({
+              ...original,
+              review: unreviewedReview(
+                'Contextual review attempted to suppress a strongly supported directed-violence event without a sufficient benign contradiction; the first-pass event was retained conservatively.',
+              ),
+            })
+            decisions.push({
+              reviewItemId,
+              verdict: 'not_reviewed',
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              parentRelevance: item.parentRelevance,
+              evidenceSufficiency: item.evidenceSufficiency,
+              ...reviewDecisionSemanticFields(item),
+              rationale: 'Unsafe reviewer downgrade was ignored; first-pass serious event retained.',
+            })
+            continue
+          }
+
+          if (item.verdict === 'rejected') {
+            decisions.push({
+              reviewItemId,
+              verdict: 'rejected',
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              parentRelevance: item.parentRelevance,
+              evidenceSufficiency: item.evidenceSufficiency,
+              ...reviewDecisionSemanticFields(item),
+              rationale: item.rationale,
+            })
+            continue
+          }
+
+          try {
+            let materialized = item.event
+              ? materializeEvents([item.event], input.transcript, input.enabledCategories)[0]
+              : undefined
+            if (item.verdict === 'confirmed'
+              && materialized
+              && !directEvidenceOverlaps(original, materialized, 5_000)) {
+              materialized = original
+            }
+            if (item.verdict !== 'confirmed'
+              && materialized
+              && !reviewCorrectionOverlapsOriginalScene(original, materialized)) {
+              materializationFailure = true
+              reviewedEvents.push({
+                ...original,
+                review: unreviewedReview(
+                  'Contextual review moved the candidate outside the original first-pass scene; the first-pass event was retained.',
+                ),
+              })
+              decisions.push({
+                reviewItemId,
+                verdict: 'not_reviewed',
+                originalCandidateId: original.sourceCandidateId,
+                originalCategory: original.category,
+                originalSubtype: original.subtype,
+                rationale: 'Review correction drifted outside the original scene; first-pass event retained.',
+              })
+              continue
+            }
+
+            const corrected = preserveFirstPassEpistemicState(original, materialized ?? original)
+            const review: ContentEventReview = {
+              status: item.verdict === 'uncertain' ? 'uncertain' : item.verdict,
+              recommendedParentRelevance: item.parentRelevance,
+              evidenceSufficiency: item.evidenceSufficiency,
+              contextRanges: materializeContextRanges(item.contextSegments, input.transcript),
+              actor: item.actor ?? undefined,
+              target: item.target ?? undefined,
+              aggressionDirection: item.aggressionDirection,
+              intent: item.intent,
+              distress: item.distress,
+              consequence: item.consequence,
+              duration: item.duration,
+              repetition: item.repetition,
+              narrativeFraming: item.narrativeFraming,
+              parentSummary: item.parentSummary,
+              mitigatingContext: item.mitigatingContext ?? undefined,
+              highPriorityReason: item.highPriorityReason ?? undefined,
+              rationale: item.rationale,
+            }
+            reviewedEvents.push({
+              ...corrected,
+              sourceCandidateId: original.sourceCandidateId,
+              sceneId: original.sceneId ?? corrected.sceneId,
+              review,
+            })
+            decisions.push({
+              reviewItemId,
+              verdict: item.verdict,
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              resultingCategory: corrected.category,
+              resultingSubtype: corrected.subtype,
+              parentRelevance: item.parentRelevance,
+              evidenceSufficiency: item.evidenceSufficiency,
+              ...reviewDecisionSemanticFields(item),
+              rationale: item.rationale,
+            })
+          } catch {
+            materializationFailure = true
+            reviewedEvents.push({
+              ...original,
+              review: unreviewedReview('Contextual review returned invalid evidence indexes; the first-pass event was retained.'),
+            })
+            decisions.push({
+              reviewItemId,
+              verdict: 'not_reviewed',
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              rationale: 'Invalid review evidence; first-pass event retained.',
+            })
+          }
+        }
+
+        const reviewedCandidates = decisions.filter((item) => item.verdict !== 'not_reviewed').length
+        return {
+          itemId: input.itemId,
+          reviewedEvents,
+          decisions,
+          totalCandidates: input.events.length,
+          reviewedCandidates,
+          rejectedCandidates: decisions.filter((item) => item.verdict === 'rejected').length,
+          uncertainCandidates: decisions.filter((item) => item.verdict === 'uncertain').length,
+          complete: !duplicateIds
+            && !unknownIds
+            && !materializationFailure
+            && reviewedCandidates === input.events.length,
+        }
+      })
+
+      return {
+        items,
+        outputText: response.output_text,
+        usage: usageOf(response),
+        provider: providerMetadata(response, started),
+        requestCount: 1,
+      }
+    } catch (error) {
+      const safeError = errorFrom(error)
+      if (responseForError) {
+        safeError.usage = usageOf(responseForError)
+        safeError.provider = providerMetadata(responseForError, started)
+        safeError.outputText = responseForError.output_text
+      } else if (!safeError.provider) {
+        safeError.provider = {
+          requestId: error instanceof OpenAI.APIError
+            ? (error as unknown as { request_id?: string }).request_id
+            : undefined,
+          latencyMs: Math.round((performance.now() - started) * 100) / 100,
+        }
+      }
       throw safeError
     }
   }
