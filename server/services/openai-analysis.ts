@@ -1739,7 +1739,22 @@ export class OpenAIAnalysisProvider {
             if (normalizedItem.verdict === 'confirmed'
               && materialized
               && !directEvidenceOverlaps(original, materialized, 5_000)) {
-              materialized = original
+              materializationFailure = true
+              reviewedEvents.push({
+                ...original,
+                review: unreviewedReview(
+                  'Contextual review selected direct evidence outside the original candidate; review semantics were discarded.',
+                ),
+              })
+              decisions.push({
+                reviewItemId,
+                verdict: 'not_reviewed',
+                originalCandidateId: original.sourceCandidateId,
+                originalCategory: original.category,
+                originalSubtype: original.subtype,
+                rationale: 'Confirmed review evidence drifted away from the original candidate; review semantic fields were discarded.',
+              })
+              continue
             }
             if (normalizedItem.verdict !== 'confirmed'
               && materialized
@@ -2073,10 +2088,24 @@ export class OpenAIAnalysisProvider {
           if (item.verdict === 'confirmed'
             && materialized
             && !directEvidenceOverlaps(original, materialized, 5_000)) {
-            // "confirmed" means the original signal is correct. The reviewer may
-            // re-select tighter evidence, but it must not silently relocate the
-            // candidate to another part of a broad narrative scene.
-            materialized = original
+            // Do not combine the original direct evidence with semantic fields
+            // produced for a different fragment of a broad narrative scene.
+            materializationFailure = true
+            reviewedEvents.push({
+              ...original,
+              review: unreviewedReview(
+                'Contextual review selected direct evidence outside the original candidate; review semantics were discarded.',
+              ),
+            })
+            decisions.push({
+              reviewItemId,
+              verdict: 'not_reviewed',
+              originalCandidateId: original.sourceCandidateId,
+              originalCategory: original.category,
+              originalSubtype: original.subtype,
+              rationale: 'Confirmed review evidence drifted away from the original candidate; review semantic fields were discarded.',
+            })
+            continue
           }
           if (item.verdict !== 'confirmed'
             && materialized
