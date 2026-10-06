@@ -35,13 +35,17 @@ function threat(candidateId: string, startMs: number, text: string): ClassifiedC
   }
 }
 
-function confirmed(reviewItemId: string, summary: string) {
+function confirmedScene(sceneReviewId: string, reviewItemId: string, summary: string) {
   return {
-    reviewItemId,
-    verdict: 'confirmed' as const,
-    event: null,
-    parentRelevance: 'moderate' as const,
-    evidenceSufficiency: 'sufficient' as const,
+    sceneReviewId,
+    candidateDecisions: [{
+      reviewItemId,
+      verdict: 'confirmed' as const,
+      event: null,
+      parentRelevance: 'moderate' as const,
+      evidenceSufficiency: 'sufficient' as const,
+      rationale: 'Confirmed.',
+    }],
     contextSegments: [],
     actor: null,
     target: null,
@@ -55,7 +59,6 @@ function confirmed(reviewItemId: string, summary: string) {
     parentSummary: summary,
     mitigatingContext: null,
     highPriorityReason: null,
-    rationale: 'Сцена подтверждена.',
   }
 }
 
@@ -67,8 +70,8 @@ describe('OpenAI cross-video review batch', () => {
       output_text: '{"items":[],"missedHighPriorityEvents":[]}',
       output_parsed: {
         items: [
-          { itemId: 'video_a', reviews: [confirmed('video_a_review_0', 'Угроза в первом видео.')] },
-          { itemId: 'video_b', reviews: [confirmed('video_b_review_0', 'Угроза во втором видео.')] },
+          { itemId: 'video_a', scenes: [confirmedScene('video_a_scene_0', 'video_a_review_0', 'Scene A.')] },
+          { itemId: 'video_b', scenes: [confirmedScene('video_b_scene_0', 'video_b_review_0', 'Scene B.')] },
         ],
         missedHighPriorityEvents: [],
       },
@@ -109,13 +112,13 @@ describe('OpenAI cross-video review batch', () => {
       sourceCandidateId: 'a',
       startMs: 10_000,
       text: 'Если не уйдёшь, тебе конец.',
-      review: { parentSummary: 'Угроза в первом видео.' },
+      review: { parentSummary: 'Scene A.' },
     })
     expect(result.items[1]?.reviewedEvents[0]).toMatchObject({
       sourceCandidateId: 'b',
       startMs: 90_000,
       text: 'Сейчас я тебя поймаю.',
-      review: { parentSummary: 'Угроза во втором видео.' },
+      review: { parentSummary: 'Scene B.' },
     })
 
     const request = parse.mock.calls[0]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
@@ -133,7 +136,7 @@ describe('OpenAI cross-video review batch', () => {
       output_text: '{"items":[{"itemId":"video_a","reviews":[]}],"missedHighPriorityEvents":[]}',
       output_parsed: {
         items: [
-          { itemId: 'video_a', reviews: [confirmed('video_a_review_0', 'Угроза в первом видео.')] },
+          { itemId: 'video_a', scenes: [confirmedScene('video_a_scene_0', 'video_a_review_0', 'Scene A.')] },
         ],
         missedHighPriorityEvents: [],
       },
