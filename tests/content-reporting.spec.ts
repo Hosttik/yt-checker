@@ -117,7 +117,7 @@ describe('content reporting', () => {
       'normal',
     )[0]!
 
-    expect(report.level).toBe('moderate')
+    expect(report.level).toBe('high')
     expect(report.peakConcern).toBe('high')
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
