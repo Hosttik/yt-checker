@@ -50,7 +50,7 @@ import {
 } from '../services/transcript-api'
 import { createScanLogger } from '../utils/logger'
 import { mapWithConcurrency } from '../utils/concurrency'
-import { ProviderScheduler, optionalPositiveIntegerEnv } from '../utils/provider-scheduler'
+import { ProviderScheduler, optionalPositiveIntegerEnv, type ProviderSchedulerTiming } from '../utils/provider-scheduler'
 import { positiveIntegerEnv, Semaphore } from '../utils/semaphore'
 
 const languageSchema = z.string().trim().max(100).default('').refine((value) => {
@@ -134,6 +134,40 @@ function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEv
   return events.map((event) => ({ ...event, review: undefined }))
 }
 
+interface TimingInterval {
+  startMs: number
+  endMs: number
+}
+
+async function timed<T>(intervals: TimingInterval[], task: () => Promise<T>): Promise<T> {
+  const startMs = performance.now()
+  try {
+    return await task()
+  } finally {
+    intervals.push({ startMs, endMs: performance.now() })
+  }
+}
+
+function wallDurationMs(intervals: TimingInterval[]): number {
+  if (intervals.length === 0) return 0
+  const sorted = [...intervals].sort((a, b) => a.startMs - b.startMs)
+  let start = sorted[0]!.startMs
+  let end = sorted[0]!.endMs
+  let total = 0
+
+  for (const interval of sorted.slice(1)) {
+    if (interval.startMs <= end) {
+      end = Math.max(end, interval.endMs)
+      continue
+    }
+    total += Math.max(0, end - start)
+    start = interval.startMs
+    end = interval.endMs
+  }
+  total += Math.max(0, end - start)
+  return Math.round(total)
+}
+
 const scanVideoConcurrency = positiveIntegerEnv('SCAN_VIDEO_CONCURRENCY', 10)
 const openAIRequestScheduler = new ProviderScheduler({
   concurrency: positiveIntegerEnv('OPENAI_GLOBAL_CONCURRENCY', 5),
@@ -185,11 +219,29 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   }
 
   const logger = createScanLogger(storage.scanId, config.logLevel)
+  const transcriptIntervals: TimingInterval[] = []
+  const detectionIntervals: TimingInterval[] = []
+  const reviewIntervals: TimingInterval[] = []
+  const coverageIntervals: TimingInterval[] = []
+  let openaiSchedulerWaitMs = 0
+  let openaiProviderMs = 0
+  const recordSchedulerTiming = (timing: ProviderSchedulerTiming) => {
+    openaiSchedulerWaitMs += timing.waitMs
+    openaiProviderMs += timing.providerMs
+  }
+
   const transcriptProvider = new TranscriptApiClient(
     config.transcriptApiKey,
     config.transcriptApiBaseUrl,
     async (exchange) => {
       storage.recordProvider(exchange)
+      const transcriptStartedAt = Date.parse(exchange.request.startedAt)
+      const transcriptReceivedAt = exchange.response?.receivedAt
+        ? Date.parse(exchange.response.receivedAt)
+        : Number.NaN
+      if (Number.isFinite(transcriptStartedAt) && Number.isFinite(transcriptReceivedAt)) {
+        transcriptIntervals.push({ startMs: transcriptStartedAt, endMs: transcriptReceivedAt })
+      }
       logger.debug('transcriptapi.exchange', providerLogFields(exchange))
     },
     {
@@ -209,6 +261,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     chunkOverlapMs: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_OVERLAP_MS', 90_000),
     coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
     batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
+    onSchedulerTiming: recordSchedulerTiming,
   })
   const analyzer = batchingEnabled ? batchedAnalyzer : detectorProvider
   const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
@@ -219,6 +272,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     batchMaxScenes: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_SCENES', 8),
     coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
     batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 2),
+    onSchedulerTiming: recordSchedulerTiming,
   })
   const reviewer = batchingEnabled ? batchedReviewer : reviewerProvider
   const languagePriority = request.language
@@ -315,6 +369,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     detection: aggregateUsage(),
     review: aggregateUsage(),
   }
+  let reviewFallbackRequests = 0
+  let coverageRequests = 0
   let reviewDisabledAfterFailure = false
   let transcriptAttempts = 0
   let successfulAnalyses = 0
@@ -356,12 +412,12 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       if (!normalizedTranscript.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
       const resolvedLanguage = transcript.language ?? languagePriority
       const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
-      const analysis = await analyzer.analyze(
+      const analysis = await timed(detectionIntervals, () => analyzer.analyze(
         normalizedTranscript,
         resolvedLanguage,
         enabledCategories,
         diagnosticAnalysis,
-      )
+      ))
       openaiUsage.requests += analysis.requestCount
       openaiStages.detection.requests += analysis.requestCount
       addUsage(openaiUsage, analysis.usage)
@@ -403,14 +459,15 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         }
       } else {
         try {
-          reviewResult = await reviewer.review(
+          reviewResult = await timed(reviewIntervals, () => reviewer.review(
             normalizedTranscript,
             resolvedLanguage,
             enabledCategories,
             firstPassEvents,
-          )
+          ))
           openaiUsage.requests += reviewResult.requestCount
           openaiStages.review.requests += reviewResult.requestCount
+          reviewFallbackRequests += reviewResult.fallbackRequestCount ?? 0
           addUsage(openaiUsage, reviewResult.usage)
           addUsage(openaiStages.review, reviewResult.usage)
           reviewedEvents = reviewResult.reviewedEvents.filter((classifiedEvent) =>
@@ -426,6 +483,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             rescuedCount: reviewResult.rescuedCandidates,
             rescueRejectedCount: reviewResult.rescueRejectedCandidates,
             reviewRequestCount: reviewResult.requestCount,
+            reviewFallbackRequestCount: reviewResult.fallbackRequestCount ?? 0,
             retryCount: reviewResult.retryCount,
             missingBeforeRetry: reviewResult.missingBeforeRetry,
             missingAfterRetry: reviewResult.missingAfterRetry,
@@ -444,6 +502,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             rescued: contentReview.rescuedCount ?? 0,
             rescueRejected: contentReview.rescueRejectedCount ?? 0,
             reviewRequestCount: contentReview.reviewRequestCount ?? 0,
+            reviewFallbackRequestCount: contentReview.reviewFallbackRequestCount ?? 0,
             retryCount: contentReview.retryCount ?? 0,
             missingBeforeRetry: contentReview.missingBeforeRetry ?? 0,
             missingAfterRetry: contentReview.missingAfterRetry ?? 0,
@@ -489,7 +548,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       if (diagnosticAnalysis && !reviewDisabledAfterFailure && !reviewError) {
         let scheduledCoverageAttempts = 0
         try {
-          coverageResult = await openAIRequestScheduler.run(
+          coverageResult = await timed(coverageIntervals, () => openAIRequestScheduler.run(
             16_000 + estimateTextTokens(normalizedTranscript.text),
             async () => {
               scheduledCoverageAttempts += 1
@@ -500,9 +559,11 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
                 reviewedEvents,
               )
             },
-          )
+            recordSchedulerTiming,
+          ))
           openaiUsage.requests += scheduledCoverageAttempts
           openaiStages.review.requests += scheduledCoverageAttempts
+          coverageRequests += scheduledCoverageAttempts
           addUsage(openaiUsage, coverageResult.usage)
           addUsage(openaiStages.review, coverageResult.usage)
           reviewedEvents = [...reviewedEvents, ...coverageResult.rescuedEvents]
@@ -533,6 +594,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         } catch (error) {
           openaiUsage.requests += scheduledCoverageAttempts
           openaiStages.review.requests += scheduledCoverageAttempts
+          coverageRequests += scheduledCoverageAttempts
           coverageError = error instanceof OpenAIAnalysisError
             ? error
             : new OpenAIAnalysisError('provider', 'OpenAI high-priority coverage failed.')
@@ -880,6 +942,24 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     creditUsage: transcriptProvider.getCreditUsage(),
     openaiUsage,
     openaiStages,
+    openaiRequests: {
+      detectorRequests: openaiStages.detection.requests,
+      reviewRequests: Math.max(
+        0,
+        openaiStages.review.requests - reviewFallbackRequests - coverageRequests,
+      ),
+      reviewFallbackRequests,
+      coverageRequests,
+    },
+    timings: {
+      totalMs: Date.now() - scanStartedAt,
+      transcriptWallMs: wallDurationMs(transcriptIntervals),
+      detectionWallMs: wallDurationMs(detectionIntervals),
+      reviewWallMs: wallDurationMs(reviewIntervals),
+      coverageWallMs: wallDurationMs(coverageIntervals),
+      openaiSchedulerWaitMs: Math.round(openaiSchedulerWaitMs),
+      openaiProviderMs: Math.round(openaiProviderMs),
+    },
     contentReview,
     speechQuality: summarizeSpeechQuality(
       videoResults.flatMap((video) => video.speechQuality ? [video.speechQuality] : []),
@@ -939,7 +1019,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     failedVideos: result.failedVideos,
     openaiRequests: openaiUsage.requests,
     openaiTotalTokens: openaiUsage.totalTokens,
-    durationMs: Date.now() - scanStartedAt,
+    durationMs: result.timings?.totalMs ?? Date.now() - scanStartedAt,
+    timings: result.timings,
+    openaiRequestsByStage: result.openaiRequests,
   })
   return result
 })
