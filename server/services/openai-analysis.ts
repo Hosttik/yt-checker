@@ -296,11 +296,6 @@ const batchSceneReviewContainerSchema = z.object({
   scenes: z.array(sceneReviewSchema).min(1).max(24),
 })
 
-export const OPENAI_BATCH_SCENE_REVIEW_SCHEMA = z.object({
-  items: z.array(batchSceneReviewContainerSchema).min(1).max(32),
-  missedHighPriorityEvents: z.array(z.object({})).max(0),
-})
-
 const missedHighPriorityEventSchema = z.object({
   event: OPENAI_MODEL_EVENT_SCHEMA,
   parentRelevance: z.enum(['moderate', 'high']),
@@ -319,6 +314,11 @@ const missedHighPriorityEventSchema = z.object({
   mitigatingContext: z.string().min(1).max(280).nullable(),
   highPriorityReason: z.string().min(1).max(280),
   rationale: z.string().min(1).max(500),
+})
+
+export const OPENAI_BATCH_SCENE_REVIEW_SCHEMA = z.object({
+  items: z.array(batchSceneReviewContainerSchema).min(1).max(32),
+  missedHighPriorityEvents: z.array(missedHighPriorityEventSchema).max(0),
 })
 
 export const OPENAI_REVIEW_SCHEMA = z.object({
