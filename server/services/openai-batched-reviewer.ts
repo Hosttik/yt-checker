@@ -21,6 +21,7 @@ export interface BatchedReviewerOptions {
   batchConcurrency?: number
   batchMaxItems?: number
   batchMaxCandidates?: number
+  batchMaxScenes?: number
   estimatedPromptTokens?: number
 }
 
@@ -83,33 +84,45 @@ function distributeUsage(usage: OpenAIUsage, weights: number[]): OpenAIUsage[] {
   }))
 }
 
+function sceneCount(events: ClassifiedContentEvent[]): number {
+  return new Set(events.map((event, index) =>
+    event.sceneId ?? event.sourceCandidateId ?? `candidate_${index}`,
+  )).size
+}
+
 function packJobs(
   jobs: PendingReview[],
   maxTokens: number,
   maxItems: number,
   maxCandidates: number,
+  maxScenes: number,
 ): PendingReview[][] {
   const batches: PendingReview[][] = []
   let current: PendingReview[] = []
   let currentTokens = 0
   let currentCandidates = 0
+  let currentScenes = 0
 
   for (const job of jobs) {
+    const jobScenes = sceneCount(job.events)
     const overflow = current.length > 0
       && (
         currentTokens + job.estimatedTokens > maxTokens
         || current.length >= maxItems
         || currentCandidates + job.events.length > maxCandidates
+        || currentScenes + jobScenes > maxScenes
       )
     if (overflow) {
       batches.push(current)
       current = []
       currentTokens = 0
       currentCandidates = 0
+      currentScenes = 0
     }
     current.push(job)
     currentTokens += job.estimatedTokens
     currentCandidates += job.events.length
+    currentScenes += jobScenes
   }
   if (current.length > 0) batches.push(current)
   return batches
@@ -137,6 +150,7 @@ export class BatchedOpenAIReviewer {
   private readonly batchConcurrency: number
   private readonly batchMaxItems: number
   private readonly batchMaxCandidates: number
+  private readonly batchMaxScenes: number
   private readonly estimatedPromptTokens: number
   private readonly pending: PendingReview[] = []
   private timer?: ReturnType<typeof setTimeout>
@@ -151,7 +165,8 @@ export class BatchedOpenAIReviewer {
     this.coalesceMs = Math.max(0, Math.floor(options.coalesceMs ?? 100))
     this.batchConcurrency = positive(options.batchConcurrency, 2)
     this.batchMaxItems = positive(options.batchMaxItems, 4)
-    this.batchMaxCandidates = positive(options.batchMaxCandidates, 12)
+    this.batchMaxCandidates = positive(options.batchMaxCandidates, 24)
+    this.batchMaxScenes = positive(options.batchMaxScenes, 8)
     this.estimatedPromptTokens = positive(options.estimatedPromptTokens, 20_000)
   }
 
@@ -197,6 +212,7 @@ export class BatchedOpenAIReviewer {
       this.batchMaxEstimatedTokens,
       this.batchMaxItems,
       this.batchMaxCandidates,
+      this.batchMaxScenes,
     )
 
     try {
