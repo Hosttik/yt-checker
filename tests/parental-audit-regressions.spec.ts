@@ -157,8 +157,13 @@ describe('parental audit regressions', () => {
 
     const result = applyContentPolicy(event, 'event_uncertain', 'normal')
 
-    expect(result.parentRelevance).not.toBe('high')
-    expect(result.displayLevel).not.toBe('highlight')
+    expect(result.parentRelevance).toBe('high')
+    expect(result.displayLevel).toBe('summary')
+    expect(buildPresentationScenes([result])[0]).toMatchObject({
+      attention: 'details',
+      evidenceStatus: 'uncertain',
+      reviewStatus: 'unreviewed',
+    })
   })
 
   it('does not promote repeated low details into moderate channel concern', () => {
