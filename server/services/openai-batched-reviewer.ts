@@ -2,7 +2,7 @@ import type { OpenAIUsage } from '../../shared/types/check'
 import type { ClassifiedContentEvent, ContentCategory } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 import { mapWithConcurrency } from '../utils/concurrency'
-import type { ProviderScheduler } from '../utils/provider-scheduler'
+import type { ProviderScheduler, ProviderSchedulerTiming } from '../utils/provider-scheduler'
 import {
   OPENAI_REVIEW_PROMPT_VERSION,
   OPENAI_REVIEW_SCHEMA_VERSION,
@@ -23,6 +23,7 @@ export interface BatchedReviewerOptions {
   batchMaxCandidates?: number
   batchMaxScenes?: number
   estimatedPromptTokens?: number
+  onSchedulerTiming?: (timing: ProviderSchedulerTiming) => void
 }
 
 interface PendingReview {
@@ -159,15 +160,15 @@ export class BatchedOpenAIReviewer {
   constructor(
     private readonly provider: OpenAIAnalysisProvider,
     private readonly scheduler: ProviderScheduler,
-    options: BatchedReviewerOptions = {},
+    private readonly options: BatchedReviewerOptions = {},
   ) {
-    this.batchMaxEstimatedTokens = positive(options.batchMaxEstimatedTokens, 70_000)
-    this.coalesceMs = Math.max(0, Math.floor(options.coalesceMs ?? 100))
-    this.batchConcurrency = positive(options.batchConcurrency, 2)
-    this.batchMaxItems = positive(options.batchMaxItems, 4)
-    this.batchMaxCandidates = positive(options.batchMaxCandidates, 24)
-    this.batchMaxScenes = positive(options.batchMaxScenes, 8)
-    this.estimatedPromptTokens = positive(options.estimatedPromptTokens, 20_000)
+    this.batchMaxEstimatedTokens = positive(this.options.batchMaxEstimatedTokens, 70_000)
+    this.coalesceMs = Math.max(0, Math.floor(this.options.coalesceMs ?? 100))
+    this.batchConcurrency = positive(this.options.batchConcurrency, 2)
+    this.batchMaxItems = positive(this.options.batchMaxItems, 4)
+    this.batchMaxCandidates = positive(this.options.batchMaxCandidates, 24)
+    this.batchMaxScenes = positive(this.options.batchMaxScenes, 8)
+    this.estimatedPromptTokens = positive(this.options.estimatedPromptTokens, 20_000)
   }
 
   review(
@@ -230,10 +231,14 @@ export class BatchedOpenAIReviewer {
           const estimatedTokens = this.estimatedPromptTokens
             + batch.reduce((sum, job) => sum + job.estimatedTokens, 0)
           let scheduledAttempts = 0
-          const response = await this.scheduler.run(estimatedTokens, async () => {
-            scheduledAttempts += 1
-            return this.provider.reviewBatch(input)
-          })
+          const response = await this.scheduler.run(
+            estimatedTokens,
+            async () => {
+              scheduledAttempts += 1
+              return this.provider.reviewBatch(input)
+            },
+            this.options.onSchedulerTiming,
+          )
           const byId = new Map(response.items.map((item) => [item.itemId, item]))
           const usages = distributeUsage(response.usage, batch.map((job) => job.estimatedTokens))
 
@@ -271,6 +276,7 @@ export class BatchedOpenAIReviewer {
                     item.job.events,
                   )
                 },
+                this.options.onSchedulerTiming,
               )
               recovered.push({
                 job: item.job,
