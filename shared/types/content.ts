@@ -306,6 +306,7 @@ export interface PresentationScene {
   level: ReportLevel
   attention: 'main' | 'details'
   reviewStatus: 'reviewed' | 'mixed' | 'unreviewed'
+  evidenceStatus: 'verified' | 'uncertain' | 'unreviewed'
   categories: ContentCategory[]
   evidenceRanges: Array<{ startMs: number; endMs: number }>
   label: string
