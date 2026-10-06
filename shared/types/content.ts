@@ -293,6 +293,9 @@ export interface ChannelCategoryReport {
   rawAffectedVideos: number
   affectedVideos: number
   highlightedVideos: number
+  pendingReviewVideos: number
+  pendingReviewSceneCount: number
+  pendingReviewPeakConcern: ReportLevel
   rawEventCount: number
   displayedEventCount: number
   subtypeStats: ChannelSubtypeStat[]
