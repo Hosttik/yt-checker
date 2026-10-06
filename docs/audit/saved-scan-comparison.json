@@ -1,0 +1,616 @@
+{
+  "note": "Same normalized transcripts and recorded detector metadata; batch composition/order is not controlled. This is not an accuracy estimate or a controlled batching experiment.",
+  "matchingTranscriptsAndMetadata": 10,
+  "scans": [
+    {
+      "scan": "2026-10-06T15-22-40-116Z_40298a8a-178e-4d1d-85d2-aea798ec1f9c",
+      "profile": "normal",
+      "timings": {
+        "totalMs": 78931,
+        "transcriptWallMs": 12313,
+        "detectionWallMs": 30254,
+        "reviewWallMs": 55695,
+        "coverageWallMs": 0,
+        "openaiSchedulerWaitMs": 38,
+        "openaiProviderMs": 212963
+      },
+      "videos": {
+        "ed7JivZ43xs": {
+          "transcriptSha256": "088dc826f98bc2bf1b982fc7b8c3d285afde0fc7d3ae154b5a8eecd55689b162",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0148acdb3fe016d0016ac51244311487d2bdaa9125eaeae756",
+          "detectorCandidates": 0,
+          "reviewStatus": "not_needed",
+          "mainScenes": 0,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено."
+        },
+        "B7PGgMjJyoQ": {
+          "transcriptSha256": "8193d882ea88529a1faaa57510ab439bfe7d9b379643887c873ea1a46ce71f80",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_01f7077a1b4451c3016ac5124447ec87d298cbfe9a8b4736af",
+          "detectorCandidates": 0,
+          "reviewStatus": "not_needed",
+          "mainScenes": 0,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено."
+        },
+        "edgRlTMnF0o": {
+          "transcriptSha256": "9e397a6528ca9b44eba316f6260b58f696182c5dc816c8ab65e31f990f8c45fa",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0898c3a05a01695a016ac5124d0a9487d2a3f3093ebf2cd81c",
+          "detectorCandidates": 1,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание."
+        },
+        "CmABITGAsNs": {
+          "transcriptSha256": "2c2ee0f171e3e0392621de842f123e50678800d08f3683f20d0e1e2fc12756ee",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0148acdb3fe016d0016ac51244311487d2bdaa9125eaeae756",
+          "detectorCandidates": 2,
+          "reviewStatus": "completed",
+          "mainScenes": 0,
+          "detailScenes": 2,
+          "highScenes": 0,
+          "summary": "Существенных сцен в проанализированных субтитрах не обнаружено; лёгких или спорных находок: 2."
+        },
+        "7_bCIsH-XEc": {
+          "transcriptSha256": "059484fa334128c05ef0863ee178e787a1ded66d1b5acd2d4799a2f4de661d75",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0148acdb3fe016d0016ac51244311487d2bdaa9125eaeae756",
+          "detectorCandidates": 5,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 2,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание. Ещё 2 лёгкие или спорные находки вынесены в подробности."
+        },
+        "_xR7fZ24O4g": {
+          "transcriptSha256": "4b60357ec509e36b13118aa77b146e52c9d0e0e982902809238f8d603293bec3",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0148acdb3fe016d0016ac51244311487d2bdaa9125eaeae756",
+          "detectorCandidates": 3,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 2,
+          "highScenes": 1,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание. Ещё 2 лёгкие или спорные находки вынесены в подробности."
+        },
+        "RmGCg3FRdb8": {
+          "transcriptSha256": "3db37680117f29a3f5b0a403938cbb6631fbda239106d7750cc3fe03e2aa9cdd",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0148acdb3fe016d0016ac51244311487d2bdaa9125eaeae756",
+          "detectorCandidates": 2,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 1,
+          "highScenes": 1,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание. Ещё 1 лёгкая или спорная находка вынесена в подробности."
+        },
+        "kQCshtG4DOw": {
+          "transcriptSha256": "757a7c72049e08db9c5ddd4c393a47ebfd56dba03b4ccf45d48be172bfbb598b",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_01f7077a1b4451c3016ac5124447ec87d298cbfe9a8b4736af",
+          "detectorCandidates": 8,
+          "reviewStatus": "completed",
+          "mainScenes": 2,
+          "detailScenes": 0,
+          "highScenes": 2,
+          "summary": "В проанализированных субтитрах есть 2 сцены, на которые стоит обратить внимание."
+        },
+        "wiuuBaYC8B8": {
+          "transcriptSha256": "8b2fb4db5bcec556452ab1cc860f109ca07e93591ca755278dbba3bf5d1b4094",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_01f7077a1b4451c3016ac5124447ec87d298cbfe9a8b4736af",
+          "detectorCandidates": 6,
+          "reviewStatus": "completed",
+          "mainScenes": 2,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 2 сцены, на которые стоит обратить внимание."
+        },
+        "MmdIhSW5B7Q": {
+          "transcriptSha256": "535d086b9c8b2dbadf8851d760862a11073bc9accda7a2dfe5fe4bacb431c23f",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_0383057528a74103016ac51244590087d2ba18fa2ff066b776",
+          "detectorCandidates": 25,
+          "reviewStatus": "completed",
+          "mainScenes": 2,
+          "detailScenes": 7,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 2 сцены, на которые стоит обратить внимание. Ещё 7 лёгких или спорных находок вынесено в подробности."
+        }
+      }
+    },
+    {
+      "scan": "2026-10-06T15-25-28-310Z_ba7c44fb-580b-44ed-aab4-a6269dc01983",
+      "profile": "normal",
+      "timings": {
+        "totalMs": 81954,
+        "transcriptWallMs": 878,
+        "detectionWallMs": 25634,
+        "reviewWallMs": 55518,
+        "coverageWallMs": 0,
+        "openaiSchedulerWaitMs": 48,
+        "openaiProviderMs": 126760
+      },
+      "videos": {
+        "MmdIhSW5B7Q": {
+          "transcriptSha256": "535d086b9c8b2dbadf8851d760862a11073bc9accda7a2dfe5fe4bacb431c23f",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02a9e4f550a52ce8016ac512e9e3fc87d29431ede37f278043",
+          "detectorCandidates": 0,
+          "reviewStatus": "not_needed",
+          "mainScenes": 0,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено."
+        },
+        "edgRlTMnF0o": {
+          "transcriptSha256": "9e397a6528ca9b44eba316f6260b58f696182c5dc816c8ab65e31f990f8c45fa",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02a9e4f550a52ce8016ac512e9e3fc87d29431ede37f278043",
+          "detectorCandidates": 0,
+          "reviewStatus": "not_needed",
+          "mainScenes": 0,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено."
+        },
+        "B7PGgMjJyoQ": {
+          "transcriptSha256": "8193d882ea88529a1faaa57510ab439bfe7d9b379643887c873ea1a46ce71f80",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02f23f61d83aa28c016ac512e9fb0087d2acd32be7e438ab85",
+          "detectorCandidates": 0,
+          "reviewStatus": "not_needed",
+          "mainScenes": 0,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено."
+        },
+        "RmGCg3FRdb8": {
+          "transcriptSha256": "3db37680117f29a3f5b0a403938cbb6631fbda239106d7750cc3fe03e2aa9cdd",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02a9e4f550a52ce8016ac512e9e3fc87d29431ede37f278043",
+          "detectorCandidates": 1,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 0,
+          "highScenes": 1,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание."
+        },
+        "wiuuBaYC8B8": {
+          "transcriptSha256": "8b2fb4db5bcec556452ab1cc860f109ca07e93591ca755278dbba3bf5d1b4094",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02a9e4f550a52ce8016ac512e9e3fc87d29431ede37f278043",
+          "detectorCandidates": 3,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание."
+        },
+        "CmABITGAsNs": {
+          "transcriptSha256": "2c2ee0f171e3e0392621de842f123e50678800d08f3683f20d0e1e2fc12756ee",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02a9e4f550a52ce8016ac512e9e3fc87d29431ede37f278043",
+          "detectorCandidates": 2,
+          "reviewStatus": "completed",
+          "mainScenes": 0,
+          "detailScenes": 2,
+          "highScenes": 0,
+          "summary": "Существенных сцен в проанализированных субтитрах не обнаружено; лёгких или спорных находок: 2."
+        },
+        "7_bCIsH-XEc": {
+          "transcriptSha256": "059484fa334128c05ef0863ee178e787a1ded66d1b5acd2d4799a2f4de661d75",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02f23f61d83aa28c016ac512e9fb0087d2acd32be7e438ab85",
+          "detectorCandidates": 5,
+          "reviewStatus": "completed",
+          "mainScenes": 1,
+          "detailScenes": 2,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 1 сцена, на которую стоит обратить внимание. Ещё 2 лёгкие или спорные находки вынесены в подробности."
+        },
+        "kQCshtG4DOw": {
+          "transcriptSha256": "757a7c72049e08db9c5ddd4c393a47ebfd56dba03b4ccf45d48be172bfbb598b",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02f23f61d83aa28c016ac512e9fb0087d2acd32be7e438ab85",
+          "detectorCandidates": 7,
+          "reviewStatus": "completed",
+          "mainScenes": 4,
+          "detailScenes": 0,
+          "highScenes": 4,
+          "summary": "В проанализированных субтитрах есть 4 сцены, на которые стоит обратить внимание."
+        },
+        "_xR7fZ24O4g": {
+          "transcriptSha256": "4b60357ec509e36b13118aa77b146e52c9d0e0e982902809238f8d603293bec3",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02f23f61d83aa28c016ac512e9fb0087d2acd32be7e438ab85",
+          "detectorCandidates": 3,
+          "reviewStatus": "completed",
+          "mainScenes": 2,
+          "detailScenes": 1,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах есть 2 сцены, на которые стоит обратить внимание. Ещё 1 лёгкая или спорная находка вынесена в подробности."
+        },
+        "ed7JivZ43xs": {
+          "transcriptSha256": "088dc826f98bc2bf1b982fc7b8c3d285afde0fc7d3ae154b5a8eecd55689b162",
+          "requestMetadata": {
+            "model": "gpt-6-luna",
+            "reasoningEffort": "low",
+            "transcriptLanguage": "asr-ru",
+            "enabledCategories": [
+              "profanity_and_rude_language",
+              "insults",
+              "toilet_humor",
+              "violence",
+              "scary_and_disturbing",
+              "sexual_content",
+              "gambling",
+              "substances",
+              "self_harm"
+            ],
+            "diagnostic": false,
+            "promptVersion": "2026-10-06.content-events-batch-v9",
+            "schemaVersion": "10"
+          },
+          "detectorRequestId": "resp_02f23f61d83aa28c016ac512e9fb0087d2acd32be7e438ab85",
+          "detectorCandidates": 1,
+          "reviewStatus": "completed",
+          "mainScenes": 0,
+          "detailScenes": 0,
+          "highScenes": 0,
+          "summary": "В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено."
+        }
+      }
+    }
+  ]
+}
