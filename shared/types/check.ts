@@ -261,6 +261,40 @@ export interface VideoContentReport {
   rejectedCandidates?: RejectedContentCandidate[]
 }
 
+export interface OpenAIAnalysisManifest {
+  detectorModel: string
+  reviewerModel: string
+  reasoningEffort: 'low' | 'medium' | 'high'
+  profile: AnalysisProfile
+  requestedLanguage: string
+  detectorPromptVersion: string
+  detectorSchemaVersion: string
+  reviewerPromptVersion: string
+  reviewerSchemaVersion: string
+  coveragePromptVersion: string
+  coverageSchemaVersion: string
+  coverageEnabled: boolean
+  batching: {
+    enabled: boolean
+    detector: {
+      chunkMaxEstimatedTokens: number
+      batchMaxEstimatedTokens: number
+      batchMaxItems: number
+      chunkOverlapMs: number
+      coalesceMs: number
+      batchConcurrency: number
+    }
+    reviewer: {
+      batchMaxEstimatedTokens: number
+      batchMaxItems: number
+      batchMaxCandidates: number
+      batchMaxScenes: number
+      coalesceMs: number
+      batchConcurrency: number
+    }
+  }
+}
+
 export interface ChannelCheckResponse {
   scanId?: string
   storageMode: ScanStorageMode
@@ -274,6 +308,7 @@ export interface ChannelCheckResponse {
   openaiUsage: AggregateOpenAIUsage
   openaiStages?: OpenAIStageUsage
   openaiRequests?: OpenAIRequestBreakdown
+  analysisManifest?: OpenAIAnalysisManifest
   timings?: ScanTimings
   contentReview?: ContentReviewSummary
 
