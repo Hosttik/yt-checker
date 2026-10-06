@@ -34,6 +34,7 @@ import {
 import { estimateTextTokens } from '../server/services/openai-batched-analyzer'
 import {
   createOpenAIAnalysisStack,
+  openAIBatchingManifestFromEnv,
   type ContentAnalyzer,
   type ContentReviewer,
 } from '../server/services/openai-analysis-stack'
@@ -143,6 +144,7 @@ interface NewVideoResult {
   rescueRejectedCandidates: number
   onePassSceneCount: number
   sceneCount: number
+  detectorRequests: number
   detectorTokens: number
   detectorLatencyMs: number
   requests: number
@@ -203,6 +205,7 @@ interface RunOutput {
   requests: number
   tokens: number
   latencyMs: number
+  detectorRequests: number
   detectorTokens: number
   detectorLatencyMs: number
   onePassSceneCount: number
@@ -706,6 +709,7 @@ async function runCurrent(
     rescueRejectedCandidates,
     onePassSceneCount: buildPresentationScenes(onePassEvents).length,
     sceneCount: buildPresentationScenes(events).length,
+    detectorRequests: detection.requestCount,
     detectorTokens: detection.usage.totalTokens,
     detectorLatencyMs: detection.provider.latencyMs,
     requests,
@@ -1146,6 +1150,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         requests: outputs.reduce((sum, item) => sum + item.requests, 0),
         tokens: outputs.reduce((sum, item) => sum + item.tokens, 0),
         latencyMs: outputs.reduce((sum, item) => sum + item.latencyMs, 0),
+        detectorRequests: outputs.reduce((sum, item) => sum + item.detectorRequests, 0),
         detectorTokens: outputs.reduce((sum, item) => sum + item.detectorTokens, 0),
         detectorLatencyMs: outputs.reduce((sum, item) => sum + item.detectorLatencyMs, 0),
         onePassSceneCount: outputs.reduce((sum, item) => sum + item.onePassSceneCount, 0),
@@ -1345,7 +1350,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       baselineCombinedCardAudit,
       currentOnePass: {
         metrics: current.onePassMetrics,
-        requests: selected.length,
+        requests: current.detectorRequests,
         tokens: current.detectorTokens,
         latencyMs: current.detectorLatencyMs,
         sceneCount: current.onePassSceneCount,
