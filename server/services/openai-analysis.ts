@@ -586,6 +586,7 @@ export interface OpenAIReviewResult {
   uncertainCandidates: number
   complete: boolean
   requestCount: number
+  fallbackRequestCount?: number
   retryCount: number
   missingBeforeRetry: number
   missingAfterRetry: number
