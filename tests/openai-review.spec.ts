@@ -158,7 +158,7 @@ describe('OpenAI contextual reviewer', () => {
     const request = parse.mock.calls[0]?.[0] as { input?: Array<{ role: string; content: Array<{ text: string }> }> }
     const userText = request.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
     expect(userText).toContain('First-pass hypotheses (untrusted)')
-    expect(userText).toContain('Original transcript:')
+    expect(userText).toContain('Original transcript context (segment indexes stay global):')
     expect(userText).toContain('[2] Теперь выход из деревни вам запрещён.')
   })
 
