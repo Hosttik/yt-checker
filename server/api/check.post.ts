@@ -213,8 +213,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
   const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
   const batchedReviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
     batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
+    batchMaxItems: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ITEMS', 4),
+    batchMaxCandidates: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_CANDIDATES', 12),
     coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
-    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 1),
+    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 2),
   })
   const reviewer = batchingEnabled ? batchedReviewer : reviewerProvider
   const languagePriority = request.language
@@ -449,6 +451,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           reviewError = error instanceof OpenAIAnalysisError
             ? error
             : new OpenAIAnalysisError('provider', 'OpenAI contextual review failed.')
+          openaiUsage.requests += reviewError.requestCount ?? 0
+          openaiStages.review.requests += reviewError.requestCount ?? 0
           addUsage(openaiUsage, reviewError.usage)
           addUsage(openaiStages.review, reviewError.usage)
           // A transient per-video rate limit/timeout must not disable review for

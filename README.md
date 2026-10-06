@@ -66,8 +66,10 @@ OPENAI_DETECTOR_COALESCE_MS=100
 OPENAI_SCAN_BATCH_CONCURRENCY=2
 
 OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS=70000
+OPENAI_REVIEW_BATCH_MAX_ITEMS=4
+OPENAI_REVIEW_BATCH_MAX_CANDIDATES=12
 OPENAI_REVIEW_COALESCE_MS=100
-OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY=1
+OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY=2
 ```
 
 `OPENAI_REASONING_EFFORT` намеренно принимает только `low`. `OPENAI_BATCHING_ENABLED=false` временно возвращает прежний per-video detector/reviewer flow для A/B проверки качества на одинаковых transcript. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
@@ -80,7 +82,7 @@ OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY=1
 
 Первый Structured Output строится через официальный SDK helper `zodTextFormat` и `responses.parse` со strict JSON Schema. Detector описывает фактическую семантику: category/subtype, severity, confidence, context, evidence strength, generic semantic dimensions и category-specific details. Он не получает полей `parentRelevance` или `displayLevel`.
 
-Если есть кандидаты, reviewer получает локальные transcript windows вокруг first-pass гипотез; кандидаты нескольких видео coalesce в один review batch, когда помещаются в заданный token budget. Он возвращает `confirmed/corrected/rejected/uncertain`, заново выбирает прямые evidence-сегменты, отдельно указывает context-сегменты и оценивает родительскую полезность. Для сцены учитываются направление агрессии, намерение/принуждение, последствия, выраженный страх/страдание, длительность, повторяемость и подтверждённое отношение повествования. Reviewer не имеет права выводить визуальные/звуковые факты из отсутствующих данных.
+Если есть кандидаты, reviewer получает локальные transcript windows вокруг first-pass гипотез. Review batches ограничиваются не только token budget, но и числом видео/кандидатов; неполный outer-item ответ сохраняет успешные решения и автоматически повторяет только недостающие видео через более узкий fallback. Он возвращает `confirmed/corrected/rejected/uncertain`, заново выбирает прямые evidence-сегменты, отдельно указывает context-сегменты и оценивает родительскую полезность. Для сцены учитываются направление агрессии, намерение/принуждение, последствия, выраженный страх/страдание, длительность, повторяемость и подтверждённое отношение повествования. Reviewer не имеет права выводить визуальные/звуковые факты из отсутствующих данных.
 
 ```json
 {
