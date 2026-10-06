@@ -298,7 +298,7 @@ const batchSceneReviewContainerSchema = z.object({
 
 export const OPENAI_BATCH_SCENE_REVIEW_SCHEMA = z.object({
   items: z.array(batchSceneReviewContainerSchema).min(1).max(32),
-  missedHighPriorityEvents: z.array(z.never()).max(0),
+  missedHighPriorityEvents: z.array(z.object({})).max(0),
 })
 
 const missedHighPriorityEventSchema = z.object({
