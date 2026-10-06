@@ -1004,6 +1004,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         maxVideosPerScan,
         transcriptCreditUsd,
         profile,
+        coverageEnabled,
+        batchingEnabled,
+        transcriptLanguages: selected.map((record) => [record.videoId, record.transcriptLanguage]),
       }))
       .digest('hex')
       .slice(0, 16)
@@ -1012,7 +1015,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 15 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 16 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1021,29 +1024,30 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     }
 
     console.log(
-      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, batching=${batchingEnabled}, coverage=${coverageEnabled}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
     )
     if (runOutputs.length > 0) {
       console.log(`[quality] resumed from checkpoint: ${runOutputs.length}/${runs} completed run(s)`)
     }
 
     for (let run = runOutputs.length; run < runs; run += 1) {
-      const detector = new OpenAIAnalysisProvider(
+      const scheduler = new ProviderScheduler({
+        concurrency: positiveIntegerEnv('OPENAI_GLOBAL_CONCURRENCY', 5),
+        requestsPerMinute: optionalPositiveIntegerEnv('OPENAI_RPM_BUDGET'),
+        tokensPerMinute: optionalPositiveIntegerEnv('OPENAI_TPM_BUDGET'),
+        maxRetries: rateLimitRetries,
+        retryBaseMs: retryBaseDelayMs,
+      })
+      const analysisStack = createOpenAIAnalysisStack({
         apiKey,
-        model,
-        undefined,
-        undefined,
+        detectorModel: model,
+        reviewerModel: reviewModel,
+        scheduler,
+        batchingEnabled,
         reasoningEffort,
         requestTimeoutMs,
-      )
-      const reviewer = new OpenAIAnalysisProvider(
-        apiKey,
-        reviewModel,
-        undefined,
-        undefined,
-        reasoningEffort,
-        requestTimeoutMs,
-      )
+      })
+      const { analyzer: detector, reviewer, reviewerProvider } = analysisStack
       const newByKey = new Map<string, NewVideoResult>()
       let completedVideos = 0
 
@@ -1060,9 +1064,10 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
               record,
               detector,
               reviewer,
+              reviewerProvider,
+              scheduler,
               profile,
-              rateLimitRetries,
-              retryBaseDelayMs,
+              coverageEnabled,
             )
             completedVideos += 1
             console.log(
@@ -1169,7 +1174,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 15,
+          version: 16,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
