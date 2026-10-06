@@ -68,7 +68,9 @@ The second pass treats first-pass candidates as untrusted hypotheses and re-read
 - evidence sufficiency;
 - a recommended parent relevance that is explicitly separate from severity and confidence.
 
-Direct evidence supports the factual user-facing `reason`. Context ranges may explain or mitigate a scene but are not treated as proof. The reviewer may correct taxonomy/roles/assertion semantics or remove a false positive; it cannot add unrelated scenes. A happy resolution does not retroactively erase an earlier supported peril scene.
+When several hypotheses share a broad detector `sceneId`, only transcript context ranges are shared by the batch-review container. Actor, target, intent, consequence and parent-facing summary belong to each candidate decision. This prevents a later rescue/release phase from inheriting the captor's actor or coercive intent merely because both phases were grouped into one narrative scene.
+
+Direct evidence supports the factual user-facing `reason`. Context ranges may explain or mitigate a scene but are not treated as proof. The reviewer may correct taxonomy/roles/assertion semantics or remove a false positive; it cannot add unrelated scenes. A happy resolution does not retroactively erase an earlier supported peril scene. If a confirmed review relocates direct evidence away from the original candidate, the server discards the entire review semantic payload and marks the first-pass event unreviewed instead of combining old evidence with a new summary/actor/intent.
 
 ### Backend policy
 

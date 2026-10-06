@@ -35,23 +35,28 @@ function baseViolence(candidateId: string, sceneId: string): ClassifiedContentEv
   }
 }
 
+function decisionSemantics(summary: string) {
+  return {
+    actor: null,
+    target: null,
+    aggressionDirection: 'unclear' as const,
+    intent: 'unclear' as const,
+    distress: 'mild' as const,
+    consequence: 'none' as const,
+    duration: 'momentary' as const,
+    repetition: 'single' as const,
+    narrativeFraming: 'neutral' as const,
+    parentSummary: summary,
+    mitigatingContext: 'Game context.',
+    highPriorityReason: null,
+  }
+}
+
 function sceneOutput(decisions: Array<Record<string, unknown>>) {
   return {
     sceneReviewId: 'video_scene_0',
     candidateDecisions: decisions,
     contextSegments: [],
-    actor: null,
-    target: null,
-    aggressionDirection: 'unclear',
-    intent: 'unclear',
-    distress: 'mild',
-    consequence: 'none',
-    duration: 'momentary',
-    repetition: 'single',
-    narrativeFraming: 'neutral',
-    parentSummary: 'One shared scene summary.',
-    mitigatingContext: 'Game context.',
-    highPriorityReason: null,
   }
 }
 
@@ -71,6 +76,7 @@ describe('OpenAI scene-level batch review', () => {
               event: null,
               parentRelevance: 'moderate',
               evidenceSufficiency: 'sufficient',
+              ...decisionSemantics('First candidate summary.'),
               rationale: 'Confirmed first label.',
             },
             {
@@ -79,6 +85,7 @@ describe('OpenAI scene-level batch review', () => {
               event: null,
               parentRelevance: 'low',
               evidenceSufficiency: 'sufficient',
+              ...decisionSemantics('Second candidate summary.'),
               rationale: 'Confirmed second label.',
             },
           ])],
@@ -121,7 +128,7 @@ describe('OpenAI scene-level batch review', () => {
     expect(result.items[0]?.complete).toBe(true)
     expect(result.items[0]?.reviewedEvents).toHaveLength(2)
     expect(result.items[0]?.reviewedEvents.map((event) => event.review?.parentSummary))
-      .toEqual(['One shared scene summary.', 'One shared scene summary.'])
+      .toEqual(['First candidate summary.', 'Second candidate summary.'])
 
     const request = parse.mock.calls[0]?.[0] as {
       input?: Array<{ role: string; content: Array<{ text: string }> }>
@@ -130,6 +137,247 @@ describe('OpenAI scene-level batch review', () => {
     expect(userText.match(/shared_scene/g)?.length).toBe(1)
     expect(userText).toContain('video_review_0')
     expect(userText).toContain('video_review_1')
+  })
+
+  it('keeps threat and rescue phases candidate-specific inside one broad scene', async () => {
+    const parse = vi.fn().mockResolvedValue({
+      id: 'resp_scene_phases',
+      status: 'completed',
+      output_text: '{}',
+      output_parsed: {
+        items: [{
+          itemId: 'video',
+          scenes: [sceneOutput([
+            {
+              reviewItemId: 'video_review_0',
+              verdict: 'confirmed',
+              event: null,
+              parentRelevance: 'high',
+              evidenceSufficiency: 'sufficient',
+              actor: 'читер',
+              target: 'жители',
+              aggressionDirection: 'actor_to_target',
+              intent: 'coercive',
+              distress: 'strong',
+              consequence: 'threatened_harm',
+              duration: 'sustained',
+              repetition: 'single',
+              narrativeFraming: 'discouraged',
+              parentSummary: 'Читер удерживает жителей и угрожает им.',
+              mitigatingContext: null,
+              highPriorityReason: 'Жителей принуждают угрозой серьёзного вреда.',
+              rationale: 'Threat phase is supported.',
+            },
+            {
+              reviewItemId: 'video_review_1',
+              verdict: 'corrected',
+              event: {
+                candidateId: 'candidate_rescue',
+                sceneId: 'shared_scene',
+                category: 'violence',
+                subtype: 'dangerous_situation',
+                severity: 'low',
+                context: 'game',
+                confidence: 0.98,
+                evidenceStrength: 'explicit',
+                engagementLevel: 'depiction',
+                portrayal: 'discouraged',
+                explicitness: 'mild',
+                assertionStatus: 'actual',
+                evidenceSegments: [1],
+                sceneStartSegment: 0,
+                sceneEndSegment: 1,
+                reason: 'Компот освобождает связанных жителей.',
+                details: {
+                  harmLevel: 'none',
+                  targetType: 'human_like_character',
+                  weaponRole: 'none',
+                  actionPurpose: 'rescue',
+                },
+              },
+              parentRelevance: 'minimal',
+              evidenceSufficiency: 'sufficient',
+              actor: 'Компот',
+              target: 'жители',
+              aggressionDirection: 'none',
+              intent: 'rescue',
+              distress: 'none',
+              consequence: 'none',
+              duration: 'brief',
+              repetition: 'single',
+              narrativeFraming: 'discouraged',
+              parentSummary: 'Компот освобождает связанных жителей.',
+              mitigatingContext: 'Опасная ситуация заканчивается спасением.',
+              highPriorityReason: null,
+              rationale: 'Rescue phase is distinct from the captor action.',
+            },
+          ])],
+        }],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+    })
+
+    const provider = new OpenAIAnalysisProvider(
+      'secret',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as unknown as OpenAI,
+    )
+    const transcript = normalizeTranscript([
+      { text: 'Я вас не отпущу, поезд уже едет.', startMs: 1_000, endMs: 2_000 },
+      { text: 'Я развязал жителей, бегите отсюда.', startMs: 3_000, endMs: 4_000 },
+    ])
+    const threat = {
+      ...baseViolence('candidate_threat', 'shared_scene'),
+      subtype: 'violent_threat' as const,
+      assertionStatus: 'threatened' as const,
+      details: {
+        harmLevel: 'threatened' as const,
+        targetType: 'human_like_character' as const,
+        weaponRole: 'none' as const,
+        actionPurpose: 'threat' as const,
+      },
+    }
+    const rescueHypothesis = {
+      ...baseViolence('candidate_rescue', 'shared_scene'),
+      startMs: 3_000,
+      endMs: 4_000,
+      evidenceRanges: [{ startMs: 3_000, endMs: 4_000 }],
+      sceneStartMs: 1_000,
+      sceneEndMs: 4_000,
+      subtype: 'dangerous_situation' as const,
+      details: {
+        harmLevel: 'none' as const,
+        targetType: 'human_like_character' as const,
+        weaponRole: 'none' as const,
+        actionPurpose: 'rescue' as const,
+      },
+    }
+
+    const result = await provider.reviewBatch([{
+      itemId: 'video',
+      transcript,
+      language: 'ru',
+      enabledCategories: ['violence'],
+      events: [threat, rescueHypothesis],
+    }])
+
+    expect(result.items[0]?.complete).toBe(true)
+    expect(result.items[0]?.reviewedEvents).toHaveLength(2)
+    expect(result.items[0]?.reviewedEvents[0]?.review).toMatchObject({
+      actor: 'читер',
+      intent: 'coercive',
+      parentSummary: 'Читер удерживает жителей и угрожает им.',
+    })
+    expect(result.items[0]?.reviewedEvents[1]?.review).toMatchObject({
+      actor: 'Компот',
+      intent: 'rescue',
+      parentSummary: 'Компот освобождает связанных жителей.',
+      mitigatingContext: 'Опасная ситуация заканчивается спасением.',
+    })
+  })
+
+  it('discards batch-review semantics when confirmed evidence drifts to another phase', async () => {
+    const parse = vi.fn().mockResolvedValue({
+      id: 'resp_scene_confirmed_drift',
+      status: 'completed',
+      output_text: '{}',
+      output_parsed: {
+        items: [{
+          itemId: 'video',
+          scenes: [sceneOutput([{
+            reviewItemId: 'video_review_0',
+            verdict: 'confirmed',
+            event: {
+              candidateId: 'candidate_drift',
+              sceneId: 'shared_scene',
+              category: 'violence',
+              subtype: 'violent_threat',
+              severity: 'high',
+              context: 'game',
+              confidence: 0.99,
+              evidenceStrength: 'explicit',
+              engagementLevel: 'depiction',
+              portrayal: 'discouraged',
+              explicitness: 'mild',
+              assertionStatus: 'threatened',
+              evidenceSegments: [1],
+              sceneStartSegment: 0,
+              sceneEndSegment: 1,
+              reason: 'Поздняя реплика ошибочно используется как доказательство исходной угрозы.',
+              details: {
+                harmLevel: 'threatened',
+                targetType: 'human_like_character',
+                weaponRole: 'none',
+                actionPurpose: 'threat',
+              },
+            },
+            parentRelevance: 'high',
+            evidenceSufficiency: 'sufficient',
+            actor: 'читер',
+            target: 'жители',
+            aggressionDirection: 'actor_to_target',
+            intent: 'coercive',
+            distress: 'strong',
+            consequence: 'threatened_harm',
+            duration: 'sustained',
+            repetition: 'single',
+            narrativeFraming: 'discouraged',
+            parentSummary: 'Читер угрожает жителям.',
+            mitigatingContext: null,
+            highPriorityReason: 'Направленная угроза используется для принуждения.',
+            rationale: 'Semantics refer to the later fragment.',
+          }])],
+        }],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 100, output_tokens: 30, total_tokens: 130 },
+    })
+
+    const provider = new OpenAIAnalysisProvider(
+      'secret',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as unknown as OpenAI,
+    )
+    const transcript = normalizeTranscript([
+      { text: 'Я вас не отпущу.', startMs: 1_000, endMs: 2_000 },
+      { text: 'Позже происходит другая сцена.', startMs: 30_000, endMs: 31_000 },
+    ])
+    const original = {
+      ...baseViolence('candidate_drift', 'shared_scene'),
+      subtype: 'violent_threat' as const,
+      assertionStatus: 'threatened' as const,
+      sceneStartMs: 1_000,
+      sceneEndMs: 31_000,
+      details: {
+        harmLevel: 'threatened' as const,
+        targetType: 'human_like_character' as const,
+        weaponRole: 'none' as const,
+        actionPurpose: 'threat' as const,
+      },
+    }
+
+    const result = await provider.reviewBatch([{
+      itemId: 'video',
+      transcript,
+      language: 'ru',
+      enabledCategories: ['violence'],
+      events: [original],
+    }])
+
+    expect(result.items[0]?.complete).toBe(false)
+    expect(result.items[0]?.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_drift',
+      startMs: 1_000,
+      endMs: 2_000,
+      review: { status: 'not_reviewed' },
+    })
+    expect(result.items[0]?.reviewedEvents[0]?.review?.parentSummary).toBeUndefined()
+    expect(result.items[0]?.reviewedEvents[0]?.review?.actor).toBeUndefined()
+    expect(result.items[0]?.decisions[0]?.verdict).toBe('not_reviewed')
+    expect(result.items[0]?.decisions[0]?.rationale).toContain('semantic fields were discarded')
   })
 
   it('accepts a low-relevance rejection when review finds no directed aggression or harm', async () => {
@@ -146,6 +394,7 @@ describe('OpenAI scene-level batch review', () => {
             event: null,
             parentRelevance: 'low',
             evidenceSufficiency: 'sufficient',
+            ...decisionSemantics('No harmful event is established.'),
             rationale: 'No directed aggression or harmful consequence is established.',
           }])],
         }],
