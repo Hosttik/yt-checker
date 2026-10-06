@@ -614,6 +614,7 @@ async function loadScan(scanDir: string): Promise<{ scanDir: string; records: Sc
         videoId: entry.videoId,
         transcript,
         transcriptHash: createHash('sha256').update(entry.normalizedTranscript).digest('hex').slice(0, 16),
+        transcriptLanguage: entry.requestMetadata?.transcriptLanguage ?? 'ru',
         baselineEvents: entry.parsedResult?.normalizedContentEvents ?? [],
         baselineLatencyMs: entry.provider?.latencyMs ?? 0,
       }
@@ -621,55 +622,21 @@ async function loadScan(scanDir: string): Promise<{ scanDir: string; records: Sc
   return { scanDir, records, result }
 }
 
-function isRateLimitError(error: unknown): boolean {
-  return Boolean(
-    error
-    && typeof error === 'object'
-    && (
-      ('type' in error && error.type === 'rate_limit')
-      || ('status' in error && error.status === 429)
-    ),
-  )
-}
-
-async function withRateLimitRetry<T>(
-  label: string,
-  task: () => Promise<T>,
-  maxRetries: number,
-  baseDelayMs: number,
-): Promise<{ value: T; retries: number }> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return { value: await task(), retries: attempt }
-    } catch (error) {
-      if (!isRateLimitError(error) || attempt >= maxRetries) throw error
-      const delayMs = Math.min(baseDelayMs * (2 ** attempt), 60_000)
-      console.warn(
-        `[quality] rate limit on ${label}; retry ${attempt + 1}/${maxRetries} in ${delayMs}ms`,
-      )
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs))
-    }
-  }
-}
-
 async function runCurrent(
   record: ScanRecord,
-  detector: OpenAIAnalysisProvider,
-  reviewer: OpenAIAnalysisProvider,
+  detector: ContentAnalyzer,
+  reviewer: ContentReviewer,
+  coverageProvider: OpenAIAnalysisProvider,
+  scheduler: ProviderScheduler,
   profile: AnalysisProfile,
-  rateLimitRetries: number,
-  retryBaseDelayMs: number,
+  coverageEnabled: boolean,
 ): Promise<NewVideoResult> {
   const wallStarted = performance.now()
   const usage = zeroUsage()
-  const detectionAttempt = await withRateLimitRetry(
-    `${record.videoId}:detector`,
-    () => detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false),
-    rateLimitRetries,
-    retryBaseDelayMs,
-  )
-  const detection = detectionAttempt.value
-  addUsage(usage, { ...detection.usage, requests: 1 })
+  const language = record.transcriptLanguage
+  const detection = await detector.analyze(record.transcript, language, ALL_CATEGORIES, false)
+  addUsage(usage, { ...detection.usage, requests: detection.requestCount })
+
   const onePassValidation = validateClassifiedEvents(detection.classifiedEvents)
   const onePassEvents = normalizeClassifiedEvents(onePassValidation.accepted)
     .map((event, index) => applyContentPolicy(
@@ -677,46 +644,44 @@ async function runCurrent(
       `${record.videoId}:one-pass:${index}:${event.category}:${event.subtype}`,
       profile,
     ))
+
   let reviewed = detection.classifiedEvents
   let reviewDecisions: OpenAIReviewDecision[] = []
   let rescuedEvents: ClassifiedContentEvent[] = []
   let rescuedCandidates = 0
   let rescueRejectedCandidates = 0
-  let requests = 1 + detectionAttempt.retries
+  let requests = detection.requestCount
   let tokens = detection.usage.totalTokens
   let latencyMs = detection.provider.latencyMs
 
   if (reviewed.length > 0) {
-    const reviewAttempt = await withRateLimitRetry(
-      `${record.videoId}:review`,
-      () => reviewer.review(record.transcript, 'ru', ALL_CATEGORIES, reviewed),
-      rateLimitRetries,
-      retryBaseDelayMs,
-    )
-    const review = reviewAttempt.value
+    const review = await reviewer.review(record.transcript, language, ALL_CATEGORIES, reviewed)
     addUsage(usage, { ...review.usage, requests: review.requestCount })
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
-    requests += review.requestCount + reviewAttempt.retries
+    requests += review.requestCount
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
   }
 
-  const coverageAttempt = await withRateLimitRetry(
-    `${record.videoId}:coverage`,
-    () => reviewer.coverage(record.transcript, 'ru', ALL_CATEGORIES, reviewed),
-    rateLimitRetries,
-    retryBaseDelayMs,
-  )
-  const coverage = coverageAttempt.value
-  addUsage(usage, { ...coverage.usage, requests: coverage.requestCount })
-  rescuedEvents = coverage.rescuedEvents
-  rescuedCandidates = coverage.rescuedCandidates
-  rescueRejectedCandidates = coverage.rejectedCandidates
-  reviewed = [...reviewed, ...coverage.rescuedEvents]
-  requests += coverage.requestCount + coverageAttempt.retries
-  tokens += coverage.usage.totalTokens
-  latencyMs += coverage.provider.latencyMs
+  if (coverageEnabled) {
+    let scheduledCoverageAttempts = 0
+    const coverage = await scheduler.run(
+      16_000 + estimateTextTokens(record.transcript.text),
+      async () => {
+        scheduledCoverageAttempts += 1
+        return coverageProvider.coverage(record.transcript, language, ALL_CATEGORIES, reviewed)
+      },
+    )
+    addUsage(usage, { ...coverage.usage, requests: scheduledCoverageAttempts })
+    rescuedEvents = coverage.rescuedEvents
+    rescuedCandidates = coverage.rescuedCandidates
+    rescueRejectedCandidates = coverage.rejectedCandidates
+    reviewed = [...reviewed, ...coverage.rescuedEvents]
+    requests += scheduledCoverageAttempts
+    tokens += coverage.usage.totalTokens
+    latencyMs += coverage.provider.latencyMs
+  }
 
   const validation = validateClassifiedEvents(reviewed)
   const events = normalizeClassifiedEvents(validation.accepted)
@@ -726,6 +691,7 @@ async function runCurrent(
       profile,
     ))
   usage.requests = requests
+
   return {
     scanName: record.scanName,
     videoId: record.videoId,
