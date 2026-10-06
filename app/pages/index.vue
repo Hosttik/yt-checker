@@ -293,12 +293,17 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
 
       <div class="summary-grid">
         <article v-for="item in result.channelReport" :key="item.category" class="summary-card">
-          <strong>Уровень по выборке: {{ levelText(item.level) }}</strong>
+          <strong>Подтверждённый уровень по выборке: {{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
           <small v-if="result.profile === 'diagnostic'">
             shown in {{ item.affectedVideos }}/{{ item.analyzedVideos }} videos ·
             raw affected {{ item.rawAffectedVideos }}/{{ item.analyzedVideos }} ·
             {{ item.displayedEventCount }} shown from {{ item.rawEventCount }} raw signals
+          </small>
+          <small v-if="item.pendingReviewSceneCount > 0" class="warning">
+            Требуют проверки: {{ item.pendingReviewSceneCount }} сцен в
+            {{ item.pendingReviewVideos }}/{{ item.analyzedVideos }} видео ·
+            потенциальная выраженность: {{ levelText(item.pendingReviewPeakConcern) }}.
           </small>
           <small v-else-if="item.level === 'none'">
             Значимых элементов для выбранного профиля не показано
