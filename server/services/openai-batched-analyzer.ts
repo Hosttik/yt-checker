@@ -344,9 +344,13 @@ export class BatchedOpenAIAnalyzer {
             transcriptText: chunk.transcriptText,
             language: chunk.language,
           }))
+          let scheduledAttempts = 0
           const response = await this.scheduler.run(
             estimatedTokens,
-            () => this.provider.analyzeBatch(input, categories, diagnostic),
+            async () => {
+              scheduledAttempts += 1
+              return this.provider.analyzeBatch(input, categories, diagnostic)
+            },
           )
           const byId = new Map(response.items.map((item) => [item.itemId, item]))
           const usages = distributeUsage(response.usage, batch.map((chunk) => chunk.estimatedTokens))
@@ -358,7 +362,9 @@ export class BatchedOpenAIAnalyzer {
               chunk,
               result,
               usage: usages[index]!,
-              requestCount: index === 0 ? response.requestCount : 0,
+              requestCount: index === 0
+                ? scheduledAttempts + Math.max(0, response.requestCount - 1)
+                : 0,
               provider: response.provider,
             }
           })
