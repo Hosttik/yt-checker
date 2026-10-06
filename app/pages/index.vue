@@ -4,7 +4,7 @@ import type {
   ScanStorageMode,
   TranscriptUnavailableReason,
 } from '../../shared/types/check'
-import type { AnalysisProfile, ContentCategory, PrevalenceLevel, ReportLevel } from '../../shared/types/content'
+import type { AnalysisProfile, ContentCategory, PrevalenceLevel, PresentationScene, ReportLevel } from '../../shared/types/content'
 
 const availableRules: Array<{ id: ContentCategory; label: string }> = [
   { id: 'profanity_and_rude_language', label: 'Мат и грубая лексика' },
@@ -111,6 +111,14 @@ function levelText(level: ReportLevel): string {
   if (level === 'moderate') return 'Умеренный'
   if (level === 'low') return 'Низкий'
   return 'Не обнаружено'
+}
+
+function sceneLevelText(scene: PresentationScene): string {
+  if (scene.evidenceStatus === 'verified') return levelText(scene.level)
+  if (scene.evidenceStatus === 'uncertain') {
+    return `Требует проверки · ${levelText(scene.level).toLowerCase()} потенциальный приоритет`
+  }
+  return `Не перепроверено · ${levelText(scene.level).toLowerCase()} потенциальный приоритет`
 }
 
 function prevalenceText(level: PrevalenceLevel): string {
@@ -359,7 +367,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <div>
                 <strong>{{ scene.label }}</strong>
                 <small>
-                  {{ levelText(scene.level) }}
+                  {{ sceneLevelText(scene) }}
                   <template v-if="result.profile === 'diagnostic'"> · {{ scene.categories.join(', ') }}</template>
                 </small>
               </div>
@@ -396,7 +404,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <li v-for="scene in detailScenes(video.id)" :key="`detail:${scene.sceneId}`">
                 <div>
                   <strong>{{ scene.label }}</strong>
-                  <small>{{ levelText(scene.level) }}</small>
+                  <small>{{ sceneLevelText(scene) }}</small>
                 </div>
                 <div class="range-list">
                   <a
