@@ -164,6 +164,15 @@ describe('parental audit regressions', () => {
       evidenceStatus: 'uncertain',
       reviewStatus: 'unreviewed',
     })
+    const channel = buildChannelCategoryReports(
+      [{ videoId: 'v1', events: [result] }],
+      ['scary_and_disturbing'],
+      1,
+      'normal',
+    )[0]!
+    expect(channel.level).toBe('none')
+    expect(channel.pendingReviewVideos).toBe(1)
+    expect(channel.pendingReviewPeakConcern).toBe('high')
   })
 
   it('does not promote repeated low details into moderate channel concern', () => {
