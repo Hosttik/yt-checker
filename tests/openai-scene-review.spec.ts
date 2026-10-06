@@ -278,6 +278,108 @@ describe('OpenAI scene-level batch review', () => {
     })
   })
 
+  it('discards batch-review semantics when confirmed evidence drifts to another phase', async () => {
+    const parse = vi.fn().mockResolvedValue({
+      id: 'resp_scene_confirmed_drift',
+      status: 'completed',
+      output_text: '{}',
+      output_parsed: {
+        items: [{
+          itemId: 'video',
+          scenes: [sceneOutput([{
+            reviewItemId: 'video_review_0',
+            verdict: 'confirmed',
+            event: {
+              candidateId: 'candidate_drift',
+              sceneId: 'shared_scene',
+              category: 'violence',
+              subtype: 'violent_threat',
+              severity: 'high',
+              context: 'game',
+              confidence: 0.99,
+              evidenceStrength: 'explicit',
+              engagementLevel: 'depiction',
+              portrayal: 'discouraged',
+              explicitness: 'mild',
+              assertionStatus: 'threatened',
+              evidenceSegments: [1],
+              sceneStartSegment: 0,
+              sceneEndSegment: 1,
+              reason: 'Поздняя реплика ошибочно используется как доказательство исходной угрозы.',
+              details: {
+                harmLevel: 'threatened',
+                targetType: 'human_like_character',
+                weaponRole: 'none',
+                actionPurpose: 'threat',
+              },
+            },
+            parentRelevance: 'high',
+            evidenceSufficiency: 'sufficient',
+            actor: 'читер',
+            target: 'жители',
+            aggressionDirection: 'actor_to_target',
+            intent: 'coercive',
+            distress: 'strong',
+            consequence: 'threatened_harm',
+            duration: 'sustained',
+            repetition: 'single',
+            narrativeFraming: 'discouraged',
+            parentSummary: 'Читер угрожает жителям.',
+            mitigatingContext: null,
+            highPriorityReason: 'Направленная угроза используется для принуждения.',
+            rationale: 'Semantics refer to the later fragment.',
+          }])],
+        }],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 100, output_tokens: 30, total_tokens: 130 },
+    })
+
+    const provider = new OpenAIAnalysisProvider(
+      'secret',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as unknown as OpenAI,
+    )
+    const transcript = normalizeTranscript([
+      { text: 'Я вас не отпущу.', startMs: 1_000, endMs: 2_000 },
+      { text: 'Позже происходит другая сцена.', startMs: 30_000, endMs: 31_000 },
+    ])
+    const original = {
+      ...baseViolence('candidate_drift', 'shared_scene'),
+      subtype: 'violent_threat' as const,
+      assertionStatus: 'threatened' as const,
+      sceneStartMs: 1_000,
+      sceneEndMs: 31_000,
+      details: {
+        harmLevel: 'threatened' as const,
+        targetType: 'human_like_character' as const,
+        weaponRole: 'none' as const,
+        actionPurpose: 'threat' as const,
+      },
+    }
+
+    const result = await provider.reviewBatch([{
+      itemId: 'video',
+      transcript,
+      language: 'ru',
+      enabledCategories: ['violence'],
+      events: [original],
+    }])
+
+    expect(result.items[0]?.complete).toBe(false)
+    expect(result.items[0]?.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_drift',
+      startMs: 1_000,
+      endMs: 2_000,
+      review: { status: 'not_reviewed' },
+    })
+    expect(result.items[0]?.reviewedEvents[0]?.review?.parentSummary).toBeUndefined()
+    expect(result.items[0]?.reviewedEvents[0]?.review?.actor).toBeUndefined()
+    expect(result.items[0]?.decisions[0]?.verdict).toBe('not_reviewed')
+    expect(result.items[0]?.decisions[0]?.rationale).toContain('semantic fields were discarded')
+  })
+
   it('accepts a low-relevance rejection when review finds no directed aggression or harm', async () => {
     const parse = vi.fn().mockResolvedValue({
       id: 'resp_downgrade',
