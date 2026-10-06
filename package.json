@@ -15,10 +15,12 @@
     "check": "npm run typecheck && npm run test && npm run build",
     "eval:classifier": "RUN_CLASSIFIER_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/classifier.spec.ts",
     "eval:parental-quality": "RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
-    "eval:parental-quality:stability": "QUALITY_RUNS=5 QUALITY_CONCURRENCY=1 QUALITY_RATE_LIMIT_RETRIES=5 QUALITY_RETRY_BASE_MS=10000 QUALITY_RUN_COOLDOWN_MS=10000 RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
-    "eval:parental-quality:stability:low": "QUALITY_REASONING_EFFORT=low QUALITY_RUNS=5 QUALITY_CONCURRENCY=1 QUALITY_RATE_LIMIT_RETRIES=5 QUALITY_RETRY_BASE_MS=10000 QUALITY_RUN_COOLDOWN_MS=10000 RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
+    "eval:parental-quality:stability": "QUALITY_RUNS=5 QUALITY_ORDER_MODE=stable RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
+    "eval:parental-quality:stability:low": "QUALITY_REASONING_EFFORT=low npm run eval:parental-quality:stability",
     "eval:parental-quality:stability:high": "QUALITY_REASONING_EFFORT=high QUALITY_OPENAI_TIMEOUT_MS=180000 npm run eval:parental-quality:stability",
-    "eval:parental-quality:cross-channel": "QUALITY_REASONING_EFFORT=low QUALITY_RUNS=1 QUALITY_CONCURRENCY=1 QUALITY_DISCOVER_SCANS=1 QUALITY_UNIQUE_CHANNELS=1 QUALITY_MAX_SCANS=5 QUALITY_MAX_VIDEOS_PER_SCAN=10 QUALITY_MAX_VIDEOS=50 QUALITY_ALLOW_UNANNOTATED=1 QUALITY_RATE_LIMIT_RETRIES=5 QUALITY_RETRY_BASE_MS=10000 RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts"
+    "eval:parental-quality:cross-channel": "QUALITY_REASONING_EFFORT=low QUALITY_RUNS=1 QUALITY_DISCOVER_SCANS=1 QUALITY_UNIQUE_CHANNELS=1 QUALITY_MAX_SCANS=5 QUALITY_MAX_VIDEOS_PER_SCAN=10 QUALITY_MAX_VIDEOS=50 QUALITY_ALLOW_UNANNOTATED=1 RUN_PARENTAL_QUALITY_EVAL=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run evals/parental-quality.spec.ts",
+    "eval:parental-quality:detector-batch1": "OPENAI_DETECTOR_BATCH_MAX_ITEMS=1 QUALITY_ORDER_MODE=rotate QUALITY_RUNS=5 npm run eval:parental-quality",
+    "eval:parental-quality:detector-batch5": "OPENAI_DETECTOR_BATCH_MAX_ITEMS=5 QUALITY_ORDER_MODE=rotate QUALITY_RUNS=5 npm run eval:parental-quality"
   },
   "dependencies": {
     "nuxt": "^4.0.0",

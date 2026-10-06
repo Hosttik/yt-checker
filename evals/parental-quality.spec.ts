@@ -18,6 +18,8 @@ import { normalizeClassifiedEvents } from '../server/domain/content-normalizatio
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
 import type { NormalizedTranscript } from '../server/domain/normalize-transcript'
+import { optionalPositiveIntegerEnv, ProviderScheduler } from '../server/utils/provider-scheduler'
+import { positiveIntegerEnv } from '../server/utils/semaphore'
 import {
   OPENAI_COVERAGE_PROMPT_VERSION,
   OPENAI_COVERAGE_SCHEMA_VERSION,
@@ -29,9 +31,16 @@ import {
   type OpenAIReasoningEffort,
   type OpenAIReviewDecision,
 } from '../server/services/openai-analysis'
+import { estimateTextTokens } from '../server/services/openai-batched-analyzer'
+import {
+  createOpenAIAnalysisStack,
+  openAIBatchingManifestFromEnv,
+  type ContentAnalyzer,
+  type ContentReviewer,
+} from '../server/services/openai-analysis-stack'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.cross-channel-cost-v15'
+const QUALITY_EVAL_VERSION = '2026-10-06.production-parity-v17'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -82,7 +91,7 @@ interface ManualCase {
 interface DiagnosticEntry {
   videoId: string
   normalizedTranscript: string
-  requestMetadata?: { enabledCategories?: ContentCategory[] }
+  requestMetadata?: { enabledCategories?: ContentCategory[]; transcriptLanguage?: string }
   provider?: { latencyMs?: number }
   usage?: {
     inputTokens?: number
@@ -117,6 +126,7 @@ interface ScanRecord {
   videoId: string
   transcript: NormalizedTranscript
   transcriptHash: string
+  transcriptLanguage: string
   baselineEvents: ContentEvent[]
   baselineLatencyMs: number
 }
@@ -134,6 +144,7 @@ interface NewVideoResult {
   rescueRejectedCandidates: number
   onePassSceneCount: number
   sceneCount: number
+  detectorRequests: number
   detectorTokens: number
   detectorLatencyMs: number
   requests: number
@@ -186,6 +197,7 @@ interface VideoRunStat {
 }
 
 interface RunOutput {
+  videoOrder: string[]
   metrics: MetricSet
   onePassMetrics: MetricSet
   cardAudit: CardAudit
@@ -194,6 +206,7 @@ interface RunOutput {
   requests: number
   tokens: number
   latencyMs: number
+  detectorRequests: number
   detectorTokens: number
   detectorLatencyMs: number
   onePassSceneCount: number
@@ -217,7 +230,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 15
+  version: 17
   key: string
   runOutputs: RunOutput[]
 }
@@ -606,6 +619,7 @@ async function loadScan(scanDir: string): Promise<{ scanDir: string; records: Sc
         videoId: entry.videoId,
         transcript,
         transcriptHash: createHash('sha256').update(entry.normalizedTranscript).digest('hex').slice(0, 16),
+        transcriptLanguage: entry.requestMetadata?.transcriptLanguage ?? 'ru',
         baselineEvents: entry.parsedResult?.normalizedContentEvents ?? [],
         baselineLatencyMs: entry.provider?.latencyMs ?? 0,
       }
@@ -613,55 +627,21 @@ async function loadScan(scanDir: string): Promise<{ scanDir: string; records: Sc
   return { scanDir, records, result }
 }
 
-function isRateLimitError(error: unknown): boolean {
-  return Boolean(
-    error
-    && typeof error === 'object'
-    && (
-      ('type' in error && error.type === 'rate_limit')
-      || ('status' in error && error.status === 429)
-    ),
-  )
-}
-
-async function withRateLimitRetry<T>(
-  label: string,
-  task: () => Promise<T>,
-  maxRetries: number,
-  baseDelayMs: number,
-): Promise<{ value: T; retries: number }> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return { value: await task(), retries: attempt }
-    } catch (error) {
-      if (!isRateLimitError(error) || attempt >= maxRetries) throw error
-      const delayMs = Math.min(baseDelayMs * (2 ** attempt), 60_000)
-      console.warn(
-        `[quality] rate limit on ${label}; retry ${attempt + 1}/${maxRetries} in ${delayMs}ms`,
-      )
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs))
-    }
-  }
-}
-
 async function runCurrent(
   record: ScanRecord,
-  detector: OpenAIAnalysisProvider,
-  reviewer: OpenAIAnalysisProvider,
+  detector: ContentAnalyzer,
+  reviewer: ContentReviewer,
+  coverageProvider: OpenAIAnalysisProvider,
+  scheduler: ProviderScheduler,
   profile: AnalysisProfile,
-  rateLimitRetries: number,
-  retryBaseDelayMs: number,
+  coverageEnabled: boolean,
 ): Promise<NewVideoResult> {
   const wallStarted = performance.now()
   const usage = zeroUsage()
-  const detectionAttempt = await withRateLimitRetry(
-    `${record.videoId}:detector`,
-    () => detector.analyze(record.transcript, 'ru', ALL_CATEGORIES, false),
-    rateLimitRetries,
-    retryBaseDelayMs,
-  )
-  const detection = detectionAttempt.value
-  addUsage(usage, { ...detection.usage, requests: 1 })
+  const language = record.transcriptLanguage
+  const detection = await detector.analyze(record.transcript, language, ALL_CATEGORIES, false)
+  addUsage(usage, { ...detection.usage, requests: detection.requestCount })
+
   const onePassValidation = validateClassifiedEvents(detection.classifiedEvents)
   const onePassEvents = normalizeClassifiedEvents(onePassValidation.accepted)
     .map((event, index) => applyContentPolicy(
@@ -669,46 +649,44 @@ async function runCurrent(
       `${record.videoId}:one-pass:${index}:${event.category}:${event.subtype}`,
       profile,
     ))
+
   let reviewed = detection.classifiedEvents
   let reviewDecisions: OpenAIReviewDecision[] = []
   let rescuedEvents: ClassifiedContentEvent[] = []
   let rescuedCandidates = 0
   let rescueRejectedCandidates = 0
-  let requests = 1 + detectionAttempt.retries
+  let requests = detection.requestCount
   let tokens = detection.usage.totalTokens
   let latencyMs = detection.provider.latencyMs
 
   if (reviewed.length > 0) {
-    const reviewAttempt = await withRateLimitRetry(
-      `${record.videoId}:review`,
-      () => reviewer.review(record.transcript, 'ru', ALL_CATEGORIES, reviewed),
-      rateLimitRetries,
-      retryBaseDelayMs,
-    )
-    const review = reviewAttempt.value
+    const review = await reviewer.review(record.transcript, language, ALL_CATEGORIES, reviewed)
     addUsage(usage, { ...review.usage, requests: review.requestCount })
     reviewed = review.reviewedEvents
     reviewDecisions = review.decisions
-    requests += review.requestCount + reviewAttempt.retries
+    requests += review.requestCount
     tokens += review.usage.totalTokens
     latencyMs += review.provider.latencyMs
   }
 
-  const coverageAttempt = await withRateLimitRetry(
-    `${record.videoId}:coverage`,
-    () => reviewer.coverage(record.transcript, 'ru', ALL_CATEGORIES, reviewed),
-    rateLimitRetries,
-    retryBaseDelayMs,
-  )
-  const coverage = coverageAttempt.value
-  addUsage(usage, { ...coverage.usage, requests: coverage.requestCount })
-  rescuedEvents = coverage.rescuedEvents
-  rescuedCandidates = coverage.rescuedCandidates
-  rescueRejectedCandidates = coverage.rejectedCandidates
-  reviewed = [...reviewed, ...coverage.rescuedEvents]
-  requests += coverage.requestCount + coverageAttempt.retries
-  tokens += coverage.usage.totalTokens
-  latencyMs += coverage.provider.latencyMs
+  if (coverageEnabled) {
+    let scheduledCoverageAttempts = 0
+    const coverage = await scheduler.run(
+      16_000 + estimateTextTokens(record.transcript.text),
+      async () => {
+        scheduledCoverageAttempts += 1
+        return coverageProvider.coverage(record.transcript, language, ALL_CATEGORIES, reviewed)
+      },
+    )
+    addUsage(usage, { ...coverage.usage, requests: scheduledCoverageAttempts })
+    rescuedEvents = coverage.rescuedEvents
+    rescuedCandidates = coverage.rescuedCandidates
+    rescueRejectedCandidates = coverage.rejectedCandidates
+    reviewed = [...reviewed, ...coverage.rescuedEvents]
+    requests += scheduledCoverageAttempts
+    tokens += coverage.usage.totalTokens
+    latencyMs += coverage.provider.latencyMs
+  }
 
   const validation = validateClassifiedEvents(reviewed)
   const events = normalizeClassifiedEvents(validation.accepted)
@@ -718,6 +696,7 @@ async function runCurrent(
       profile,
     ))
   usage.requests = requests
+
   return {
     scanName: record.scanName,
     videoId: record.videoId,
@@ -731,6 +710,7 @@ async function runCurrent(
     rescueRejectedCandidates,
     onePassSceneCount: buildPresentationScenes(onePassEvents).length,
     sceneCount: buildPresentationScenes(events).length,
+    detectorRequests: detection.requestCount,
     detectorTokens: detection.usage.totalTokens,
     detectorLatencyMs: detection.provider.latencyMs,
     requests,
@@ -905,9 +885,25 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         .filter(Boolean),
     )
     const runs = Math.max(1, Math.min(5, Number(process.env.QUALITY_RUNS ?? 1)))
-    const concurrency = Math.max(1, Math.min(5, Number(process.env.QUALITY_CONCURRENCY ?? 1)))
-    const rateLimitRetries = Math.max(0, Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? 5)))
-    const retryBaseDelayMs = Math.max(1_000, Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 10_000)))
+    const concurrency = Math.max(
+      1,
+      Math.min(10, Number(process.env.QUALITY_CONCURRENCY ?? process.env.SCAN_VIDEO_CONCURRENCY ?? 10)),
+    )
+    const rateLimitRetries = Math.max(
+      0,
+      Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? process.env.OPENAI_RATE_LIMIT_RETRIES ?? 2)),
+    )
+    const retryBaseDelayMs = Math.max(
+      50,
+      Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 1_000)),
+    )
+    const coverageEnabled = process.env.QUALITY_ENABLE_COVERAGE === '1'
+    const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
+    const batchingManifest = openAIBatchingManifestFromEnv(batchingEnabled)
+    const orderMode = process.env.QUALITY_ORDER_MODE ?? 'stable'
+    if (!['stable', 'rotate', 'reverse'].includes(orderMode)) {
+      throw new Error('QUALITY_ORDER_MODE must be one of: stable, rotate, reverse.')
+    }
     const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
     const requestTimeoutMs = Math.max(60_000, Math.min(600_000, Number(process.env.QUALITY_OPENAI_TIMEOUT_MS ?? 60_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
@@ -1012,12 +1008,23 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         reviewModel,
         reasoningEffort,
         requestTimeoutMs,
+        coverageEnabled,
+        batching: batchingManifest,
+        orderMode,
+        transcriptLanguages: Object.fromEntries(selected.map((record) => [
+          record.videoId,
+          record.transcriptLanguage,
+        ])),
         discoverScans,
         uniqueChannels,
         maxScans,
         maxVideosPerScan,
         transcriptCreditUsd,
         profile,
+        batching: batchingManifest,
+        coverageEnabled,
+        orderMode,
+        transcriptLanguages: selected.map((record) => [record.videoId, record.transcriptLanguage]),
       }))
       .digest('hex')
       .slice(0, 16)
@@ -1026,7 +1033,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 15 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 17 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1035,35 +1042,43 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     }
 
     console.log(
-      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, batching=${batchingEnabled}, coverage=${coverageEnabled}, order=${orderMode}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
     )
     if (runOutputs.length > 0) {
       console.log(`[quality] resumed from checkpoint: ${runOutputs.length}/${runs} completed run(s)`)
     }
 
     for (let run = runOutputs.length; run < runs; run += 1) {
-      const detector = new OpenAIAnalysisProvider(
+      const scheduler = new ProviderScheduler({
+        concurrency: positiveIntegerEnv('OPENAI_GLOBAL_CONCURRENCY', 5),
+        requestsPerMinute: optionalPositiveIntegerEnv('OPENAI_RPM_BUDGET'),
+        tokensPerMinute: optionalPositiveIntegerEnv('OPENAI_TPM_BUDGET'),
+        maxRetries: rateLimitRetries,
+        retryBaseMs: retryBaseDelayMs,
+      })
+      const analysisStack = createOpenAIAnalysisStack({
         apiKey,
-        model,
-        undefined,
-        undefined,
+        detectorModel: model,
+        reviewerModel: reviewModel,
+        scheduler,
+        batchingEnabled,
         reasoningEffort,
         requestTimeoutMs,
-      )
-      const reviewer = new OpenAIAnalysisProvider(
-        apiKey,
-        reviewModel,
-        undefined,
-        undefined,
-        reasoningEffort,
-        requestTimeoutMs,
-      )
+      })
+      const { analyzer: detector, reviewer, reviewerProvider } = analysisStack
       const newByKey = new Map<string, NewVideoResult>()
       let completedVideos = 0
 
-      console.log(`[quality] run ${run + 1}/${runs} started`)
+      const orderedSelected = orderMode === 'rotate'
+        ? [...selected.slice(run % selected.length), ...selected.slice(0, run % selected.length)]
+        : orderMode === 'reverse' && run % 2 === 1
+          ? [...selected].reverse()
+          : selected
+      console.log(
+        `[quality] run ${run + 1}/${runs} started; order=${orderedSelected.map((item) => item.videoId).join(',')}`,
+      )
       const outputsForRun = await mapWithConcurrency(
-        selected,
+        orderedSelected,
         concurrency,
         async (record, index) => {
           console.log(
@@ -1074,9 +1089,10 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
               record,
               detector,
               reviewer,
+              reviewerProvider,
+              scheduler,
               profile,
-              rateLimitRetries,
-              retryBaseDelayMs,
+              coverageEnabled,
             )
             completedVideos += 1
             console.log(
@@ -1144,6 +1160,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         }
       })
       runOutputs.push({
+        videoOrder: orderedSelected.map((record) => record.videoId),
         metrics: metricsFor(applicableAnnotations, currentByVideo),
         onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
         cardAudit: cardAuditFor(applicableAnnotations, currentByVideo, coverage),
@@ -1155,6 +1172,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         requests: outputs.reduce((sum, item) => sum + item.requests, 0),
         tokens: outputs.reduce((sum, item) => sum + item.tokens, 0),
         latencyMs: outputs.reduce((sum, item) => sum + item.latencyMs, 0),
+        detectorRequests: outputs.reduce((sum, item) => sum + item.detectorRequests, 0),
         detectorTokens: outputs.reduce((sum, item) => sum + item.detectorTokens, 0),
         detectorLatencyMs: outputs.reduce((sum, item) => sum + item.detectorLatencyMs, 0),
         onePassSceneCount: outputs.reduce((sum, item) => sum + item.onePassSceneCount, 0),
@@ -1183,7 +1201,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 15,
+          version: 17,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1342,6 +1360,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         detectorModel: model,
         reviewerModel: reviewModel,
         reasoningEffort,
+        profile,
+        coverageEnabled,
+        batching: batchingManifest,
         detectorPrompt: OPENAI_PROMPT_VERSION,
         detectorSchema: OPENAI_SCHEMA_VERSION,
         reviewerPrompt: OPENAI_REVIEW_PROMPT_VERSION,
@@ -1354,7 +1375,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       baselineCombinedCardAudit,
       currentOnePass: {
         metrics: current.onePassMetrics,
-        requests: selected.length,
+        requests: current.detectorRequests,
         tokens: current.detectorTokens,
         latencyMs: current.detectorLatencyMs,
         sceneCount: current.onePassSceneCount,

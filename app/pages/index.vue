@@ -4,7 +4,7 @@ import type {
   ScanStorageMode,
   TranscriptUnavailableReason,
 } from '../../shared/types/check'
-import type { AnalysisProfile, ContentCategory, PrevalenceLevel, ReportLevel } from '../../shared/types/content'
+import type { AnalysisProfile, ContentCategory, PrevalenceLevel, PresentationScene, ReportLevel } from '../../shared/types/content'
 
 const availableRules: Array<{ id: ContentCategory; label: string }> = [
   { id: 'profanity_and_rude_language', label: 'Мат и грубая лексика' },
@@ -111,6 +111,14 @@ function levelText(level: ReportLevel): string {
   if (level === 'moderate') return 'Умеренный'
   if (level === 'low') return 'Низкий'
   return 'Не обнаружено'
+}
+
+function sceneLevelText(scene: PresentationScene): string {
+  if (scene.evidenceStatus === 'verified') return levelText(scene.level)
+  if (scene.evidenceStatus === 'uncertain') {
+    return `Требует проверки · ${levelText(scene.level).toLowerCase()} потенциальный приоритет`
+  }
+  return `Не перепроверено · ${levelText(scene.level).toLowerCase()} потенциальный приоритет`
 }
 
 function prevalenceText(level: PrevalenceLevel): string {
@@ -285,12 +293,17 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
 
       <div class="summary-grid">
         <article v-for="item in result.channelReport" :key="item.category" class="summary-card">
-          <strong>Уровень по выборке: {{ levelText(item.level) }}</strong>
+          <strong>Подтверждённый уровень по выборке: {{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
           <small v-if="result.profile === 'diagnostic'">
             shown in {{ item.affectedVideos }}/{{ item.analyzedVideos }} videos ·
             raw affected {{ item.rawAffectedVideos }}/{{ item.analyzedVideos }} ·
             {{ item.displayedEventCount }} shown from {{ item.rawEventCount }} raw signals
+          </small>
+          <small v-if="item.pendingReviewSceneCount > 0" class="warning">
+            Требуют проверки: {{ item.pendingReviewSceneCount }} сцен в
+            {{ item.pendingReviewVideos }}/{{ item.analyzedVideos }} видео ·
+            потенциальная выраженность: {{ levelText(item.pendingReviewPeakConcern) }}.
           </small>
           <small v-else-if="item.level === 'none'">
             Значимых элементов для выбранного профиля не показано
@@ -359,7 +372,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <div>
                 <strong>{{ scene.label }}</strong>
                 <small>
-                  {{ levelText(scene.level) }}
+                  {{ sceneLevelText(scene) }}
                   <template v-if="result.profile === 'diagnostic'"> · {{ scene.categories.join(', ') }}</template>
                 </small>
               </div>
@@ -396,7 +409,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <li v-for="scene in detailScenes(video.id)" :key="`detail:${scene.sceneId}`">
                 <div>
                   <strong>{{ scene.label }}</strong>
-                  <small>{{ levelText(scene.level) }}</small>
+                  <small>{{ sceneLevelText(scene) }}</small>
                 </div>
                 <div class="range-list">
                   <a

@@ -9,11 +9,11 @@ The content-safety pipeline is:
 ```text
 Transcript
   ↓
-LLM detector: factual candidate detection on full transcript
+LLM detector: factual candidate detection on token-aware transcript chunks/batches
   ↓
 ClassifiedContentEvent hypotheses
   ↓
-LLM reviewer: verify/correct/reject against the same full transcript
+LLM reviewer: verify/correct/reject using local transcript windows around candidate scenes
   ↓
 Semantic validation
   ↓
@@ -28,7 +28,7 @@ Channel aggregation
 Presentation
 ```
 
-The detector always receives the full normalized transcript. A second OpenAI request is made only when detector candidates exist; all candidates for that video are reviewed in one batch against the original full transcript. The reviewer is not invoked once per event. If review fails or is incomplete, first-pass findings are retained and explicitly marked as unreviewed/partial instead of being converted into an empty result.
+The normalized transcript is split into overlapping token-aware chunks when needed and chunks from concurrently processed videos may be coalesced into detector batches. The batching manifest is persisted with the scan result. A contextual review is scheduled only when detector candidates exist. Review uses transcript windows around the candidate scenes (currently 120 seconds before and 180 seconds after), and candidates from concurrent videos may also be batched. Normal production scans do not run the additional coverage pass; diagnostic profile does. If review fails or is incomplete, first-pass findings are retained with an explicit unreviewed/uncertain state instead of being converted into an empty result.
 
 ## Responsibility boundaries
 
@@ -57,7 +57,7 @@ The detector does **not** decide:
 
 ### Contextual reviewer
 
-The second pass treats first-pass candidates as untrusted hypotheses and re-reads the full original transcript. For each candidate it returns:
+The second pass treats first-pass candidates as untrusted hypotheses and re-reads the available local transcript context around their scenes. For each candidate it returns:
 
 - `confirmed`, `corrected`, `rejected`, or `uncertain`;
 - a corrected factual event when one can be supported;
@@ -75,12 +75,12 @@ Direct evidence supports the factual user-facing `reason`. Context ranges may ex
 `categoryPolicies` deterministically calculates:
 
 - baseline `parentRelevance` from category semantics;
-- reviewed relevance integration (confirmed/corrected review may demote or promote; uncertain review cannot demote a more serious baseline);
+- reviewed relevance integration (confirmed/corrected review may demote or promote; uncertain review cannot rewrite a more serious baseline);
 - optional future sensitivity preferences per category without changing factual classification;
 - `displayLevel`;
 - dynamic category labels / summaries.
 
-Low-confidence or weak-context events keep their factual classification but are prevented from becoming alarming normal-mode highlights.
+Potential seriousness and evidential certainty are intentionally separate. Low-confidence/weak-context, uncertain, and unreviewed events may retain a serious internal relevance while presentation marks them as requiring review and prevents weak hypotheses from looking like established high-priority facts.
 
 ### Aggregation
 
@@ -91,7 +91,7 @@ Video and channel reports keep these concepts separate:
 - parent relevance;
 - prevalence / affected-video ratio.
 
-A single high-relevance event cannot disappear in an average. Conversely, repeated hidden/minimal events do not automatically become a high-level warning.
+Channel concern is derived from final verified presentation scenes, while prevalence counts shown content separately. A single verified high scene remains high regardless of rarity. Repeated details/minimal signals do not promote the channel concern merely because they are frequent. Uncertain/unreviewed scenes are exposed separately as pending review instead of being mixed into confirmed concern.
 
 ## Normalized categories
 
@@ -145,7 +145,7 @@ scene_55
  └─ scary_and_disturbing / threatening_character
 ```
 
-The UI first groups by `sceneId`, splits obviously distant reuse of one id using actual evidence gaps (not the model's broad scene envelope), and then merges substantially overlapping compatible narrative scenes emitted under different ids. A scene becomes `main` when its final reviewed relevance is moderate/high; low findings go to expandable `details`. Thus a one-off mild insult can remain factual context inside the same serious coercion scene without generating its own alarming card. Sparse model evidence is materialized as `evidenceRanges[]`: non-adjacent evidence segments remain separate timestamps instead of being expanded to one large interval.
+The UI first groups by `sceneId`, splits obviously distant reuse of one id using actual evidence gaps (not the model's broad scene envelope), and then merges substantially overlapping compatible narrative scenes emitted under different ids. Attention is decided from both final relevance and evidence status: verified serious scenes can be `main`, while weak uncertain scenes remain in `details`; strongly supported but unreviewed hard-risk scenes can remain visible on the main screen with an explicit “requires review” label. Low findings go to expandable `details`. Thus a one-off mild insult can remain factual context inside the same serious coercion scene without generating its own alarming card. Sparse model evidence is materialized as `evidenceRanges[]`: non-adjacent evidence segments remain separate timestamps instead of being expanded to one large interval.
 
 ## Old result vs new result
 

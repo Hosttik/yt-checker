@@ -18,6 +18,7 @@ import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../dom
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
 import { normalizeClassifiedEvents } from '../domain/content-normalization'
+import { markEventsNotReviewed } from '../domain/content-review-state'
 import { validateClassifiedEvents } from '../domain/content-validation'
 import {
   buildChannelCategoryReports,
@@ -36,12 +37,11 @@ import {
   OPENAI_REVIEW_SCHEMA_VERSION,
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisError,
-  OpenAIAnalysisProvider,
   type OpenAICoverageResult,
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
-import { BatchedOpenAIAnalyzer, estimateTextTokens } from '../services/openai-batched-analyzer'
-import { BatchedOpenAIReviewer } from '../services/openai-batched-reviewer'
+import { estimateTextTokens } from '../services/openai-batched-analyzer'
+import { createOpenAIAnalysisStack } from '../services/openai-analysis-stack'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
@@ -128,10 +128,6 @@ function combinedUsage(...items: Array<OpenAIUsage | undefined>): OpenAIUsage {
   for (const item of items) addUsage(total, item)
   const { requests: _requests, ...usage } = total
   return usage
-}
-
-function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEvent[] {
-  return events.map((event) => ({ ...event, review: undefined }))
 }
 
 interface TimingInterval {
@@ -253,28 +249,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     },
   )
   const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
-  const detectorProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
-  const batchedAnalyzer = new BatchedOpenAIAnalyzer(detectorProvider, openAIRequestScheduler, {
-    chunkMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_MAX_ESTIMATED_TOKENS', 30_000),
-    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
-    batchMaxItems: positiveIntegerEnv('OPENAI_DETECTOR_BATCH_MAX_ITEMS', 5),
-    chunkOverlapMs: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_OVERLAP_MS', 90_000),
-    coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
-    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
+  const analysisStack = createOpenAIAnalysisStack({
+    apiKey: openaiApiKey,
+    detectorModel: openaiModel,
+    reviewerModel: openaiReviewModel,
+    scheduler: openAIRequestScheduler,
+    batchingEnabled,
+    reasoningEffort: 'low',
     onSchedulerTiming: recordSchedulerTiming,
   })
-  const analyzer = batchingEnabled ? batchedAnalyzer : detectorProvider
-  const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
-  const batchedReviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
-    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
-    batchMaxItems: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ITEMS', 4),
-    batchMaxCandidates: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_CANDIDATES', 24),
-    batchMaxScenes: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_SCENES', 8),
-    coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
-    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 2),
-    onSchedulerTiming: recordSchedulerTiming,
-  })
-  const reviewer = batchingEnabled ? batchedReviewer : reviewerProvider
+  const { analyzer, reviewer, reviewerProvider } = analysisStack
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
@@ -294,6 +278,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     reviewModel: openaiReviewModel,
     reasoningEffort: 'low',
     batchingEnabled,
+    analysisManifest: {
+      detectorPromptVersion: OPENAI_PROMPT_VERSION,
+      detectorSchemaVersion: OPENAI_SCHEMA_VERSION,
+      reviewerPromptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+      reviewerSchemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+      coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
+      coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
+      coverageEnabled: diagnosticAnalysis,
+      batching: analysisStack.manifest,
+    },
   })
 
   let latest: Awaited<ReturnType<TranscriptApiClient['getLatestVideos']>>
@@ -442,7 +436,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           uncertainCount: 0,
         }
       } else if (reviewDisabledAfterFailure) {
-        reviewedEvents = unreviewedEvents(firstPassEvents)
+        reviewedEvents = markEventsNotReviewed(firstPassEvents, 'Contextual review was skipped after an earlier reviewer failure in this scan.')
         contentReview = {
           status: 'skipped_after_failure',
           candidateCount: firstPassEvents.length,
@@ -520,7 +514,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           // the rest of a concurrent scan. Only an authentication failure is
           // systemic enough to stop scheduling more review requests.
           reviewDisabledAfterFailure = reviewError.type === 'authentication'
-          reviewedEvents = unreviewedEvents(firstPassEvents)
+          reviewedEvents = markEventsNotReviewed(firstPassEvents, 'Contextual review failed; the first-pass finding remains unverified.')
           contentReview = {
             status: 'failed',
             candidateCount: firstPassEvents.length,
@@ -950,6 +944,21 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       ),
       reviewFallbackRequests,
       coverageRequests,
+    },
+    analysisManifest: {
+      detectorModel: openaiModel,
+      reviewerModel: openaiReviewModel,
+      reasoningEffort: 'low',
+      profile,
+      requestedLanguage: languagePriority || 'auto',
+      detectorPromptVersion: OPENAI_PROMPT_VERSION,
+      detectorSchemaVersion: OPENAI_SCHEMA_VERSION,
+      reviewerPromptVersion: OPENAI_REVIEW_PROMPT_VERSION,
+      reviewerSchemaVersion: OPENAI_REVIEW_SCHEMA_VERSION,
+      coveragePromptVersion: OPENAI_COVERAGE_PROMPT_VERSION,
+      coverageSchemaVersion: OPENAI_COVERAGE_SCHEMA_VERSION,
+      coverageEnabled: diagnosticAnalysis,
+      batching: analysisStack.manifest,
     },
     timings: {
       totalMs: Date.now() - scanStartedAt,

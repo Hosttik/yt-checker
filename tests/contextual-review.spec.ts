@@ -110,8 +110,12 @@ describe('contextual parent relevance', () => {
     )
 
     expect(event.parentRelevance).toBe('high')
-    expect(event.displayLevel).toBe('highlight')
-    expect(buildPresentationScenes([event])[0]?.attention).toBe('main')
+    expect(event.displayLevel).toBe('summary')
+    expect(buildPresentationScenes([event])[0]).toMatchObject({
+      attention: 'details',
+      evidenceStatus: 'uncertain',
+      reviewStatus: 'unreviewed',
+    })
   })
 
   it('keeps sensitivity preferences as a deterministic display-layer concern', () => {

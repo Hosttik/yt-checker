@@ -117,7 +117,7 @@ describe('content reporting', () => {
       'normal',
     )[0]!
 
-    expect(report.level).toBe('moderate')
+    expect(report.level).toBe('high')
     expect(report.peakConcern).toBe('high')
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
@@ -252,8 +252,8 @@ describe('content reporting', () => {
 
     expect(report.prevalence).toBe('common')
     expect(report.affectedVideos).toBe(6)
-    expect(report.moderatePlusPrevalence).toBe('rare')
-    expect(report.moderatePlusAffectedVideos).toBe(1)
+    expect(report.moderatePlusPrevalence).toBe('none')
+    expect(report.moderatePlusAffectedVideos).toBe(0)
   })
 
   it('uses high channel level only when high-priority scenes form a meaningful pattern', () => {
@@ -286,7 +286,7 @@ describe('content reporting', () => {
     expect(report.level).toBe('high')
     expect(report.peakConcern).toBe('high')
     expect(report.highlightedVideos).toBe(3)
-    expect(report.moderatePlusAffectedVideos).toBe(5)
+    expect(report.moderatePlusAffectedVideos).toBe(3)
   })
 
 })

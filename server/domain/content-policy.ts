@@ -32,17 +32,22 @@ function defaultDisplayLevel(
   profile: AnalysisProfile,
 ): DisplayLevel {
   const weakEvidence = event.confidence < 0.55 || event.evidenceStrength === 'weak_context'
+  const reviewDegraded = event.review?.status === 'uncertain'
+    || event.review?.status === 'not_reviewed'
 
-  if (profile === 'diagnostic') return relevance === 'high' && !weakEvidence ? 'highlight' : 'summary'
+  if (profile === 'diagnostic') {
+    return relevance === 'high' && !weakEvidence && !reviewDegraded ? 'highlight' : 'summary'
+  }
 
   if (profile === 'strict') {
-    if (weakEvidence) return 'summary'
+    if (weakEvidence || reviewDegraded) return 'summary'
     if (relevance === 'high' || relevance === 'moderate') return 'highlight'
     return 'summary'
   }
 
   if (relevance === 'minimal') return 'hidden'
   if (weakEvidence) return relevance === 'high' ? 'summary' : 'hidden'
+  if (reviewDegraded) return relevance === 'high' || relevance === 'moderate' ? 'summary' : 'hidden'
   if (relevance === 'high') return 'highlight'
   return 'summary'
 }
@@ -408,11 +413,10 @@ function reviewAdjustedRelevance(
 
   if (reviewEstablishesHighPriorityCoercion(event)) return 'high'
 
-  if (review.status === 'uncertain'
-    && relevanceRank[review.recommendedParentRelevance] <= relevanceRank[baseline]) {
-    // An uncertain review may add caution, but must not erase a serious
-    // first-pass signal. High-priority gating only applies when review
-    // actually promotes the event.
+  if (review.status === 'uncertain') {
+    // Keep the detector's potential seriousness, but do not let an uncertain
+    // review promote or demote it. Presentation certainty is handled
+    // separately by display/evidence status.
     return baseline
   }
 

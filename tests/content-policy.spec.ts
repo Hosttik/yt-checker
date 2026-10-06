@@ -184,7 +184,7 @@ describe('deterministic content policy', () => {
   })
 
 
-  it('preserves one life-threatening scene as high peak concern without labeling the whole channel high', () => {
+  it('preserves one life-threatening scene as high concern without frequency-based demotion', () => {
     const event = applyContentPolicy(violence('life_threatening_situation', {
       harmLevel: 'actual', targetType: 'human_like_character', weaponRole: 'none',
     }, {
@@ -200,7 +200,7 @@ describe('deterministic content policy', () => {
     )
     expect(channel[0]?.peakConcern).toBe('high')
     expect(channel[0]?.highlightedVideos).toBe(1)
-    expect(channel[0]?.level).toBe('moderate')
+    expect(channel[0]?.level).toBe('high')
   })
 
   it('distinguishes neutral nicotine mention, use and promotion', () => {

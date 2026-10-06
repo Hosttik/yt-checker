@@ -293,6 +293,9 @@ export interface ChannelCategoryReport {
   rawAffectedVideos: number
   affectedVideos: number
   highlightedVideos: number
+  pendingReviewVideos: number
+  pendingReviewSceneCount: number
+  pendingReviewPeakConcern: ReportLevel
   rawEventCount: number
   displayedEventCount: number
   subtypeStats: ChannelSubtypeStat[]
@@ -306,6 +309,7 @@ export interface PresentationScene {
   level: ReportLevel
   attention: 'main' | 'details'
   reviewStatus: 'reviewed' | 'mixed' | 'unreviewed'
+  evidenceStatus: 'verified' | 'uncertain' | 'unreviewed'
   categories: ContentCategory[]
   evidenceRanges: Array<{ startMs: number; endMs: number }>
   label: string

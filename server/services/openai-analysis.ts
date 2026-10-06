@@ -996,10 +996,20 @@ function reviewCorrectionOverlapsOriginalScene(
   return corrected.startMs <= originalEnd && corrected.endMs >= originalStart
 }
 
-function preserveFirstPassEpistemicState(
+function resolveReviewedEpistemicState(
   original: ClassifiedContentEvent,
   corrected: ClassifiedContentEvent,
+  verdict: 'confirmed' | 'corrected' | 'uncertain',
+  evidenceSufficiency: 'insufficient' | 'partial' | 'sufficient',
 ): ClassifiedContentEvent {
+  // A sufficient correction is allowed to repair detector mistakes. The
+  // first pass is a hypothesis, not an authority on assertion/engagement.
+  if (verdict === 'corrected' && evidenceSufficiency === 'sufficient') {
+    return corrected
+  }
+
+  // Confirmed/uncertain reviews may tighten evidence, but must not silently
+  // rewrite epistemic state without a sufficient correction verdict.
   const preserveAssertion = original.assertionStatus === 'reported'
     || original.assertionStatus === 'hypothetical'
     || original.assertionStatus === 'negated'
@@ -1752,7 +1762,12 @@ export class OpenAIAnalysisProvider {
               continue
             }
 
-            const corrected = preserveFirstPassEpistemicState(original, materialized ?? original)
+            const corrected = resolveReviewedEpistemicState(
+              original,
+              materialized ?? original,
+              normalizedItem.verdict,
+              normalizedItem.evidenceSufficiency,
+            )
             const review: ContentEventReview = {
               status: normalizedItem.verdict === 'uncertain' ? 'uncertain' : normalizedItem.verdict,
               recommendedParentRelevance: normalizedItem.parentRelevance,
@@ -2083,7 +2098,12 @@ export class OpenAIAnalysisProvider {
             })
             continue
           }
-          const corrected = preserveFirstPassEpistemicState(original, materialized ?? original)
+          const corrected = resolveReviewedEpistemicState(
+            original,
+            materialized ?? original,
+            item.verdict,
+            item.evidenceSufficiency,
+          )
           const review: ContentEventReview = {
             status: item.verdict === 'uncertain'
               ? 'uncertain'
