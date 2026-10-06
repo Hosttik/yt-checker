@@ -1,5 +1,11 @@
 import { Semaphore } from './semaphore'
 
+export interface ProviderSchedulerTiming {
+  waitMs: number
+  providerMs: number
+  attempts: number
+}
+
 export interface ProviderSchedulerOptions {
   concurrency: number
   requestsPerMinute?: number
@@ -76,18 +82,46 @@ export class ProviderScheduler {
     this.jitterMs = Math.max(0, Math.floor(options.jitterMs ?? 250))
   }
 
-  async run<T>(estimatedInputTokens: number, task: () => Promise<T>): Promise<T> {
+  async run<T>(
+    estimatedInputTokens: number,
+    task: () => Promise<T>,
+    onTiming?: (timing: ProviderSchedulerTiming) => void,
+  ): Promise<T> {
     const tokens = Math.max(1, Math.floor(estimatedInputTokens || 1))
+    const scheduledAt = performance.now()
+    let providerMs = 0
+    let attempts = 0
     let attempt = 0
 
     while (true) {
       try {
-        return await this.semaphore.run(async () => {
+        const result = await this.semaphore.run(async () => {
           await this.waitForBudget(tokens)
-          return await task()
+          const providerStartedAt = performance.now()
+          attempts += 1
+          try {
+            return await task()
+          } finally {
+            providerMs += performance.now() - providerStartedAt
+          }
         })
+        const elapsedMs = performance.now() - scheduledAt
+        onTiming?.({
+          waitMs: Math.max(0, elapsedMs - providerMs),
+          providerMs,
+          attempts,
+        })
+        return result
       } catch (error) {
-        if (!retryable(error) || attempt >= this.maxRetries) throw error
+        if (!retryable(error) || attempt >= this.maxRetries) {
+          const elapsedMs = performance.now() - scheduledAt
+          onTiming?.({
+            waitMs: Math.max(0, elapsedMs - providerMs),
+            providerMs,
+            attempts,
+          })
+          throw error
+        }
 
         const hinted = retryAfterMs(error)
         const exponential = Math.min(this.retryMaxMs, this.retryBaseMs * (2 ** attempt))
