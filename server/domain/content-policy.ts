@@ -305,8 +305,15 @@ function reviewedHighPriorityIsSupported(event: ClassifiedContentEvent): boolean
       || details.targetType === 'human_like_character'
       || details.targetType === 'animal'
       || details.targetType === 'fantasy_creature'
+    const explicitWeaponAggression = details.weaponRole === 'threatened_use'
+      || details.weaponRole === 'used'
+    const armedDirectedThreat = event.subtype === 'violent_threat'
+      && details.weaponRole === 'possessed'
+      && details.actionPurpose === 'attack'
+      && review.aggressionDirection === 'actor_to_target'
+      && review.consequence === 'threatened_harm'
     const directedWeaponAggression = directedTarget
-      && (details.weaponRole === 'threatened_use' || details.weaponRole === 'used')
+      && (explicitWeaponAggression || armedDirectedThreat)
       && details.harmLevel !== 'none'
       && (review.intent === 'aggressive' || review.intent === 'coercive')
     const immediateLethalPeril = event.subtype === 'life_threatening_situation'

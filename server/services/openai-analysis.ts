@@ -15,11 +15,11 @@ import type {
 import { CONTENT_CATEGORIES } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
-export const OPENAI_PROMPT_VERSION = '2026-10-06.content-events-batch-v8'
+export const OPENAI_PROMPT_VERSION = '2026-10-06.content-events-batch-v9'
 export const OPENAI_SCHEMA_VERSION = '10'
 export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-06.parent-scene-review-v8'
 export const OPENAI_REVIEW_SCHEMA_VERSION = '4'
-export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-05.high-priority-coverage-v1'
+export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-06.high-priority-coverage-v2'
 export const OPENAI_COVERAGE_SCHEMA_VERSION = '1'
 
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high'
@@ -358,6 +358,7 @@ Fill harmLevel, targetType, weaponRole and actionPurpose independently. For inju
 
 scary_and_disturbing:
 - threatening_character, pursuit, horror_theme, jump_scare, disturbing_theme, death_related_theme, confinement, intense_peril, other.
+- confinement includes explicit restriction of movement, detention, captivity, or coercive control. A controller saying that people are forbidden to leave and must obey ("выход запрещён; будете делать только то, что я скажу") is a genuine confinement event even without an explicit injury threat or separate fear words. Do not reject such a scene merely because the coercion is verbal.
 - intense_peril requires a present threat and at least moderate fear/intensity. If threatPresent=false or fearIntensity=mild, use a milder subtype such as other/disturbing_theme or reject the candidate.
 - details.themePresent is true only when the selected evidence actually develops a frightening theme; a bare denial such as «никто не умер» is insufficient.
 - Separate the occurrence of a theme from whether the feared death/danger really happened. Mourning, farewells, a coffin and preparing a grave can establish death_related_theme even if the character later wakes up. For themes, assertionStatus describes the presence of that theme (actual), not the truth of an imagined death. Do not invent a death event.
@@ -446,6 +447,7 @@ Rules:
 - coveredEvidenceSegments identifies direct evidence already represented by accepted/reviewed events. Never return an event whose direct evidence materially overlaps those covered segments.
 - Same actors or same broader story arc do NOT make a later distinct event a duplicate. A later explicit threat/coercive condition with different direct evidence is eligible.
 - parentRelevance may be moderate or high when facts are serious but borderline; the server independently validates structural seriousness and will reject weak rescue candidates.
+- Write every human-readable field in the transcript language. For a Russian transcript, event.reason, actor, target, parentSummary, mitigatingContext, highPriorityReason and rationale must be natural Russian, not English.
 - Use the same event taxonomy and evidence discipline as the detector. event.reason must be supported by event.evidenceSegments themselves.
 `
 
