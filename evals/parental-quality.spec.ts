@@ -197,6 +197,7 @@ interface VideoRunStat {
 }
 
 interface RunOutput {
+  videoOrder: string[]
   metrics: MetricSet
   onePassMetrics: MetricSet
   cardAudit: CardAudit
@@ -899,6 +900,10 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const coverageEnabled = process.env.QUALITY_ENABLE_COVERAGE === '1'
     const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
     const batchingManifest = openAIBatchingManifestFromEnv(batchingEnabled)
+    const orderMode = process.env.QUALITY_ORDER_MODE ?? 'stable'
+    if (!['stable', 'rotate', 'reverse'].includes(orderMode)) {
+      throw new Error('QUALITY_ORDER_MODE must be one of: stable, rotate, reverse.')
+    }
     const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
     const requestTimeoutMs = Math.max(60_000, Math.min(600_000, Number(process.env.QUALITY_OPENAI_TIMEOUT_MS ?? 60_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
@@ -1003,6 +1008,13 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         reviewModel,
         reasoningEffort,
         requestTimeoutMs,
+        coverageEnabled,
+        batching: batchingManifest,
+        orderMode,
+        transcriptLanguages: Object.fromEntries(selected.map((record) => [
+          record.videoId,
+          record.transcriptLanguage,
+        ])),
         discoverScans,
         uniqueChannels,
         maxScans,
@@ -1011,6 +1023,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         profile,
         batching: batchingManifest,
         coverageEnabled,
+        orderMode,
         transcriptLanguages: selected.map((record) => [record.videoId, record.transcriptLanguage]),
       }))
       .digest('hex')
@@ -1029,7 +1042,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     }
 
     console.log(
-      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, batching=${batchingEnabled}, coverage=${coverageEnabled}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
+      `Quality eval: ${runs} run(s), ${selected.length} video(s), reasoning=${reasoningEffort}, timeoutMs=${requestTimeoutMs}, concurrency=${concurrency}, batching=${batchingEnabled}, coverage=${coverageEnabled}, order=${orderMode}, rateLimitRetries=${rateLimitRetries}, scans=${scanDirs.join(', ')}`,
     )
     if (runOutputs.length > 0) {
       console.log(`[quality] resumed from checkpoint: ${runOutputs.length}/${runs} completed run(s)`)
@@ -1056,9 +1069,16 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       const newByKey = new Map<string, NewVideoResult>()
       let completedVideos = 0
 
-      console.log(`[quality] run ${run + 1}/${runs} started`)
+      const orderedSelected = orderMode === 'rotate'
+        ? [...selected.slice(run % selected.length), ...selected.slice(0, run % selected.length)]
+        : orderMode === 'reverse' && run % 2 === 1
+          ? [...selected].reverse()
+          : selected
+      console.log(
+        `[quality] run ${run + 1}/${runs} started; order=${orderedSelected.map((item) => item.videoId).join(',')}`,
+      )
       const outputsForRun = await mapWithConcurrency(
-        selected,
+        orderedSelected,
         concurrency,
         async (record, index) => {
           console.log(
@@ -1140,6 +1160,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         }
       })
       runOutputs.push({
+        videoOrder: orderedSelected.map((record) => record.videoId),
         metrics: metricsFor(applicableAnnotations, currentByVideo),
         onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
         cardAudit: cardAuditFor(applicableAnnotations, currentByVideo, coverage),
