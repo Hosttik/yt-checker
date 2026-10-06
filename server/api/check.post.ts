@@ -200,20 +200,23 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       },
     },
   )
+  const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
   const detectorProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
-  const analyzer = new BatchedOpenAIAnalyzer(detectorProvider, openAIRequestScheduler, {
+  const batchedAnalyzer = new BatchedOpenAIAnalyzer(detectorProvider, openAIRequestScheduler, {
     chunkMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_MAX_ESTIMATED_TOKENS', 30_000),
     batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
     chunkOverlapMs: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_OVERLAP_MS', 90_000),
     coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
     batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
   })
+  const analyzer = batchingEnabled ? batchedAnalyzer : detectorProvider
   const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
-  const reviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
+  const batchedReviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
     batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
     coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
     batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 1),
   })
+  const reviewer = batchingEnabled ? batchedReviewer : reviewerProvider
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
@@ -232,6 +235,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     model: openaiModel,
     reviewModel: openaiReviewModel,
     reasoningEffort: 'low',
+    batchingEnabled,
   })
 
   let latest: Awaited<ReturnType<TranscriptApiClient['getLatestVideos']>>
