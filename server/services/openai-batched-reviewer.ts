@@ -42,6 +42,7 @@ interface ResolvedReview {
   result: Awaited<ReturnType<OpenAIAnalysisProvider['reviewBatch']>>['items'][number]
   usage: OpenAIUsage
   requestCount: number
+  fallbackRequestCount: number
   provider: OpenAIProviderMetadata
 }
 
@@ -252,6 +253,7 @@ export class BatchedOpenAIReviewer {
               requestCount: index === 0
                 ? scheduledAttempts + Math.max(0, response.requestCount - 1)
                 : 0,
+              fallbackRequestCount: 0,
               provider: response.provider,
             }
           })
@@ -294,6 +296,7 @@ export class BatchedOpenAIReviewer {
                 requestCount: item.requestCount
                   + fallbackAttempts
                   + Math.max(0, fallback.requestCount - 1),
+                fallbackRequestCount: fallbackAttempts + Math.max(0, fallback.requestCount - 1),
                 provider: {
                   ...fallback.provider,
                   latencyMs: item.provider.latencyMs + fallback.provider.latencyMs,
@@ -305,6 +308,7 @@ export class BatchedOpenAIReviewer {
                 ...item,
                 usage: mergedUsage(item.usage, fallbackError.usage),
                 requestCount: item.requestCount + fallbackAttempts,
+                fallbackRequestCount: fallbackAttempts,
                 provider: fallbackError.provider
                   ? {
                       ...fallbackError.provider,
@@ -330,6 +334,7 @@ export class BatchedOpenAIReviewer {
           uncertainCandidates: result.uncertainCandidates,
           complete: result.complete,
           requestCount: item.requestCount,
+          fallbackRequestCount: item.fallbackRequestCount,
           retryCount: 0,
           missingBeforeRetry: result.totalCandidates - result.reviewedCandidates,
           missingAfterRetry: result.totalCandidates - result.reviewedCandidates,
