@@ -37,7 +37,6 @@ import {
   OPENAI_SCHEMA_VERSION,
   OpenAIAnalysisError,
   OpenAIAnalysisProvider,
-  buildReviewContextText,
   type OpenAICoverageResult,
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
@@ -395,7 +394,6 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           },
         }
       } else {
-        let scheduledReviewAttempts = 0
         try {
           reviewResult = await reviewer.review(
             normalizedTranscript,
