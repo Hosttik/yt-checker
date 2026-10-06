@@ -623,6 +623,7 @@ export class OpenAIAnalysisError extends Error {
   usage?: OpenAIUsage
   provider?: OpenAIProviderMetadata
   outputText?: string
+  requestCount?: number
 
   constructor(
     public readonly type: AnalysisErrorType,
@@ -1558,9 +1559,8 @@ export class OpenAIAnalysisProvider {
       const returnedIds = parsedContainers.map((item) => item.itemId)
       const returnedIdSet = new Set(returnedIds)
       if (returnedIds.length !== returnedIdSet.size
-        || returnedIdSet.size !== expectedIds.size
         || returnedIds.some((itemId) => !expectedIds.has(itemId))) {
-        throw new OpenAIAnalysisError('schema', 'OpenAI review batch did not return exactly the requested item ids.')
+        throw new OpenAIAnalysisError('schema', 'OpenAI review batch returned duplicate or unknown item ids.')
       }
 
       const parsedById = new Map(parsedContainers.map((item) => [item.itemId, item.reviews]))
