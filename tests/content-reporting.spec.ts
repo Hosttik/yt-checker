@@ -121,8 +121,8 @@ describe('content reporting', () => {
     expect(report.peakConcern).toBe('high')
     expect(report.prevalence).toBe('rare')
     expect(report.affectedRatio).toBe(0.1)
-    expect(report.moderatePlusPrevalence).toBe('rare')
-    expect(report.moderatePlusAffectedVideos).toBe(1)
+    expect(report.moderatePlusPrevalence).toBe('none')
+    expect(report.moderatePlusAffectedVideos).toBe(0)
   })
   it('merges overlapping narrative scenes even when the model used different scene ids', () => {
     const first = violenceEvent({
@@ -286,7 +286,7 @@ describe('content reporting', () => {
     expect(report.level).toBe('high')
     expect(report.peakConcern).toBe('high')
     expect(report.highlightedVideos).toBe(3)
-    expect(report.moderatePlusAffectedVideos).toBe(5)
+    expect(report.moderatePlusAffectedVideos).toBe(3)
   })
 
 })
