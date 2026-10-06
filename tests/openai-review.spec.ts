@@ -790,7 +790,7 @@ describe('OpenAI contextual reviewer', () => {
     })
   })
 
-  it('keeps confirmed-event direct evidence anchored to the original signal', async () => {
+  it('discards review semantics when confirmed evidence drifts away from the original signal', async () => {
     const transcript = normalizeTranscript([
       { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
       { text: 'Другая часть того же большого сюжета.', startMs: 20_000, endMs: 21_000 },
@@ -856,14 +856,18 @@ describe('OpenAI contextual reviewer', () => {
     )
     const result = await provider.review(transcript, 'ru', ['violence'], [event])
 
-    expect(result.complete).toBe(true)
+    expect(result.complete).toBe(false)
     expect(result.reviewedEvents[0]).toMatchObject({
       sourceCandidateId: 'candidate_confirmed_anchor',
       startMs: 10_000,
       endMs: 11_000,
       evidenceRanges: [{ startMs: 10_000, endMs: 11_000 }],
-      review: { status: 'confirmed', recommendedParentRelevance: 'high' },
+      review: { status: 'not_reviewed' },
     })
+    expect(result.reviewedEvents[0]?.review?.parentSummary).toBeUndefined()
+    expect(result.reviewedEvents[0]?.review?.actor).toBeUndefined()
+    expect(result.decisions[0]?.verdict).toBe('not_reviewed')
+    expect(result.decisions[0]?.rationale).toContain('semantic fields were discarded')
   })
 
   it('retains the first-pass event when a reviewer correction drifts to a disjoint scene', async () => {
