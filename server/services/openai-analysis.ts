@@ -15,8 +15,8 @@ import type {
 import { CONTENT_CATEGORIES } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
-export const OPENAI_PROMPT_VERSION = '2026-10-05.content-events-v7'
-export const OPENAI_SCHEMA_VERSION = '9'
+export const OPENAI_PROMPT_VERSION = '2026-10-06.content-events-batch-v8'
+export const OPENAI_SCHEMA_VERSION = '10'
 export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-05.parent-scene-review-v7'
 export const OPENAI_REVIEW_SCHEMA_VERSION = '4'
 export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-05.high-priority-coverage-v1'
@@ -221,6 +221,25 @@ export const OPENAI_ANALYSIS_SCHEMA = z.object({
 export const OPENAI_DIAGNOSTIC_SCHEMA = z.object({
   events: z.array(OPENAI_MODEL_EVENT_SCHEMA).max(120),
   rejectedCandidates: z.array(rejectedCandidateSchema).max(120),
+})
+
+const analysisBatchItemSchema = z.object({
+  itemId: z.string().min(1).max(120),
+  events: z.array(OPENAI_MODEL_EVENT_SCHEMA).max(120),
+})
+
+const diagnosticAnalysisBatchItemSchema = z.object({
+  itemId: z.string().min(1).max(120),
+  events: z.array(OPENAI_MODEL_EVENT_SCHEMA).max(120),
+  rejectedCandidates: z.array(rejectedCandidateSchema).max(120),
+})
+
+export const OPENAI_BATCH_ANALYSIS_SCHEMA = z.object({
+  items: z.array(analysisBatchItemSchema).min(1).max(32),
+})
+
+export const OPENAI_BATCH_DIAGNOSTIC_SCHEMA = z.object({
+  items: z.array(diagnosticAnalysisBatchItemSchema).min(1).max(32),
 })
 
 const reviewItemSchema = z.object({
@@ -524,6 +543,7 @@ export interface OpenAIAnalysisResult {
   outputText?: string
   usage: OpenAIUsage
   provider: OpenAIProviderMetadata
+  requestCount: number
   requestMetadata: {
     model: string
     reasoningEffort: OpenAIReasoningEffort
@@ -533,6 +553,28 @@ export interface OpenAIAnalysisResult {
     promptVersion: string
     schemaVersion: string
   }
+}
+
+export interface OpenAIAnalysisBatchInput {
+  itemId: string
+  transcript: NormalizedTranscript
+  transcriptText: string
+  language: string
+}
+
+export interface OpenAIAnalysisBatchItemResult {
+  itemId: string
+  classifiedEvents: ClassifiedContentEvent[]
+  rejectedCandidates?: RejectedContentCandidate[]
+  outputText?: string
+}
+
+export interface OpenAIAnalysisBatchResult {
+  items: OpenAIAnalysisBatchItemResult[]
+  usage: OpenAIUsage
+  provider: OpenAIProviderMetadata
+  requestCount: number
+  requestMetadata: OpenAIAnalysisResult['requestMetadata']
 }
 
 export interface OpenAIAnalysisObserver {
@@ -1045,6 +1087,168 @@ export class OpenAIAnalysisProvider {
     this.client = client ?? new OpenAI({ apiKey, maxRetries: 0, timeout: this.requestTimeoutMs })
   }
 
+  async analyzeBatch(
+    items: OpenAIAnalysisBatchInput[],
+    enabledCategories: ContentCategory[],
+    diagnostic: boolean,
+  ): Promise<OpenAIAnalysisBatchResult> {
+    if (items.length === 0) {
+      throw new OpenAIAnalysisError('schema', 'Analysis batch must contain at least one item.')
+    }
+
+    const metadata: OpenAIAnalysisResult['requestMetadata'] = {
+      model: this.model,
+      reasoningEffort: this.reasoningEffort,
+      transcriptLanguage: 'batch',
+      enabledCategories,
+      diagnostic,
+      promptVersion: OPENAI_PROMPT_VERSION,
+      schemaVersion: OPENAI_SCHEMA_VERSION,
+    }
+    const diagnosticInstruction = diagnostic
+      ? '\nDiagnostic mode: also return rejectedCandidates for plausible candidates you considered and rejected.'
+      : ''
+    const dynamicInput = [
+      'Analyze every transcript item independently.',
+      'Return exactly one result for every supplied itemId, with the same itemId. Do not omit, duplicate, rename, or mix items.',
+      'Segment indexes are local to each supplied item transcript and must be copied exactly from that item.',
+      `Enabled categories: ${enabledCategories.join(', ')}${diagnosticInstruction}`,
+      '',
+      ...items.flatMap((item) => [
+        `ITEM_START ${item.itemId}`,
+        `Transcript language: ${item.language || 'unknown'}`,
+        item.transcriptText,
+        `ITEM_END ${item.itemId}`,
+        '',
+      ]),
+    ].join('\n')
+
+    const common = {
+      model: this.model,
+      reasoning: { effort: this.reasoningEffort },
+      input: [
+        {
+          role: 'developer' as const,
+          content: [{
+            type: 'input_text' as const,
+            text: OPENAI_SYSTEM_PROMPT,
+            prompt_cache_breakpoint: { mode: 'explicit' as const },
+          }],
+        },
+        {
+          role: 'user' as const,
+          content: [{ type: 'input_text' as const, text: dynamicInput }],
+        },
+      ],
+      prompt_cache_options: { mode: 'explicit' as const, ttl: '30m' as const },
+      tools: [] as [],
+      store: false,
+      max_output_tokens: outputTokenBudget(Math.min(24_576, 4_096 + items.length * 2_048), this.reasoningEffort),
+    }
+
+    const started = performance.now()
+    let responseForError: {
+      id?: string
+      status?: string | null
+      prompt_cache_diagnostics?: unknown
+      output_text?: string
+      usage?: Parameters<typeof usageOf>[0]['usage']
+    } | undefined
+
+    try {
+      if (items.some((item) => !item.transcriptText.trim())) {
+        throw new OpenAIAnalysisError('schema', 'Analysis batch contains an empty transcript item.')
+      }
+
+      const response = diagnostic
+        ? await this.client.responses.parse({
+            ...common,
+            text: {
+              verbosity: 'low',
+              format: zodTextFormat(OPENAI_BATCH_DIAGNOSTIC_SCHEMA, 'content_event_analysis_batch_diagnostic'),
+            },
+          })
+        : await this.client.responses.parse({
+            ...common,
+            text: {
+              verbosity: 'low',
+              format: zodTextFormat(OPENAI_BATCH_ANALYSIS_SCHEMA, 'content_event_analysis_batch'),
+            },
+          })
+      responseForError = response
+      if (response.status !== 'completed' || !response.output_parsed) {
+        throw new OpenAIAnalysisError('schema', 'OpenAI batch response was incomplete, refused, or empty.')
+      }
+
+      const parsedItems = response.output_parsed.items
+      const expectedIds = new Set(items.map((item) => item.itemId))
+      const returnedIds = parsedItems.map((item) => item.itemId)
+      const returnedIdSet = new Set(returnedIds)
+      if (returnedIds.length !== returnedIdSet.size
+        || returnedIdSet.size !== expectedIds.size
+        || returnedIds.some((itemId) => !expectedIds.has(itemId))) {
+        throw new OpenAIAnalysisError('schema', 'OpenAI batch response did not return exactly the requested item ids.')
+      }
+
+      const byId = new Map(items.map((item) => [item.itemId, item]))
+      const materialized = parsedItems.map((item) => {
+        const source = byId.get(item.itemId)
+        if (!source) throw new OpenAIAnalysisError('schema', 'OpenAI returned an unknown batch item id.')
+        const classifiedEvents = materializeEvents(item.events, source.transcript, enabledCategories)
+          .map((event) => ({
+            ...event,
+            sourceCandidateId: event.sourceCandidateId
+              ? `${item.itemId}:${event.sourceCandidateId}`
+              : undefined,
+            sceneId: event.sceneId ? `${item.itemId}:${event.sceneId}` : undefined,
+          }))
+        const rejectedCandidates = diagnostic && 'rejectedCandidates' in item
+          ? materializeRejectedCandidates(item.rejectedCandidates, source.transcript, enabledCategories)
+              .map((candidate) => ({
+                ...candidate,
+                candidateId: `${item.itemId}:${candidate.candidateId}`,
+                sceneId: candidate.sceneId ? `${item.itemId}:${candidate.sceneId}` : undefined,
+              }))
+          : undefined
+        return {
+          itemId: item.itemId,
+          classifiedEvents,
+          rejectedCandidates,
+          outputText: JSON.stringify({
+            itemId: item.itemId,
+            events: item.events,
+            ...(diagnostic && 'rejectedCandidates' in item
+              ? { rejectedCandidates: item.rejectedCandidates }
+              : {}),
+          }),
+        }
+      })
+
+      return {
+        items: materialized,
+        usage: usageOf(response),
+        provider: providerMetadata(response, started),
+        requestCount: 1,
+        requestMetadata: metadata,
+      }
+    } catch (error) {
+      const safeError = errorFrom(error)
+      if (responseForError) {
+        safeError.usage = usageOf(responseForError)
+        safeError.provider = providerMetadata(responseForError, started)
+        safeError.outputText = responseForError.output_text
+      } else if (!safeError.provider) {
+        safeError.provider = {
+          requestId: error instanceof OpenAI.APIError
+            ? (error as unknown as { request_id?: string }).request_id
+            : undefined,
+          latencyMs: Math.round((performance.now() - started) * 100) / 100,
+        }
+      }
+      throw safeError
+    }
+  }
+
   async analyze(
     transcript: NormalizedTranscript,
     language: string,
@@ -1124,6 +1328,7 @@ export class OpenAIAnalysisProvider {
           outputText: response.output_text,
           usage: usageOf(response),
           provider: providerMetadata(response, started),
+          requestCount: 1,
           requestMetadata: metadata,
         }
         await this.observer?.success?.(result, transcript.text)
@@ -1146,6 +1351,7 @@ export class OpenAIAnalysisProvider {
         outputText: response.output_text,
         usage: usageOf(response),
         provider: providerMetadata(response, started),
+        requestCount: 1,
         requestMetadata: metadata,
       }
       await this.observer?.success?.(result, transcript.text)
