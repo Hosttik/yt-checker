@@ -18,6 +18,7 @@ import { normalizeClassifiedEvents } from '../server/domain/content-normalizatio
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
 import type { NormalizedTranscript } from '../server/domain/normalize-transcript'
+import { ProviderScheduler } from '../server/utils/provider-scheduler'
 import {
   OPENAI_COVERAGE_PROMPT_VERSION,
   OPENAI_COVERAGE_SCHEMA_VERSION,
@@ -29,9 +30,15 @@ import {
   type OpenAIReasoningEffort,
   type OpenAIReviewDecision,
 } from '../server/services/openai-analysis'
+import { estimateTextTokens } from '../server/services/openai-batched-analyzer'
+import {
+  createOpenAIAnalysisStack,
+  type ContentAnalyzer,
+  type ContentReviewer,
+} from '../server/services/openai-analysis-stack'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-05.cross-channel-cost-v15'
+const QUALITY_EVAL_VERSION = '2026-10-06.production-parity-v16'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -82,7 +89,7 @@ interface ManualCase {
 interface DiagnosticEntry {
   videoId: string
   normalizedTranscript: string
-  requestMetadata?: { enabledCategories?: ContentCategory[] }
+  requestMetadata?: { enabledCategories?: ContentCategory[]; transcriptLanguage?: string }
   provider?: { latencyMs?: number }
   usage?: {
     inputTokens?: number
@@ -117,6 +124,7 @@ interface ScanRecord {
   videoId: string
   transcript: NormalizedTranscript
   transcriptHash: string
+  transcriptLanguage: string
   baselineEvents: ContentEvent[]
   baselineLatencyMs: number
 }
@@ -217,7 +225,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 15
+  version: 16
   key: string
   runOutputs: RunOutput[]
 }
