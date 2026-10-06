@@ -9,8 +9,9 @@
 ```text
 TranscriptAPI
   → normalizeTranscript
-  → OpenAI detector: factual candidates on the full transcript
-  → batched OpenAI reviewer only when detector found candidates
+  → language-agnostic token chunking + packing
+  → batched OpenAI detector: factual candidates across videos/chunks
+  → batched OpenAI reviewer on local scene windows only
   → semantic validation
   → deterministic parent policy
   → ContentEvent
@@ -19,9 +20,11 @@ TranscriptAPI
   → presentation
 ```
 
-До 10 видео одного scan обрабатываются параллельно. Вызовы провайдеров дополнительно ограничены общими semaphore внутри Node-процесса, поэтому одновременные scan делят фиксированный лимит OpenAI/TranscriptAPI, а не умножают параллельность на число пользователей.
+До 10 видео одного scan загружаются параллельно. Анализ не привязан к количеству видео или языку: текст оценивается по UTF-8 размеру, длинные transcript автоматически режутся по segment boundaries с overlap, а короткие chunks из разных видео одного scan упаковываются примерно до заданного token budget. Исходные segment indexes сохраняются, поэтому evidence/timestamps остаются детерминированными.
 
-Detector выполняет один full-transcript request. Второй request выполняется только если detector нашёл кандидаты; reviewer проверяет их одним батчем, а не отдельным запросом на каждую находку. Дополнительный coverage-pass отключён для обычного production-профиля и запускается только в diagnostic. При сбое reviewer первый проход сохраняется как неперепроверенный и UI явно показывает неполный review. После первой review-ошибки оставшиеся review-запросы в текущем scan отключаются. OpenAI SDK retries отключены. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
+Все одновременно выполняющиеся scan используют один process-wide OpenAI scheduler. Он ограничивает одновременные provider requests, опционально резервирует RPM/TPM budget и после 429/503 вводит общий cooldown с backoff вместо параллельного retry storm. Один scan дополнительно ограничен небольшим числом одновременно отправленных detector/reviewer batches, поэтому очень длинный канал не занимает все provider slots раньше остальных пользователей.
+
+Detector анализирует несколько видео/chunks одним Structured Output request. Если найдены кандидаты, reviewer объединяет кандидатов из разных видео в batch и получает только локальные transcript windows вокруг этих сцен, а не полный transcript каждого ролика повторно. Дополнительный coverage-pass отключён для обычного production-профиля и запускается только в diagnostic. При transient review failure first-pass findings сохраняются как неперепроверенные, но остальные видео scan продолжают review; глобально review отключается только при authentication failure. TranscriptAPI повторяет только явно временные HTTP 408/429/5xx, которые по документации не списывают credits; неоднозначные client-side network failures не повторяются.
 
 Сканирование канала сначала проверяет бесплатным `/youtube/info`, у каких последних видео есть captions нужного языка. Платные transcript credits имеют жёсткий бюджет, равный `videoLimit`: при лимите 10 приложение не может потратить больше 10 credits на `/youtube/transcript`. Если transcript неожиданно недоступен и не был списан credit, берётся следующий caption-eligible кандидат. Любая ошибка OpenAI после платного transcript останавливает scan, чтобы не расходовать дополнительные TranscriptAPI credits. Платный fallback `/youtube/channel/videos` загружается только когда он нужен и добавляет максимум 1 credit в текущей реализации.
 
@@ -47,13 +50,29 @@ OPENAI_REASONING_EFFORT=low
 
 # Performance/concurrency defaults
 SCAN_VIDEO_CONCURRENCY=10
-OPENAI_GLOBAL_CONCURRENCY=10
+OPENAI_GLOBAL_CONCURRENCY=5
 TRANSCRIPT_GLOBAL_CONCURRENCY=10
+OPENAI_RATE_LIMIT_RETRIES=2
+OPENAI_BATCHING_ENABLED=true
+
+# Optional production budgets from the OpenAI project limits
+# OPENAI_RPM_BUDGET=
+# OPENAI_TPM_BUDGET=
+
+OPENAI_DETECTOR_CHUNK_MAX_ESTIMATED_TOKENS=30000
+OPENAI_DETECTOR_BATCH_MAX_ESTIMATED_TOKENS=70000
+OPENAI_DETECTOR_CHUNK_OVERLAP_MS=90000
+OPENAI_DETECTOR_COALESCE_MS=100
+OPENAI_SCAN_BATCH_CONCURRENCY=2
+
+OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS=70000
+OPENAI_REVIEW_COALESCE_MS=100
+OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY=1
 ```
 
-`OPENAI_REASONING_EFFORT` намеренно принимает только `low`. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
+`OPENAI_REASONING_EFFORT` намеренно принимает только `low`. `OPENAI_BATCHING_ENABLED=false` временно возвращает прежний per-video detector/reviewer flow для A/B проверки качества на одинаковых transcript. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
 
-`SCAN_VIDEO_CONCURRENCY` ограничивает параллельность видео внутри одного scan. `OPENAI_GLOBAL_CONCURRENCY` и `TRANSCRIPT_GLOBAL_CONCURRENCY` — общие лимиты внутри одного Node-процесса для всех одновременно выполняющихся scan. Это простой MVP-предохранитель от burst-нагрузки; при горизонтальном масштабировании каждый процесс имеет собственный semaphore.
+`SCAN_VIDEO_CONCURRENCY` ограничивает параллельную загрузку/обработку видео внутри scan. `OPENAI_GLOBAL_CONCURRENCY` — общий лимит provider requests на Node-процесс, а `OPENAI_RPM_BUDGET`/`OPENAI_TPM_BUDGET` позволяют заранее держаться ниже лимитов OpenAI. Detector/reviewer batch limits ограничивают размер одного request, а `OPENAI_SCAN_*_CONCURRENCY` не даёт одному длинному scan монополизировать process-wide очередь. При горизонтальном масштабировании эти лимиты остаются per-process; для строгого общего quota между несколькими replicas потребуется внешний distributed limiter или отдельный inference gateway.
 
 ## OpenAI analyzer
 
@@ -61,7 +80,7 @@ TRANSCRIPT_GLOBAL_CONCURRENCY=10
 
 Первый Structured Output строится через официальный SDK helper `zodTextFormat` и `responses.parse` со strict JSON Schema. Detector описывает фактическую семантику: category/subtype, severity, confidence, context, evidence strength, generic semantic dimensions и category-specific details. Он не получает полей `parentRelevance` или `displayLevel`.
 
-Если есть кандидаты, reviewer получает полный исходный transcript и компактный список first-pass гипотез. Он возвращает `confirmed/corrected/rejected/uncertain`, заново выбирает прямые evidence-сегменты, отдельно указывает context-сегменты и оценивает родительскую полезность. Для сцены учитываются направление агрессии, намерение/принуждение, последствия, выраженный страх/страдание, длительность, повторяемость и подтверждённое отношение повествования. Reviewer не имеет права выводить визуальные/звуковые факты из отсутствующих данных.
+Если есть кандидаты, reviewer получает локальные transcript windows вокруг first-pass гипотез; кандидаты нескольких видео coalesce в один review batch, когда помещаются в заданный token budget. Он возвращает `confirmed/corrected/rejected/uncertain`, заново выбирает прямые evidence-сегменты, отдельно указывает context-сегменты и оценивает родительскую полезность. Для сцены учитываются направление агрессии, намерение/принуждение, последствия, выраженный страх/страдание, длительность, повторяемость и подтверждённое отношение повествования. Reviewer не имеет права выводить визуальные/звуковые факты из отсутствующих данных.
 
 ```json
 {

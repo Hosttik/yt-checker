@@ -40,6 +40,8 @@ import {
   type OpenAICoverageResult,
   type OpenAIReviewResult,
 } from '../services/openai-analysis'
+import { BatchedOpenAIAnalyzer, estimateTextTokens } from '../services/openai-batched-analyzer'
+import { BatchedOpenAIReviewer } from '../services/openai-batched-reviewer'
 import { ScanStorage } from '../services/scan-storage'
 import {
   TranscriptApiClient,
@@ -48,6 +50,7 @@ import {
 } from '../services/transcript-api'
 import { createScanLogger } from '../utils/logger'
 import { mapWithConcurrency } from '../utils/concurrency'
+import { ProviderScheduler, optionalPositiveIntegerEnv } from '../utils/provider-scheduler'
 import { positiveIntegerEnv, Semaphore } from '../utils/semaphore'
 
 const languageSchema = z.string().trim().max(100).default('').refine((value) => {
@@ -132,7 +135,12 @@ function unreviewedEvents(events: ClassifiedContentEvent[]): ClassifiedContentEv
 }
 
 const scanVideoConcurrency = positiveIntegerEnv('SCAN_VIDEO_CONCURRENCY', 10)
-const openAIRequestLimiter = new Semaphore(positiveIntegerEnv('OPENAI_GLOBAL_CONCURRENCY', 10))
+const openAIRequestScheduler = new ProviderScheduler({
+  concurrency: positiveIntegerEnv('OPENAI_GLOBAL_CONCURRENCY', 5),
+  requestsPerMinute: optionalPositiveIntegerEnv('OPENAI_RPM_BUDGET'),
+  tokensPerMinute: optionalPositiveIntegerEnv('OPENAI_TPM_BUDGET'),
+  maxRetries: optionalPositiveIntegerEnv('OPENAI_RATE_LIMIT_RETRIES') ?? 2,
+})
 const transcriptRequestLimiter = new Semaphore(positiveIntegerEnv('TRANSCRIPT_GLOBAL_CONCURRENCY', 10))
 
 export default defineEventHandler(async (event): Promise<ChannelCheckResponse> => {
@@ -192,8 +200,23 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       },
     },
   )
-  const analyzer = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
-  const reviewer = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
+  const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
+  const detectorProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiModel)
+  const batchedAnalyzer = new BatchedOpenAIAnalyzer(detectorProvider, openAIRequestScheduler, {
+    chunkMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_MAX_ESTIMATED_TOKENS', 30_000),
+    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_DETECTOR_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
+    chunkOverlapMs: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_OVERLAP_MS', 90_000),
+    coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
+    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
+  })
+  const analyzer = batchingEnabled ? batchedAnalyzer : detectorProvider
+  const reviewerProvider = new OpenAIAnalysisProvider(openaiApiKey, openaiReviewModel)
+  const batchedReviewer = new BatchedOpenAIReviewer(reviewerProvider, openAIRequestScheduler, {
+    batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
+    coalesceMs: positiveIntegerEnv('OPENAI_REVIEW_COALESCE_MS', 100),
+    batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY', 1),
+  })
+  const reviewer = batchingEnabled ? batchedReviewer : reviewerProvider
   const languagePriority = request.language
   const targetVideos = request.videoLimit
   const enabledRuleIds = request.ruleIds as RuleId[]
@@ -212,6 +235,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     model: openaiModel,
     reviewModel: openaiReviewModel,
     reasoningEffort: 'low',
+    batchingEnabled,
   })
 
   let latest: Awaited<ReturnType<TranscriptApiClient['getLatestVideos']>>
@@ -326,16 +350,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       const normalizedTranscript = normalizeTranscript(transcript.segments)
       normalized = normalizedTranscript
       if (!normalizedTranscript.text.trim()) throw new OpenAIAnalysisError('schema', 'Transcript has no speech to analyze.')
-      openaiUsage.requests += 1
-      openaiStages.detection.requests += 1
       const resolvedLanguage = transcript.language ?? languagePriority
       const speechQuality = analyzeSpeechQuality(normalized, resolvedLanguage)
-      const analysis = await openAIRequestLimiter.run(() => analyzer.analyze(
+      const analysis = await analyzer.analyze(
         normalizedTranscript,
         resolvedLanguage,
         enabledCategories,
         diagnosticAnalysis,
-      ))
+      )
+      openaiUsage.requests += analysis.requestCount
+      openaiStages.detection.requests += analysis.requestCount
       addUsage(openaiUsage, analysis.usage)
       addUsage(openaiStages.detection, analysis.usage)
 
@@ -375,18 +399,14 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         }
       } else {
         try {
-          openaiUsage.requests += 1
-          openaiStages.review.requests += 1
-          reviewResult = await openAIRequestLimiter.run(() => reviewer.review(
+          reviewResult = await reviewer.review(
             normalizedTranscript,
             resolvedLanguage,
             enabledCategories,
             firstPassEvents,
-          ))
-          if (reviewResult.requestCount > 1) {
-            openaiUsage.requests += reviewResult.requestCount - 1
-            openaiStages.review.requests += reviewResult.requestCount - 1
-          }
+          )
+          openaiUsage.requests += reviewResult.requestCount
+          openaiStages.review.requests += reviewResult.requestCount
           addUsage(openaiUsage, reviewResult.usage)
           addUsage(openaiStages.review, reviewResult.usage)
           reviewedEvents = reviewResult.reviewedEvents.filter((classifiedEvent) =>
@@ -431,7 +451,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             : new OpenAIAnalysisError('provider', 'OpenAI contextual review failed.')
           addUsage(openaiUsage, reviewError.usage)
           addUsage(openaiStages.review, reviewError.usage)
-          reviewDisabledAfterFailure = true
+          // A transient per-video rate limit/timeout must not disable review for
+          // the rest of a concurrent scan. Only an authentication failure is
+          // systemic enough to stop scheduling more review requests.
+          reviewDisabledAfterFailure = reviewError.type === 'authentication'
           reviewedEvents = unreviewedEvents(firstPassEvents)
           contentReview = {
             status: 'failed',
@@ -458,15 +481,22 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       }
 
       if (diagnosticAnalysis && !reviewDisabledAfterFailure && !reviewError) {
+        let scheduledCoverageAttempts = 0
         try {
-          openaiUsage.requests += 1
-          openaiStages.review.requests += 1
-          coverageResult = await openAIRequestLimiter.run(() => reviewer.coverage(
-            normalizedTranscript,
-            resolvedLanguage,
-            enabledCategories,
-            reviewedEvents,
-          ))
+          coverageResult = await openAIRequestScheduler.run(
+            16_000 + estimateTextTokens(normalizedTranscript.text),
+            async () => {
+              scheduledCoverageAttempts += 1
+              return reviewerProvider.coverage(
+                normalizedTranscript,
+                resolvedLanguage,
+                enabledCategories,
+                reviewedEvents,
+              )
+            },
+          )
+          openaiUsage.requests += scheduledCoverageAttempts
+          openaiStages.review.requests += scheduledCoverageAttempts
           addUsage(openaiUsage, coverageResult.usage)
           addUsage(openaiStages.review, coverageResult.usage)
           reviewedEvents = [...reviewedEvents, ...coverageResult.rescuedEvents]
@@ -495,6 +525,8 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             latencyMs: coverageResult.provider.latencyMs,
           })
         } catch (error) {
+          openaiUsage.requests += scheduledCoverageAttempts
+          openaiStages.review.requests += scheduledCoverageAttempts
           coverageError = error instanceof OpenAIAnalysisError
             ? error
             : new OpenAIAnalysisError('provider', 'OpenAI high-priority coverage failed.')
@@ -862,7 +894,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: legacySummary,
     videos: videoResults,
     limitations: [
-      'Each transcript is analyzed once for factual content events. Videos with detected candidates receive one batched contextual review request over the original full transcript. The additional coverage pass runs only in diagnostic profile, not in the normal production scan.',
+      'Transcripts are split and coalesced into language-agnostic token-aware detector batches. Videos with detected candidates are contextually reviewed using local transcript windows; the additional coverage pass runs only in diagnostic profile, not in the normal production scan.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
