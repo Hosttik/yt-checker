@@ -408,12 +408,14 @@ function reviewAdjustedRelevance(
 
   if (reviewEstablishesHighPriorityCoercion(event)) return 'high'
 
-  if (review.status === 'uncertain'
-    && relevanceRank[review.recommendedParentRelevance] <= relevanceRank[baseline]) {
-    // An uncertain review may add caution, but must not erase a serious
-    // first-pass signal. High-priority gating only applies when review
-    // actually promotes the event.
-    return baseline
+  if (review.status === 'uncertain') {
+    // An uncertain review is not evidence strong enough to promote a finding
+    // or present a baseline high signal as an established high concern.
+    // It may still lower relevance when the surrounding context weakens the
+    // first-pass hypothesis.
+    const recommended = review.recommendedParentRelevance
+    if (relevanceRank[recommended] < relevanceRank[baseline]) return recommended
+    return baseline === 'high' ? 'moderate' : baseline
   }
 
   const recommended = review.recommendedParentRelevance
