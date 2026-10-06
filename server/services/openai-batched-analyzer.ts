@@ -210,8 +210,8 @@ function rangesOverlap(
 
 function duplicateEvent(left: ClassifiedContentEvent, right: ClassifiedContentEvent): boolean {
   if (left.category !== right.category || left.subtype !== right.subtype) return false
-  const leftRanges = left.evidenceRanges.length > 0 ? left.evidenceRanges : [left]
-  const rightRanges = right.evidenceRanges.length > 0 ? right.evidenceRanges : [right]
+  const leftRanges = left.evidenceRanges?.length ? left.evidenceRanges : [left]
+  const rightRanges = right.evidenceRanges?.length ? right.evidenceRanges : [right]
   return leftRanges.some((a) => rightRanges.some((b) => rangesOverlap(a, b)))
 }
 
