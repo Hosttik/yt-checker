@@ -151,6 +151,38 @@ describe('deterministic content policy', () => {
     expect(event.parentRelevance).toBe('high')
     expect(event.displayLevel).toBe('highlight')
   })
+  it('keeps an armed directed threat high when the model marks the weapons as possessed', () => {
+    const event = applyContentPolicy(violence('violent_threat', {
+      harmLevel: 'threatened',
+      targetType: 'human_like_character',
+      weaponRole: 'possessed',
+      actionPurpose: 'attack',
+    }, {
+      severity: 'high',
+      review: {
+        status: 'confirmed',
+        recommendedParentRelevance: 'high',
+        evidenceSufficiency: 'sufficient',
+        contextRanges: [],
+        actor: 'жители',
+        target: 'Компот',
+        aggressionDirection: 'actor_to_target',
+        intent: 'aggressive',
+        distress: 'clear',
+        consequence: 'threatened_harm',
+        duration: 'brief',
+        repetition: 'single',
+        narrativeFraming: 'neutral',
+        parentSummary: 'Жители берут вилы и копья и загоняют Компота в тупик.',
+        highPriorityReason: 'Несколько жителей вооружаются против загнанного в тупик героя.',
+        rationale: 'Прямое вооружённое давление подтверждено.',
+      },
+    }), 'event_armed_threat', 'normal')
+
+    expect(event.parentRelevance).toBe('high')
+    expect(event.displayLevel).toBe('highlight')
+  })
+
 
   it('preserves one life-threatening scene as high peak concern without labeling the whole channel high', () => {
     const event = applyContentPolicy(violence('life_threatening_situation', {
