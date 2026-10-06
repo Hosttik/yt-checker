@@ -53,6 +53,7 @@ SCAN_VIDEO_CONCURRENCY=10
 OPENAI_GLOBAL_CONCURRENCY=5
 TRANSCRIPT_GLOBAL_CONCURRENCY=10
 OPENAI_RATE_LIMIT_RETRIES=2
+OPENAI_BATCHING_ENABLED=true
 
 # Optional production budgets from the OpenAI project limits
 # OPENAI_RPM_BUDGET=
@@ -69,7 +70,7 @@ OPENAI_REVIEW_COALESCE_MS=100
 OPENAI_SCAN_REVIEW_BATCH_CONCURRENCY=1
 ```
 
-`OPENAI_REASONING_EFFORT` намеренно принимает только `low`. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
+`OPENAI_REASONING_EFFORT` намеренно принимает только `low`. `OPENAI_BATCHING_ENABLED=false` временно возвращает прежний per-video detector/reviewer flow для A/B проверки качества на одинаковых transcript. Если ключ OpenAI отсутствует, endpoint возвращает configuration error до загрузки канала и начала анализа.
 
 `SCAN_VIDEO_CONCURRENCY` ограничивает параллельную загрузку/обработку видео внутри scan. `OPENAI_GLOBAL_CONCURRENCY` — общий лимит provider requests на Node-процесс, а `OPENAI_RPM_BUDGET`/`OPENAI_TPM_BUDGET` позволяют заранее держаться ниже лимитов OpenAI. Detector/reviewer batch limits ограничивают размер одного request, а `OPENAI_SCAN_*_CONCURRENCY` не даёт одному длинному scan монополизировать process-wide очередь. При горизонтальном масштабировании эти лимиты остаются per-process; для строгого общего quota между несколькими replicas потребуется внешний distributed limiter или отдельный inference gateway.
 
