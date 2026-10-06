@@ -35,23 +35,28 @@ function baseViolence(candidateId: string, sceneId: string): ClassifiedContentEv
   }
 }
 
+function decisionSemantics(summary: string) {
+  return {
+    actor: null,
+    target: null,
+    aggressionDirection: 'unclear' as const,
+    intent: 'unclear' as const,
+    distress: 'mild' as const,
+    consequence: 'none' as const,
+    duration: 'momentary' as const,
+    repetition: 'single' as const,
+    narrativeFraming: 'neutral' as const,
+    parentSummary: summary,
+    mitigatingContext: 'Game context.',
+    highPriorityReason: null,
+  }
+}
+
 function sceneOutput(decisions: Array<Record<string, unknown>>) {
   return {
     sceneReviewId: 'video_scene_0',
     candidateDecisions: decisions,
     contextSegments: [],
-    actor: null,
-    target: null,
-    aggressionDirection: 'unclear',
-    intent: 'unclear',
-    distress: 'mild',
-    consequence: 'none',
-    duration: 'momentary',
-    repetition: 'single',
-    narrativeFraming: 'neutral',
-    parentSummary: 'One shared scene summary.',
-    mitigatingContext: 'Game context.',
-    highPriorityReason: null,
   }
 }
 
@@ -71,6 +76,7 @@ describe('OpenAI scene-level batch review', () => {
               event: null,
               parentRelevance: 'moderate',
               evidenceSufficiency: 'sufficient',
+              ...decisionSemantics('First candidate summary.'),
               rationale: 'Confirmed first label.',
             },
             {
@@ -79,6 +85,7 @@ describe('OpenAI scene-level batch review', () => {
               event: null,
               parentRelevance: 'low',
               evidenceSufficiency: 'sufficient',
+              ...decisionSemantics('Second candidate summary.'),
               rationale: 'Confirmed second label.',
             },
           ])],
@@ -121,7 +128,7 @@ describe('OpenAI scene-level batch review', () => {
     expect(result.items[0]?.complete).toBe(true)
     expect(result.items[0]?.reviewedEvents).toHaveLength(2)
     expect(result.items[0]?.reviewedEvents.map((event) => event.review?.parentSummary))
-      .toEqual(['One shared scene summary.', 'One shared scene summary.'])
+      .toEqual(['First candidate summary.', 'Second candidate summary.'])
 
     const request = parse.mock.calls[0]?.[0] as {
       input?: Array<{ role: string; content: Array<{ text: string }> }>
@@ -146,6 +153,7 @@ describe('OpenAI scene-level batch review', () => {
             event: null,
             parentRelevance: 'low',
             evidenceSufficiency: 'sufficient',
+            ...decisionSemantics('No harmful event is established.'),
             rationale: 'No directed aggression or harmful consequence is established.',
           }])],
         }],
