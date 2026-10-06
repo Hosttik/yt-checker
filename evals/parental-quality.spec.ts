@@ -18,7 +18,8 @@ import { normalizeClassifiedEvents } from '../server/domain/content-normalizatio
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
 import type { NormalizedTranscript } from '../server/domain/normalize-transcript'
-import { ProviderScheduler } from '../server/utils/provider-scheduler'
+import { optionalPositiveIntegerEnv, ProviderScheduler } from '../server/utils/provider-scheduler'
+import { positiveIntegerEnv } from '../server/utils/semaphore'
 import {
   OPENAI_COVERAGE_PROMPT_VERSION,
   OPENAI_COVERAGE_SCHEMA_VERSION,
@@ -879,9 +880,20 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         .filter(Boolean),
     )
     const runs = Math.max(1, Math.min(5, Number(process.env.QUALITY_RUNS ?? 1)))
-    const concurrency = Math.max(1, Math.min(5, Number(process.env.QUALITY_CONCURRENCY ?? 1)))
-    const rateLimitRetries = Math.max(0, Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? 5)))
-    const retryBaseDelayMs = Math.max(1_000, Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 10_000)))
+    const concurrency = Math.max(
+      1,
+      Math.min(10, Number(process.env.QUALITY_CONCURRENCY ?? process.env.SCAN_VIDEO_CONCURRENCY ?? 10)),
+    )
+    const rateLimitRetries = Math.max(
+      0,
+      Math.min(8, Number(process.env.QUALITY_RATE_LIMIT_RETRIES ?? process.env.OPENAI_RATE_LIMIT_RETRIES ?? 2)),
+    )
+    const retryBaseDelayMs = Math.max(
+      50,
+      Math.min(60_000, Number(process.env.QUALITY_RETRY_BASE_MS ?? 1_000)),
+    )
+    const coverageEnabled = process.env.QUALITY_ENABLE_COVERAGE === '1'
+    const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
     const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
     const requestTimeoutMs = Math.max(60_000, Math.min(600_000, Number(process.env.QUALITY_OPENAI_TIMEOUT_MS ?? 60_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
