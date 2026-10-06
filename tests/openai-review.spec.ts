@@ -635,6 +635,50 @@ describe('OpenAI contextual reviewer', () => {
     })
   })
 
+  it('does not treat insufficient benign-looking fields as proof that a serious threat is absent', async () => {
+    const transcript = normalizeTranscript([
+      { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const event = violentThreat('candidate_guard_insufficient', 10_000)
+    const parse = vi.fn(async () => ({
+      id: 'resp_review_guard_insufficient',
+      status: 'completed',
+      output_text: '{"reviews":[{"reviewItemId":"review_0"}]}',
+      output_parsed: {
+        reviews: [{
+          ...confirmedReviewItem('review_0'),
+          verdict: 'rejected',
+          parentRelevance: 'minimal',
+          evidenceSufficiency: 'insufficient',
+          contextSegments: [],
+          aggressionDirection: 'none',
+          intent: 'benign',
+          distress: 'none',
+          consequence: 'none',
+          parentSummary: 'Reviewer не смог подтвердить угрозу.',
+          rationale: 'Данных недостаточно для уверенного вывода.',
+        }],
+      },
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+    }))
+    const provider = new OpenAIAnalysisProvider(
+      'test-key',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as never,
+    )
+
+    const result = await provider.review(transcript, 'ru', ['violence'], [event])
+
+    expect(result.complete).toBe(false)
+    expect(result.rejectedCandidates).toBe(0)
+    expect(result.reviewedEvents[0]).toMatchObject({
+      sourceCandidateId: 'candidate_guard_insufficient',
+      review: { status: 'not_reviewed', evidenceSufficiency: 'insufficient' },
+    })
+    expect(result.decisions[0]?.verdict).toBe('not_reviewed')
+  })
+
   it('allows reviewer to reject a serious first-pass hypothesis when sufficient context proves it benign', async () => {
     const transcript = normalizeTranscript([
       { text: 'Если не сделаешь это, жителям конец.', startMs: 10_000, endMs: 11_000 },
