@@ -10,6 +10,7 @@ import {
   type OpenAIProviderMetadata,
   type OpenAIReviewBatchInput,
   type OpenAIReviewResult,
+  OpenAIAnalysisError,
   OpenAIAnalysisProvider,
 } from './openai-analysis'
 import { estimateTextTokens } from './openai-batched-analyzer'
@@ -352,14 +353,22 @@ export class BatchedOpenAIReviewer {
         jobs.map((job) => job.estimatedTokens),
       )
       for (let index = 0; index < jobs.length; index += 1) {
-        const cloned = Object.assign(new Error(shared.message ?? 'Batched contextual review failed.'), {
-          type: shared.type ?? 'provider',
-          status: shared.status,
-          code: shared.code,
-          usage: usages[index],
-          provider: shared.provider,
-          requestCount: index === 0 ? (shared.requestCount ?? 1) : 0,
-        })
+        const cloned = new OpenAIAnalysisError(
+          shared.type === 'rate_limit'
+            || shared.type === 'authentication'
+            || shared.type === 'timeout'
+            || shared.type === 'schema'
+            || shared.type === 'provider'
+            || shared.type === 'configuration'
+            ? shared.type
+            : 'provider',
+          shared.message ?? 'Batched contextual review failed.',
+          shared.status,
+          shared.code,
+        )
+        cloned.usage = usages[index]
+        cloned.provider = shared.provider
+        cloned.requestCount = index === 0 ? (shared.requestCount ?? 1) : 0
         jobs[index]!.reject(cloned)
       }
     }
