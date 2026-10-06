@@ -898,6 +898,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     )
     const coverageEnabled = process.env.QUALITY_ENABLE_COVERAGE === '1'
     const batchingEnabled = process.env.OPENAI_BATCHING_ENABLED !== 'false'
+    const batchingManifest = openAIBatchingManifestFromEnv(batchingEnabled)
     const runCooldownMs = Math.max(0, Math.min(120_000, Number(process.env.QUALITY_RUN_COOLDOWN_MS ?? 10_000)))
     const requestTimeoutMs = Math.max(60_000, Math.min(600_000, Number(process.env.QUALITY_OPENAI_TIMEOUT_MS ?? 60_000)))
     const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna'
@@ -1002,14 +1003,20 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         reviewModel,
         reasoningEffort,
         requestTimeoutMs,
+        coverageEnabled,
+        batching: batchingManifest,
+        transcriptLanguages: Object.fromEntries(selected.map((record) => [
+          record.videoId,
+          record.transcriptLanguage,
+        ])),
         discoverScans,
         uniqueChannels,
         maxScans,
         maxVideosPerScan,
         transcriptCreditUsd,
         profile,
+        batchingManifest,
         coverageEnabled,
-        batchingEnabled,
         transcriptLanguages: selected.map((record) => [record.videoId, record.transcriptLanguage]),
       }))
       .digest('hex')
@@ -1338,6 +1345,9 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         detectorModel: model,
         reviewerModel: reviewModel,
         reasoningEffort,
+        profile,
+        coverageEnabled,
+        batching: batchingManifest,
         detectorPrompt: OPENAI_PROMPT_VERSION,
         detectorSchema: OPENAI_SCHEMA_VERSION,
         reviewerPrompt: OPENAI_REVIEW_PROMPT_VERSION,
