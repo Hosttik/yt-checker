@@ -617,9 +617,9 @@ export function buildChannelCategoryReports(
     const raw = perVideo.flatMap((item) => item.events)
     const displayed = raw.filter((event) => event.displayLevel !== 'hidden')
     const displayedScenes = perVideo.flatMap((item) => item.scenes)
-    const verifiedMainScenes = displayedScenes.filter((scene) =>
-      scene.attention === 'main' && scene.evidenceStatus === 'verified',
-    )
+    const verifiedScenes = displayedScenes.filter((scene) => scene.evidenceStatus === 'verified')
+    const verifiedMainScenes = verifiedScenes.filter((scene) => scene.attention === 'main')
+    const pendingReviewScenes = displayedScenes.filter((scene) => scene.evidenceStatus !== 'verified')
 
     const rawAffectedVideos = perVideo.filter((item) => item.events.length > 0).length
     const affectedVideos = perVideo.filter((item) => item.scenes.length > 0).length
@@ -630,6 +630,9 @@ export function buildChannelCategoryReports(
         && scene.level === 'high',
       ),
     ).length
+    const pendingReviewVideos = perVideo.filter((item) =>
+      item.scenes.some((scene) => scene.evidenceStatus !== 'verified'),
+    ).length
     const moderatePlusAffectedVideos = perVideo.filter((item) =>
       item.scenes.some((scene) =>
         scene.attention === 'main'
@@ -638,8 +641,11 @@ export function buildChannelCategoryReports(
       ),
     ).length
 
-    const peakConcern: ReportLevel = displayedScenes.length > 0
-      ? maxReportLevel(displayedScenes.map((scene) => scene.level))
+    const peakConcern: ReportLevel = verifiedScenes.length > 0
+      ? maxReportLevel(verifiedScenes.map((scene) => scene.level))
+      : 'none'
+    const pendingReviewPeakConcern: ReportLevel = pendingReviewScenes.length > 0
+      ? maxReportLevel(pendingReviewScenes.map((scene) => scene.level))
       : 'none'
     const affectedRatio = analyzedVideos > 0 ? affectedVideos / analyzedVideos : 0
     const prevalence = prevalenceLevel(affectedVideos, analyzedVideos)
@@ -651,7 +657,7 @@ export function buildChannelCategoryReports(
     // low-value pattern into a stronger warning.
     const level: ReportLevel = verifiedMainScenes.length > 0
       ? maxReportLevel(verifiedMainScenes.map((scene) => scene.level))
-      : displayedScenes.length > 0
+      : verifiedScenes.length > 0
         ? 'low'
         : 'none'
 
@@ -681,6 +687,9 @@ export function buildChannelCategoryReports(
       rawAffectedVideos,
       affectedVideos,
       highlightedVideos,
+      pendingReviewVideos,
+      pendingReviewSceneCount: pendingReviewScenes.length,
+      pendingReviewPeakConcern,
       rawEventCount: raw.length,
       displayedEventCount: displayed.length,
       subtypeStats: [...subtypeMap.entries()]
