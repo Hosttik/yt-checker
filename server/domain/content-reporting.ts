@@ -433,7 +433,11 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
 
 function eventEvidenceStatus(event: ContentEvent): 'verified' | 'uncertain' | 'unreviewed' {
   const review = event.review
-  if (!review || review.status === 'not_reviewed') return 'unreviewed'
+  // Final production events now carry an explicit not_reviewed state on
+  // reviewer degradation. Missing review is kept as a backwards-compatible
+  // established state for legacy fixtures/one-pass diagnostics.
+  if (!review) return 'verified'
+  if (review.status === 'not_reviewed') return 'unreviewed'
   if (review.status === 'uncertain' || review.evidenceSufficiency !== 'sufficient') return 'uncertain'
   return 'verified'
 }
@@ -445,8 +449,20 @@ function sceneEvidenceStatus(events: ContentEvent[]): 'verified' | 'uncertain' |
   return 'unreviewed'
 }
 
-function sceneAttention(events: ContentEvent[], level: ReportLevel): 'main' | 'details' {
-  if (level === 'high') return 'main'
+function sceneAttention(
+  events: ContentEvent[],
+  level: ReportLevel,
+  evidenceStatus: 'verified' | 'uncertain' | 'unreviewed',
+): 'main' | 'details' {
+  if (level === 'high') {
+    if (evidenceStatus === 'verified') return 'main'
+    const strongHardRisk = events.some((event) =>
+      event.confidence >= 0.7
+      && event.evidenceStrength !== 'weak_context'
+      && unreviewedModerateHasHardRisk(event),
+    )
+    return strongHardRisk ? 'main' : 'details'
+  }
   if (level !== 'moderate') return 'details'
   return events.some(moderateEventBelongsOnMain) ? 'main' : 'details'
 }
@@ -510,10 +526,13 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
     .map((scene) => {
       const compactEvidence = evidenceRanges(scene.events)
       const level = maxReportLevel(scene.events.map(eventLevel))
-      const verifiedCount = scene.events.filter((event) => eventEvidenceStatus(event) === 'verified').length
-      const reviewStatus = verifiedCount === 0
+      const reviewedCount = scene.events.filter((event) =>
+        event.review
+        && (event.review.status === 'confirmed' || event.review.status === 'corrected'),
+      ).length
+      const reviewStatus = reviewedCount === 0
         ? 'unreviewed' as const
-        : verifiedCount === scene.events.length
+        : reviewedCount === scene.events.length
           ? 'reviewed' as const
           : 'mixed' as const
       const evidenceStatus = sceneEvidenceStatus(scene.events)
@@ -522,7 +541,7 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
         startMs: compactEvidence[0]?.startMs ?? scene.contextStartMs,
         endMs: compactEvidence.at(-1)?.endMs ?? scene.contextEndMs,
         level,
-        attention: sceneAttention(scene.events, level),
+        attention: sceneAttention(scene.events, level, evidenceStatus),
         reviewStatus,
         evidenceStatus,
         categories: sceneCategories(scene.events),
@@ -619,11 +638,9 @@ export function buildChannelCategoryReports(
       ),
     ).length
 
-    const peakConcern: ReportLevel = verifiedMainScenes.length > 0
-      ? maxReportLevel(verifiedMainScenes.map((scene) => scene.level))
-      : displayedScenes.length > 0
-        ? 'low'
-        : 'none'
+    const peakConcern: ReportLevel = displayedScenes.length > 0
+      ? maxReportLevel(displayedScenes.map((scene) => scene.level))
+      : 'none'
     const affectedRatio = analyzedVideos > 0 ? affectedVideos / analyzedVideos : 0
     const prevalence = prevalenceLevel(affectedVideos, analyzedVideos)
     const moderatePlusAffectedRatio = analyzedVideos > 0 ? moderatePlusAffectedVideos / analyzedVideos : 0
