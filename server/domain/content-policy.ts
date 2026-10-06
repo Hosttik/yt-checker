@@ -31,7 +31,10 @@ function defaultDisplayLevel(
   relevance: ParentRelevance,
   profile: AnalysisProfile,
 ): DisplayLevel {
-  const weakEvidence = event.confidence < 0.55 || event.evidenceStrength === 'weak_context'
+  const weakEvidence = event.confidence < 0.55
+    || event.evidenceStrength === 'weak_context'
+    || event.review?.status === 'uncertain'
+    || event.review?.status === 'not_reviewed'
 
   if (profile === 'diagnostic') return relevance === 'high' && !weakEvidence ? 'highlight' : 'summary'
 
@@ -409,13 +412,10 @@ function reviewAdjustedRelevance(
   if (reviewEstablishesHighPriorityCoercion(event)) return 'high'
 
   if (review.status === 'uncertain') {
-    // An uncertain review is not evidence strong enough to promote a finding
-    // or present a baseline high signal as an established high concern.
-    // It may still lower relevance when the surrounding context weakens the
-    // first-pass hypothesis.
-    const recommended = review.recommendedParentRelevance
-    if (relevanceRank[recommended] < relevanceRank[baseline]) return recommended
-    return baseline === 'high' ? 'moderate' : baseline
+    // Keep the detector's potential seriousness, but do not let an uncertain
+    // review promote or demote it. Presentation certainty is handled
+    // separately by display/evidence status.
+    return baseline
   }
 
   const recommended = review.recommendedParentRelevance
