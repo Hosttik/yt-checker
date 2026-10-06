@@ -40,7 +40,7 @@ import {
 } from '../server/services/openai-analysis-stack'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-06.production-parity-v16'
+const QUALITY_EVAL_VERSION = '2026-10-06.production-parity-v17'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -230,7 +230,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 16
+  version: 17
   key: string
   runOutputs: RunOutput[]
 }
@@ -1033,7 +1033,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 16 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 17 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1201,7 +1201,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 16,
+          version: 17,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
