@@ -31,21 +31,23 @@ function defaultDisplayLevel(
   relevance: ParentRelevance,
   profile: AnalysisProfile,
 ): DisplayLevel {
-  const weakEvidence = event.confidence < 0.55
-    || event.evidenceStrength === 'weak_context'
-    || event.review?.status === 'uncertain'
+  const weakEvidence = event.confidence < 0.55 || event.evidenceStrength === 'weak_context'
+  const reviewDegraded = event.review?.status === 'uncertain'
     || event.review?.status === 'not_reviewed'
 
-  if (profile === 'diagnostic') return relevance === 'high' && !weakEvidence ? 'highlight' : 'summary'
+  if (profile === 'diagnostic') {
+    return relevance === 'high' && !weakEvidence && !reviewDegraded ? 'highlight' : 'summary'
+  }
 
   if (profile === 'strict') {
-    if (weakEvidence) return 'summary'
+    if (weakEvidence || reviewDegraded) return 'summary'
     if (relevance === 'high' || relevance === 'moderate') return 'highlight'
     return 'summary'
   }
 
   if (relevance === 'minimal') return 'hidden'
   if (weakEvidence) return relevance === 'high' ? 'summary' : 'hidden'
+  if (reviewDegraded) return relevance === 'high' || relevance === 'moderate' ? 'summary' : 'hidden'
   if (relevance === 'high') return 'highlight'
   return 'summary'
 }
