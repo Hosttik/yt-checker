@@ -73,6 +73,7 @@ export interface VideoContentReview {
   rescuedCount?: number
   rescueRejectedCount?: number
   reviewRequestCount?: number
+  reviewFallbackRequestCount?: number
   coverageRequestCount?: number
   coveragePromptVersion?: string
   coverageSchemaVersion?: string
@@ -89,6 +90,23 @@ export interface VideoContentReview {
 export interface OpenAIStageUsage {
   detection: AggregateOpenAIUsage
   review: AggregateOpenAIUsage
+}
+
+export interface ScanTimings {
+  totalMs: number
+  transcriptWallMs: number
+  detectionWallMs: number
+  reviewWallMs: number
+  coverageWallMs: number
+  openaiSchedulerWaitMs: number
+  openaiProviderMs: number
+}
+
+export interface OpenAIRequestBreakdown {
+  detectorRequests: number
+  reviewRequests: number
+  reviewFallbackRequests: number
+  coverageRequests: number
 }
 
 export interface ContentReviewSummary {
@@ -255,6 +273,8 @@ export interface ChannelCheckResponse {
   creditUsage: ScanCreditUsage
   openaiUsage: AggregateOpenAIUsage
   openaiStages?: OpenAIStageUsage
+  openaiRequests?: OpenAIRequestBreakdown
+  timings?: ScanTimings
   contentReview?: ContentReviewSummary
 
   // Separate secondary analysis dimension; never part of content-safety categories.

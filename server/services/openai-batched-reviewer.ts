@@ -2,7 +2,7 @@ import type { OpenAIUsage } from '../../shared/types/check'
 import type { ClassifiedContentEvent, ContentCategory } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 import { mapWithConcurrency } from '../utils/concurrency'
-import type { ProviderScheduler } from '../utils/provider-scheduler'
+import type { ProviderScheduler, ProviderSchedulerTiming } from '../utils/provider-scheduler'
 import {
   OPENAI_REVIEW_PROMPT_VERSION,
   OPENAI_REVIEW_SCHEMA_VERSION,
@@ -21,7 +21,9 @@ export interface BatchedReviewerOptions {
   batchConcurrency?: number
   batchMaxItems?: number
   batchMaxCandidates?: number
+  batchMaxScenes?: number
   estimatedPromptTokens?: number
+  onSchedulerTiming?: (timing: ProviderSchedulerTiming) => void
 }
 
 interface PendingReview {
@@ -40,6 +42,7 @@ interface ResolvedReview {
   result: Awaited<ReturnType<OpenAIAnalysisProvider['reviewBatch']>>['items'][number]
   usage: OpenAIUsage
   requestCount: number
+  fallbackRequestCount: number
   provider: OpenAIProviderMetadata
 }
 
@@ -83,33 +86,45 @@ function distributeUsage(usage: OpenAIUsage, weights: number[]): OpenAIUsage[] {
   }))
 }
 
+function sceneCount(events: ClassifiedContentEvent[]): number {
+  return new Set(events.map((event, index) =>
+    event.sceneId ?? event.sourceCandidateId ?? `candidate_${index}`,
+  )).size
+}
+
 function packJobs(
   jobs: PendingReview[],
   maxTokens: number,
   maxItems: number,
   maxCandidates: number,
+  maxScenes: number,
 ): PendingReview[][] {
   const batches: PendingReview[][] = []
   let current: PendingReview[] = []
   let currentTokens = 0
   let currentCandidates = 0
+  let currentScenes = 0
 
   for (const job of jobs) {
+    const jobScenes = sceneCount(job.events)
     const overflow = current.length > 0
       && (
         currentTokens + job.estimatedTokens > maxTokens
         || current.length >= maxItems
         || currentCandidates + job.events.length > maxCandidates
+        || currentScenes + jobScenes > maxScenes
       )
     if (overflow) {
       batches.push(current)
       current = []
       currentTokens = 0
       currentCandidates = 0
+      currentScenes = 0
     }
     current.push(job)
     currentTokens += job.estimatedTokens
     currentCandidates += job.events.length
+    currentScenes += jobScenes
   }
   if (current.length > 0) batches.push(current)
   return batches
@@ -137,6 +152,7 @@ export class BatchedOpenAIReviewer {
   private readonly batchConcurrency: number
   private readonly batchMaxItems: number
   private readonly batchMaxCandidates: number
+  private readonly batchMaxScenes: number
   private readonly estimatedPromptTokens: number
   private readonly pending: PendingReview[] = []
   private timer?: ReturnType<typeof setTimeout>
@@ -145,14 +161,15 @@ export class BatchedOpenAIReviewer {
   constructor(
     private readonly provider: OpenAIAnalysisProvider,
     private readonly scheduler: ProviderScheduler,
-    options: BatchedReviewerOptions = {},
+    private readonly options: BatchedReviewerOptions = {},
   ) {
-    this.batchMaxEstimatedTokens = positive(options.batchMaxEstimatedTokens, 70_000)
-    this.coalesceMs = Math.max(0, Math.floor(options.coalesceMs ?? 100))
-    this.batchConcurrency = positive(options.batchConcurrency, 2)
-    this.batchMaxItems = positive(options.batchMaxItems, 4)
-    this.batchMaxCandidates = positive(options.batchMaxCandidates, 12)
-    this.estimatedPromptTokens = positive(options.estimatedPromptTokens, 20_000)
+    this.batchMaxEstimatedTokens = positive(this.options.batchMaxEstimatedTokens, 70_000)
+    this.coalesceMs = Math.max(0, Math.floor(this.options.coalesceMs ?? 100))
+    this.batchConcurrency = positive(this.options.batchConcurrency, 2)
+    this.batchMaxItems = positive(this.options.batchMaxItems, 4)
+    this.batchMaxCandidates = positive(this.options.batchMaxCandidates, 24)
+    this.batchMaxScenes = positive(this.options.batchMaxScenes, 8)
+    this.estimatedPromptTokens = positive(this.options.estimatedPromptTokens, 20_000)
   }
 
   review(
@@ -197,6 +214,7 @@ export class BatchedOpenAIReviewer {
       this.batchMaxEstimatedTokens,
       this.batchMaxItems,
       this.batchMaxCandidates,
+      this.batchMaxScenes,
     )
 
     try {
@@ -214,10 +232,14 @@ export class BatchedOpenAIReviewer {
           const estimatedTokens = this.estimatedPromptTokens
             + batch.reduce((sum, job) => sum + job.estimatedTokens, 0)
           let scheduledAttempts = 0
-          const response = await this.scheduler.run(estimatedTokens, async () => {
-            scheduledAttempts += 1
-            return this.provider.reviewBatch(input)
-          })
+          const response = await this.scheduler.run(
+            estimatedTokens,
+            async () => {
+              scheduledAttempts += 1
+              return this.provider.reviewBatch(input)
+            },
+            this.options.onSchedulerTiming,
+          )
           const byId = new Map(response.items.map((item) => [item.itemId, item]))
           const usages = distributeUsage(response.usage, batch.map((job) => job.estimatedTokens))
 
@@ -231,6 +253,7 @@ export class BatchedOpenAIReviewer {
               requestCount: index === 0
                 ? scheduledAttempts + Math.max(0, response.requestCount - 1)
                 : 0,
+              fallbackRequestCount: 0,
               provider: response.provider,
             }
           })
@@ -255,6 +278,7 @@ export class BatchedOpenAIReviewer {
                     item.job.events,
                   )
                 },
+                this.options.onSchedulerTiming,
               )
               recovered.push({
                 job: item.job,
@@ -272,6 +296,7 @@ export class BatchedOpenAIReviewer {
                 requestCount: item.requestCount
                   + fallbackAttempts
                   + Math.max(0, fallback.requestCount - 1),
+                fallbackRequestCount: fallbackAttempts + Math.max(0, fallback.requestCount - 1),
                 provider: {
                   ...fallback.provider,
                   latencyMs: item.provider.latencyMs + fallback.provider.latencyMs,
@@ -283,6 +308,7 @@ export class BatchedOpenAIReviewer {
                 ...item,
                 usage: mergedUsage(item.usage, fallbackError.usage),
                 requestCount: item.requestCount + fallbackAttempts,
+                fallbackRequestCount: fallbackAttempts,
                 provider: fallbackError.provider
                   ? {
                       ...fallbackError.provider,
@@ -308,6 +334,7 @@ export class BatchedOpenAIReviewer {
           uncertainCandidates: result.uncertainCandidates,
           complete: result.complete,
           requestCount: item.requestCount,
+          fallbackRequestCount: item.fallbackRequestCount,
           retryCount: 0,
           missingBeforeRetry: result.totalCandidates - result.reviewedCandidates,
           missingAfterRetry: result.totalCandidates - result.reviewedCandidates,

@@ -97,6 +97,7 @@ describe('BatchedOpenAIReviewer', () => {
         batchConcurrency: 1,
         batchMaxItems: 32,
         batchMaxCandidates: 32,
+        batchMaxScenes: 32,
         estimatedPromptTokens: 1,
       },
     )

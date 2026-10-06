@@ -39,4 +39,27 @@ describe('ProviderScheduler', () => {
     expect(result).toBe('ok')
     expect(attempts).toBe(2)
   })
+
+  it('reports scheduler wait and provider timing', async () => {
+    const scheduler = new ProviderScheduler({ concurrency: 1, maxRetries: 0 })
+    let timing
+
+    await scheduler.run(
+      10,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return 'ok'
+      },
+      (value) => {
+        timing = value
+      },
+    )
+
+    expect(timing).toBeDefined()
+    expect(timing?.attempts).toBe(1)
+    expect(timing?.providerMs).toBeGreaterThanOrEqual(4)
+    expect(timing?.waitMs).toBeGreaterThanOrEqual(0)
+  })
+
+
 })
