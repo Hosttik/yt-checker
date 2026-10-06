@@ -1491,7 +1491,8 @@ export class OpenAIAnalysisProvider {
       const retryInstruction = retry
         ? '\nThis is a retry ONLY for reviewItemIds omitted from the previous response. Return exactly these listed ids and no others. missedHighPriorityEvents MUST be an empty array.'
         : '\nThis request is candidate review only. missedHighPriorityEvents MUST be an empty array; a separate dedicated coverage pass handles missed scenes.'
-      const reviewContext = buildReviewContextText(transcript, events)\n      const dynamicInput = `Transcript language: ${language || 'unknown'}\nEnabled categories: ${enabledCategories.join(', ')}${retryInstruction}\n\nFirst-pass hypotheses (untrusted):\n${JSON.stringify(batchItems)}\n\nOriginal transcript context (segment indexes stay global):\n${reviewContext}`
+      const reviewContext = buildReviewContextText(transcript, events)
+      const dynamicInput = `Transcript language: ${language || 'unknown'}\nEnabled categories: ${enabledCategories.join(', ')}${retryInstruction}\n\nFirst-pass hypotheses (untrusted):\n${JSON.stringify(batchItems)}\n\nOriginal transcript context (segment indexes stay global):\n${reviewContext}`
       const response = await this.client.responses.parse({
         model: this.model,
         reasoning: { effort: this.reasoningEffort },
