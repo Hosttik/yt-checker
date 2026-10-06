@@ -17,6 +17,7 @@ import {
 import { normalizeClassifiedEvents } from '../server/domain/content-normalization'
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
+import { restoreSavedTranscript } from './saved-transcript'
 import type { NormalizedTranscript } from '../server/domain/normalize-transcript'
 import { optionalPositiveIntegerEnv, ProviderScheduler } from '../server/utils/provider-scheduler'
 import { positiveIntegerEnv } from '../server/utils/semaphore'
@@ -40,7 +41,7 @@ import {
 } from '../server/services/openai-analysis-stack'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-06.production-parity-v17'
+const QUALITY_EVAL_VERSION = '2026-10-06.production-timing-v18'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -91,6 +92,7 @@ interface ManualCase {
 interface DiagnosticEntry {
   videoId: string
   normalizedTranscript: string
+  normalizedTimeline?: Array<{ startMs: number; endMs: number }>
   requestMetadata?: { enabledCategories?: ContentCategory[]; transcriptLanguage?: string }
   provider?: { latencyMs?: number }
   usage?: {
@@ -230,7 +232,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 17
+  version: 18
   key: string
   runOutputs: RunOutput[]
 }
@@ -303,29 +305,6 @@ async function discoverSavedScanDirs(root = 'scan-results'): Promise<string[]> {
     }
   }
   return valid
-}
-
-function parseTranscript(text: string): NormalizedTranscript {
-  const segments = text
-    .split('\n')
-    .map((line) => {
-      const match = line.match(/^\[(\d+)]\s?(.*)$/)
-      return match ? { index: Number(match[1]), text: match[2] } : null
-    })
-    .filter((item): item is { index: number; text: string } => Boolean(item))
-    .sort((a, b) => a.index - b.index)
-    .map((item, position) => ({
-      text: item.text,
-      startMs: position * 3_000,
-      endMs: position * 3_000 + 2_500,
-    }))
-
-  if (segments.length === 0) throw new Error('Saved diagnostic entry has no indexed transcript lines.')
-  return {
-    text: segments.map((segment, index) => `[${index}] ${segment.text}`).join('\n'),
-    sourceText: segments.map((segment) => segment.text).join(' '),
-    segments,
-  }
 }
 
 function normalizedWords(value: string): Set<string> {
@@ -603,16 +582,20 @@ function firstPassMisses(
 }
 
 async function loadScan(scanDir: string): Promise<{ scanDir: string; records: ScanRecord[]; result: ScanResult }> {
-  const [diagnosticRaw, resultRaw] = await Promise.all([
+  const [diagnosticRaw, resultRaw, exchangesRaw] = await Promise.all([
     readFile(resolve(scanDir, 'openai-analysis.json'), 'utf8'),
     readFile(resolve(scanDir, 'result.json'), 'utf8'),
+    readFile(resolve(scanDir, 'transcriptapi-exchanges.json'), 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') return '[]'
+      throw error
+    }),
   ])
   const diagnostic = JSON.parse(diagnosticRaw) as DiagnosticEntry[]
   const result = JSON.parse(resultRaw) as ScanResult
   const records = diagnostic
     .filter((entry) => entry.normalizedTranscript && entry.parsedResult)
     .map((entry) => {
-      const transcript = parseTranscript(entry.normalizedTranscript)
+      const transcript = restoreSavedTranscript(entry, JSON.parse(exchangesRaw))
       return {
         scanName: basename(scanDir),
         scanDir,
@@ -1021,10 +1004,6 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         maxVideosPerScan,
         transcriptCreditUsd,
         profile,
-        batching: batchingManifest,
-        coverageEnabled,
-        orderMode,
-        transcriptLanguages: selected.map((record) => [record.videoId, record.transcriptLanguage]),
       }))
       .digest('hex')
       .slice(0, 16)
@@ -1033,7 +1012,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 17 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 18 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1201,7 +1180,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 17,
+          version: 18,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',

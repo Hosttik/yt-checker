@@ -24,23 +24,30 @@ The quality eval now uses:
 
 ## Controlled comparison
 
-Run only the two target videos first:
+Use the dedicated, paid opt-in detector experiment (Node 22+):
 
 ```bash
-QUALITY_VIDEO_IDS=MmdIhSW5B7Q,edgRlTMnF0o \
-QUALITY_SCAN_DIRS=scan-results/2026-10-06T15-22-40-116Z_40298a8a-178e-4d1d-85d2-aea798ec1f9c,scan-results/2026-10-06T15-25-28-310Z_ba7c44fb-580b-44ed-aab4-a6269dc01983 \
-npm run eval:parental-quality:detector-batch1
+npm run eval:detector-stability
 ```
 
-Then repeat with production-size detector batches:
+It takes **five** fixed saved transcripts, restores their original timestamps, and compares batch sizes 1 and 5 in forward and reverse order. It alternates configuration order, fixes concurrency to 1, records model/prompt/schema, transcript hashes, outputs and request counts in `benchmark-results/detector-stability/`. Override the saved scan with `DETECTOR_SCAN_DIR`. Local saved artifacts and an API key are required.
 
-```bash
-QUALITY_VIDEO_IDS=MmdIhSW5B7Q,edgRlTMnF0o \
-QUALITY_SCAN_DIRS=scan-results/2026-10-06T15-22-40-116Z_40298a8a-178e-4d1d-85d2-aea798ec1f9c,scan-results/2026-10-06T15-25-28-310Z_ba7c44fb-580b-44ed-aab4-a6269dc01983 \
-npm run eval:parental-quality:detector-batch5
-```
+The previous two-video quality-eval command was not a five-item composition test and the target videos had no gold annotations. Use the dedicated experiment for variance; use the production-stack quality eval separately for annotated end-to-end checks. Neither detector counts nor provisional annotations establish human accuracy.
 
-For a stronger composition test, include all ten videos from the saved scan and keep `QUALITY_ORDER_MODE=rotate` (the two detector-batch scripts already set it). Every repeated run records its video order and complete batching manifest in the benchmark JSON.
+## Measurement on 2026-10-06
+
+Model `gpt-6-luna`, reasoning `low`, detector prompt v9/schema 10. Four configurations completed, 12 requests, about 115 seconds including test startup. Candidate counts in fixed video order:
+
+| Configuration | edgRlTMnF0o | MmdIhSW5B7Q | ed7JivZ43xs | B7PGgMjJyoQ | RmGCg3FRdb8 |
+|---|---:|---:|---:|---:|---:|
+| Batch 1, forward | 3 | 3 | 3 | 1 | 3 |
+| Batch 5, forward | 1 | 0 | 1 | 0 | 3 |
+| Batch 5, reverse | 3 | 3 | 1 | 0 | 2 |
+| Batch 1, reverse | 4 | 15 | 0 | 1 | 2 |
+
+The gun-pointing scene in `edgRlTMnF0o` appeared in all four runs. The pleas for help/cessation in `MmdIhSW5B7Q` appeared in both reverse-order runs and neither forward-order run, including batch 1 with three unrelated candidates. These are inspections of detector outputs against transcript anchors, not independent human labels or final parental-warning scores. The model also swapped actor/target in a captivity scene in one output.
+
+Conclusion: misses occur even with batch size 1 and nonempty output. Two orders do not isolate composition from sampling variability. Keep the production default unchanged pending a larger annotated comparison; neither batch size 1 nor retry-on-zero is demonstrated to solve recall. Saved raw result (local, Git-ignored): `benchmark-results/detector-stability/2026-10-06T18-22-55-602Z.json`.
 
 ## Decision rule
 

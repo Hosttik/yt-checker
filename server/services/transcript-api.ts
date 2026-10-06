@@ -270,6 +270,40 @@ export function selectAvailableLanguage(
   return undefined
 }
 
+export function parseTranscriptApiSegments(data: TranscriptApiTranscriptResponse): TranscriptResult['segments'] {
+  const captions = data.transcript ?? data.events
+  if (!Array.isArray(captions)) {
+    throw new TranscriptApiError('provider_error', 'Provider returned an invalid transcript response.')
+  }
+
+  const segments = captions.flatMap((segment) => {
+    if (Array.isArray(segment.segs)) {
+      if (!Number.isFinite(segment.tStartMs) || !Number.isFinite(segment.dDurationMs)
+        || segment.tStartMs! < 0 || segment.dDurationMs! < 0) return []
+      const text = segment.segs.map((part) => typeof part.utf8 === 'string' ? part.utf8 : '').join('')
+      if (!text.trim()) return []
+      return [{
+        text,
+        startMs: Math.round(segment.tStartMs!),
+        endMs: Math.round(segment.tStartMs! + segment.dDurationMs!),
+      }]
+    }
+    if (typeof segment.text !== 'string' || !segment.text.trim()
+      || !Number.isFinite(segment.start) || !Number.isFinite(segment.duration)
+      || typeof segment.start !== 'number' || typeof segment.duration !== 'number') {
+      return []
+    }
+    const startMs = Math.max(0, Math.round(segment.start * 1_000))
+    const durationMs = Math.max(0, Math.round(segment.duration * 1_000))
+    return [{ text: segment.text, startMs, endMs: startMs + durationMs }]
+  })
+
+  if (segments.length === 0) {
+    throw new TranscriptApiError('not_available', 'Transcript is unavailable from the provider.')
+  }
+  return segments
+}
+
 export class TranscriptApiClient {
   private usage: ScanCreditUsage = {
     transcriptCredits: 0,
@@ -428,36 +462,7 @@ export class TranscriptApiClient {
           'transcript',
         )
 
-        const captions = data.transcript ?? data.events
-        if (!Array.isArray(captions)) {
-          throw new TranscriptApiError('provider_error', 'Provider returned an invalid transcript response.')
-        }
-
-        const segments = captions.flatMap((segment) => {
-          if (Array.isArray(segment.segs)) {
-            if (!Number.isFinite(segment.tStartMs) || !Number.isFinite(segment.dDurationMs)
-              || segment.tStartMs! < 0 || segment.dDurationMs! < 0) return []
-            const text = segment.segs.map((part) => typeof part.utf8 === 'string' ? part.utf8 : '').join('')
-            if (!text.trim()) return []
-            return [{
-              text,
-              startMs: Math.round(segment.tStartMs!),
-              endMs: Math.round(segment.tStartMs! + segment.dDurationMs!),
-            }]
-          }
-          if (typeof segment.text !== 'string' || !segment.text.trim()
-            || !Number.isFinite(segment.start) || !Number.isFinite(segment.duration)
-            || typeof segment.start !== 'number' || typeof segment.duration !== 'number') {
-            return []
-          }
-          const startMs = Math.max(0, Math.round(segment.start * 1_000))
-          const durationMs = Math.max(0, Math.round(segment.duration * 1_000))
-          return [{ text: segment.text, startMs, endMs: startMs + durationMs }]
-        })
-
-        if (segments.length === 0) {
-          throw new TranscriptApiError('not_available', 'Transcript is unavailable from the provider.')
-        }
+        const segments = parseTranscriptApiSegments(data)
 
         await this.traceObserver?.({
           event: 'transcript.success',

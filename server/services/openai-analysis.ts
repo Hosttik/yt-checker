@@ -1534,11 +1534,25 @@ export class OpenAIAnalysisProvider {
         else grouped.set(key, [value])
       })
 
+      const localGroups = [...grouped.entries()].flatMap(([sceneId, entries]) => {
+        const clusters: typeof entries[] = []
+        for (const entry of [...entries].sort((a, b) => a.event.startMs - b.event.startMs)) {
+          const previous = clusters.at(-1)
+          const previousEnd = previous && Math.max(...previous.map(item => item.event.endMs))
+          if (previous && entry.event.startMs <= previousEnd! + 75_000) previous.push(entry)
+          else clusters.push([entry])
+        }
+        return clusters.map((cluster, index) => ({
+          sceneId: clusters.length === 1 ? sceneId : `${sceneId}:part_${index}`,
+          entries: cluster,
+        }))
+      })
+
       return {
         itemId: input.itemId,
         language: input.language || 'unknown',
         enabledCategories: input.enabledCategories,
-        scenes: [...grouped.entries()].map(([sceneId, entries], sceneIndex) => ({
+        scenes: localGroups.map(({ sceneId, entries }, sceneIndex) => ({
           sceneReviewId: `${input.itemId}_scene_${sceneIndex}`,
           sceneId,
           hypotheses: entries.map(({ event, index }) => ({
@@ -1625,6 +1639,23 @@ export class OpenAIAnalysisProvider {
       }
 
       const sceneContainers = response.output_parsed.items
+      const expectedScenes = new Map(requestItems.map(item => [item.itemId,
+        new Map(item.scenes.map(scene => [scene.sceneReviewId,
+          new Set(scene.hypotheses.map(hypothesis => hypothesis.reviewItemId)),
+        ])),
+      ]))
+      for (const container of sceneContainers) {
+        const scenes = expectedScenes.get(container.itemId)
+        const seen = new Set<string>()
+        for (const scene of container.scenes) {
+          const candidates = scenes?.get(scene.sceneReviewId)
+          if (!candidates || seen.has(scene.sceneReviewId)
+            || scene.candidateDecisions.some(decision => !candidates.has(decision.reviewItemId))) {
+            throw new OpenAIAnalysisError('schema', 'Scene review returned an unknown/duplicate scene or moved a candidate across scenes.')
+          }
+          seen.add(scene.sceneReviewId)
+        }
+      }
       const parsedContainers = sceneContainers.map((container) => ({
         itemId: container.itemId,
         reviews: container.scenes.flatMap((scene) =>
@@ -1736,14 +1767,11 @@ export class OpenAIAnalysisProvider {
             let materialized = normalizedItem.event
               ? materializeEvents([normalizedItem.event], input.transcript, input.enabledCategories)[0]
               : undefined
-            if (normalizedItem.verdict === 'confirmed'
-              && materialized
-              && !directEvidenceOverlaps(original, materialized, 5_000)) {
-              materialized = original
-            }
-            if (normalizedItem.verdict !== 'confirmed'
-              && materialized
-              && !reviewCorrectionOverlapsOriginalScene(original, materialized)) {
+            if (materialized && (
+              normalizedItem.verdict === 'confirmed'
+                ? !directEvidenceOverlaps(original, materialized, 5_000)
+                : !reviewCorrectionOverlapsOriginalScene(original, materialized)
+            )) {
               materializationFailure = true
               reviewedEvents.push({
                 ...original,
@@ -2070,17 +2098,11 @@ export class OpenAIAnalysisProvider {
           let materialized = item.event
             ? materializeEvents([item.event], transcript, enabledCategories)[0]
             : undefined
-          if (item.verdict === 'confirmed'
-            && materialized
-            && !directEvidenceOverlaps(original, materialized, 5_000)) {
-            // "confirmed" means the original signal is correct. The reviewer may
-            // re-select tighter evidence, but it must not silently relocate the
-            // candidate to another part of a broad narrative scene.
-            materialized = original
-          }
-          if (item.verdict !== 'confirmed'
-            && materialized
-            && !reviewCorrectionOverlapsOriginalScene(original, materialized)) {
+          if (materialized && (
+            item.verdict === 'confirmed'
+              ? !directEvidenceOverlaps(original, materialized, 5_000)
+              : !reviewCorrectionOverlapsOriginalScene(original, materialized)
+          )) {
             materializationFailure = true
             reviewedEvents.push({
               ...original,

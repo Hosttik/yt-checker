@@ -14,6 +14,7 @@ import type {
 interface OpenAIDiagnosticEntry {
   videoId: string
   normalizedTranscript: string
+  normalizedTimeline?: Array<{ startMs: number; endMs: number }>
   requestMetadata: OpenAIAnalysisResult['requestMetadata']
   provider?: OpenAIAnalysisResult['provider']
   parsedResult?: {
@@ -80,11 +81,13 @@ export class ScanStorage {
     reviewError?: OpenAIAnalysisError,
     coverageResult?: OpenAICoverageResult,
     coverageError?: OpenAIAnalysisError,
+    normalizedTimeline?: Array<{ startMs: number; endMs: number }>,
   ): void {
     if (this.mode !== 'diagnostic') return
     this.openaiEntries.push({
       videoId,
       normalizedTranscript,
+      normalizedTimeline: normalizedTimeline?.map(({ startMs, endMs }) => ({ startMs, endMs })),
       requestMetadata: result.requestMetadata,
       provider: result.provider,
       parsedResult: {

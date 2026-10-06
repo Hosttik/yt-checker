@@ -567,6 +567,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
 
           contentReview = {
             ...contentReview,
+            coverageStatus: 'completed',
             status: contentReview.status === 'not_needed' && coverageResult.rescuedCandidates > 0
               ? 'completed'
               : contentReview.status,
@@ -596,6 +597,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           addUsage(openaiStages.review, coverageError.usage)
           contentReview = {
             ...contentReview,
+            coverageStatus: 'failed',
             status: contentReview.status === 'failed' || contentReview.status === 'skipped_after_failure'
               ? contentReview.status
               : 'partial',
@@ -715,6 +717,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         reviewError,
         coverageResult,
         coverageError,
+        normalizedTranscript.segments,
       )
       const videoUsage = combinedUsage(
         analysis.usage,
@@ -842,9 +845,10 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       const scenes = buildPresentationScenes(events)
       const report = {
         videoId: video.id,
+        coverageStatus: video.contentReview?.coverageStatus ?? 'not_run',
         categoryReports: buildVideoCategoryReports(events, enabledCategories),
         scenes,
-        contentSummary: buildVideoContentSummary(scenes),
+        contentSummary: buildVideoContentSummary(scenes, video.contentReview),
         mainSceneCount: scenes.filter((scene) => scene.attention === 'main').length,
         detailSceneCount: scenes.filter((scene) => scene.attention === 'details').length,
         ...(profile === 'diagnostic'

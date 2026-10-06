@@ -293,7 +293,8 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
 
       <div class="summary-grid">
         <article v-for="item in result.channelReport" :key="item.category" class="summary-card">
-          <strong>Подтверждённый уровень по выборке: {{ levelText(item.level) }}</strong>
+          <strong v-if="item.analyzedVideos === 0">Недостаточно данных для оценки</strong>
+          <strong v-else>Подтверждённый уровень по выборке: {{ levelText(item.level) }}</strong>
           <span>{{ item.label }}</span>
           <small v-if="result.profile === 'diagnostic'">
             shown in {{ item.affectedVideos }}/{{ item.analyzedVideos }} videos ·
@@ -316,7 +317,7 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
             любые показанные сигналы: {{ item.affectedVideos }}/{{ item.analyzedVideos }} ·
             {{ item.displayedEventCount }} отображаемых событий
           </small>
-          <p>{{ item.summary }}</p>
+          <p>{{ item.analyzedVideos === 0 ? 'Не удалось проанализировать субтитры ни одного видео.' : item.summary }}</p>
         </article>
       </div>
 
@@ -361,6 +362,9 @@ function unavailableText(reason?: TranscriptUnavailableReason): string {
               <p v-if="video.status === 'analyzed' && videoReport(video.id)?.contentSummary" class="clean">
                 {{ videoReport(video.id)?.contentSummary }}
               </p>
+              <small v-if="video.status === 'analyzed' && videoReport(video.id)?.coverageStatus !== 'completed'" class="muted">
+                Поиск пропущенных значимых сцен {{ videoReport(video.id)?.coverageStatus === 'failed' ? 'не завершился' : 'не выполнялся' }}.
+              </small>
             </div>
             <a :href="`https://www.youtube.com/watch?v=${video.id}`" target="_blank" rel="noreferrer">
               Открыть видео

@@ -10,6 +10,7 @@ import type {
   VideoCategoryReport,
 } from '../../shared/types/content'
 import { CONTENT_CATEGORY_LABELS } from './content-categories'
+import type { VideoContentReview } from '../../shared/types/check'
 import {
   categoryPolicies,
   PARENT_RELEVANCE_RANK,
@@ -94,7 +95,12 @@ function orderedSceneEvents(events: ContentEvent[]): ContentEvent[] {
 }
 
 function primarySceneEvent(events: ContentEvent[]): ContentEvent | undefined {
-  const ordered = orderedSceneEvents(events)
+  const peak = Math.max(...events.map(event => PARENT_RELEVANCE_RANK[event.parentRelevance]))
+  const verifiedPeak = events.filter(event =>
+    PARENT_RELEVANCE_RANK[event.parentRelevance] === peak && eventEvidenceStatus(event) === 'verified',
+  )
+  // A verified card must take its headline from verified evidence at its level.
+  const ordered = orderedSceneEvents(verifiedPeak.length > 0 ? verifiedPeak : events)
   return ordered.find((event) => event.review?.parentSummary?.trim())
     ?? ordered.find((event) => event.reason.trim())
     ?? ordered[0]
@@ -436,15 +442,20 @@ function eventEvidenceStatus(event: ContentEvent): 'verified' | 'uncertain' | 'u
   // Final production events now carry an explicit not_reviewed state on
   // reviewer degradation. Missing review is kept as a backwards-compatible
   // established state for legacy fixtures/one-pass diagnostics.
+  if (review?.status === 'not_reviewed') return 'unreviewed'
+  if (event.confidence < 0.55 || event.evidenceStrength === 'weak_context') return 'uncertain'
   if (!review) return 'verified'
-  if (review.status === 'not_reviewed') return 'unreviewed'
   if (review.status === 'uncertain' || review.evidenceSufficiency !== 'sufficient') return 'uncertain'
   return 'verified'
 }
 
 function sceneEvidenceStatus(events: ContentEvent[]): 'verified' | 'uncertain' | 'unreviewed' {
-  const statuses = events.map(eventEvidenceStatus)
-  if (statuses.length > 0 && statuses.every((status) => status === 'verified')) return 'verified'
+  // A light pending label must not invalidate an independently verified serious
+  // event in the same scene. Conversely, a verified low label cannot verify high.
+  const peak = Math.max(...events.map(event => PARENT_RELEVANCE_RANK[event.parentRelevance]))
+  const statuses = events.filter(event => PARENT_RELEVANCE_RANK[event.parentRelevance] === peak)
+    .map(eventEvidenceStatus)
+  if (statuses.includes('verified')) return 'verified'
   if (statuses.some((status) => status === 'uncertain')) return 'uncertain'
   return 'unreviewed'
 }
@@ -454,8 +465,7 @@ function sceneAttention(
   level: ReportLevel,
   evidenceStatus: 'verified' | 'uncertain' | 'unreviewed',
 ): 'main' | 'details' {
-  if (level === 'high') {
-    if (evidenceStatus === 'verified') return 'main'
+  if (evidenceStatus !== 'verified') {
     const strongHardRisk = events.some((event) =>
       event.confidence >= 0.7
       && event.evidenceStrength !== 'weak_context'
@@ -463,6 +473,7 @@ function sceneAttention(
     )
     return strongHardRisk ? 'main' : 'details'
   }
+  if (level === 'high') return 'main'
   if (level !== 'moderate') return 'details'
   return events.some(moderateEventBelongsOnMain) ? 'main' : 'details'
 }
@@ -558,15 +569,22 @@ export function buildPresentationScenes(events: ContentEvent[]): PresentationSce
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
 }
 
-export function buildVideoContentSummary(scenes: PresentationScene[]): string {
+export function buildVideoContentSummary(scenes: PresentationScene[], review?: VideoContentReview): string {
   const main = scenes.filter((scene) => scene.attention === 'main')
   const details = scenes.filter((scene) => scene.attention === 'details')
+  const pending = scenes.filter(scene => scene.evidenceStatus !== 'verified')
+  if (pending.length > 0 || (review && ['partial', 'failed', 'skipped_after_failure'].includes(review.status))) {
+    const verified = main.filter(scene => scene.evidenceStatus === 'verified').length
+    return `Оценка завершена не полностью. Подтверждённых сцен для внимания: ${verified}; сцен, требующих проверки: ${pending.length}. Отсутствие других находок не подтверждает отсутствие значимого содержания.`
+  }
 
   if (main.length === 0 && details.length === 0) {
-    return 'В проанализированных субтитрах значимых сцен для выбранных критериев не обнаружено.'
+    return review?.coverageStatus === 'completed'
+      ? 'В доступных субтитрах находок по выбранным критериям нет, включая дополнительную проверку пропусков. Это не гарантия безопасности видео.'
+      : 'Первичный анализ доступных субтитров не выделил находок. Дополнительная проверка пропущенных сцен не завершена; это не подтверждение безопасности видео.'
   }
   if (main.length === 0) {
-    return `Существенных сцен в проанализированных субтитрах не обнаружено; лёгких или спорных находок: ${details.length}.`
+    return `Среди найденных сцен нет требующих основного внимания; лёгких находок: ${details.length}.`
   }
 
   const mainNoun = russianCountForm(main.length, 'сцена', 'сцены', 'сцен')
@@ -610,8 +628,9 @@ export function buildChannelCategoryReports(
   return enabledCategories.map((category) => {
     const perVideo = eventsByVideo.map(({ videoId, events }) => {
       const categoryEvents = events.filter((event) => event.category === category)
-      const categoryScenes = buildPresentationScenes(events)
-        .filter((scene) => scene.categories.includes(category))
+      // Category concern must come from that category's own evidence and
+      // relevance, not a serious neighbouring label in a multi-label scene.
+      const categoryScenes = buildPresentationScenes(categoryEvents)
       return { videoId, events: categoryEvents, scenes: categoryScenes }
     })
     const raw = perVideo.flatMap((item) => item.events)

@@ -856,14 +856,16 @@ describe('OpenAI contextual reviewer', () => {
     )
     const result = await provider.review(transcript, 'ru', ['violence'], [event])
 
-    expect(result.complete).toBe(true)
+    expect(result.complete).toBe(false)
     expect(result.reviewedEvents[0]).toMatchObject({
       sourceCandidateId: 'candidate_confirmed_anchor',
       startMs: 10_000,
       endMs: 11_000,
       evidenceRanges: [{ startMs: 10_000, endMs: 11_000 }],
-      review: { status: 'confirmed', recommendedParentRelevance: 'high' },
+      review: { status: 'not_reviewed' },
     })
+    expect(result.reviewedEvents[0]?.review?.parentSummary).toBeUndefined()
+    expect(result.reviewedEvents[0]?.review?.actor).toBeUndefined()
   })
 
   it('retains the first-pass event when a reviewer correction drifts to a disjoint scene', async () => {

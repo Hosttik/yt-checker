@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ClassifiedContentEvent, ContentEvent, ContentEventReview } from '../shared/types/content'
 import { applyContentPolicy } from '../server/domain/content-policy'
-import { buildChannelCategoryReports, buildPresentationScenes } from '../server/domain/content-reporting'
+import { buildChannelCategoryReports, buildPresentationScenes, buildVideoContentSummary } from '../server/domain/content-reporting'
 import { markEventsNotReviewed } from '../server/domain/content-review-state'
 import { normalizeTranscript } from '../server/domain/normalize-transcript'
 import { OpenAIAnalysisProvider } from '../server/services/openai-analysis'
@@ -127,6 +127,48 @@ function reviewedFantasyCombat(id: string): ContentEvent {
 }
 
 describe('parental audit regressions', () => {
+  it('does not use an uncertain headline for a verified scene at the same relevance', () => {
+    const verified = reviewedInsult('verified')
+    const pending = reviewedInsult('pending')
+    pending.sceneId = verified.sceneId
+    pending.severity = 'high'
+    pending.review = verifiedReview({ status: 'uncertain', parentSummary: 'Unverified accusation.' })
+    verified.review = verifiedReview({ parentSummary: 'Verified mild teasing.' })
+    const scenes = buildPresentationScenes([pending, verified])
+    expect(scenes).toHaveLength(1)
+    expect(scenes[0]).toMatchObject({ evidenceStatus: 'verified', summary: 'Verified mild teasing.' })
+  })
+
+  it('does not transfer a serious scene level to a mild neighbouring category', () => {
+    const insult = reviewedInsult('insult')
+    const violence = { ...reviewedFantasyCombat('violence'), sceneId: insult.sceneId,
+      subtype: 'violent_threat', parentRelevance: 'high', displayLevel: 'highlight',
+    } as ContentEvent
+    const reports = buildChannelCategoryReports([{ videoId: 'v', events: [insult, violence] }], ['insults', 'violence'], 1, 'normal')
+    expect(reports[0]).toMatchObject({ level: 'low', highlightedVideos: 0, moderatePlusAffectedVideos: 0 })
+    expect(reports[1]).toMatchObject({ level: 'high', highlightedVideos: 1 })
+  })
+
+  it('does not let a low uncertain label invalidate a separately verified high signal', () => {
+    const high = { ...reviewedFantasyCombat('high'), parentRelevance: 'high', displayLevel: 'highlight' } as ContentEvent
+    const pending = { ...reviewedInsult('pending'), sceneId: high.sceneId,
+      review: verifiedReview({ status: 'uncertain', evidenceSufficiency: 'partial' }),
+    } as ContentEvent
+    expect(buildPresentationScenes([high, pending])[0]).toMatchObject({ attention: 'main', evidenceStatus: 'verified' })
+  })
+
+  it('never equates empty detection or incomplete review with a verified clean result', () => {
+    expect(buildVideoContentSummary([])).toContain('Первичный анализ')
+    expect(buildVideoContentSummary([])).toContain('не подтверждение безопасности')
+    const review = { status: 'partial', candidateCount: 1, reviewedCount: 0, rejectedCount: 0, uncertainCount: 1 } as const
+    expect(buildVideoContentSummary([], review)).toContain('Оценка завершена не полностью')
+    expect(buildVideoContentSummary([], { ...review, status: 'completed', coverageStatus: 'completed' })).toContain('включая дополнительную проверку')
+  })
+
+  it('does not label weak evidence verified merely because a reviewer said confirmed', () => {
+    const event = applyContentPolicy(scaryEvent(verifiedReview({ recommendedParentRelevance: 'high', highPriorityReason: 'Непосредственная опасность.', consequence: 'threatened_harm', intent: 'aggressive' })), 'weak', 'normal')
+    expect(buildPresentationScenes([event])[0]).toMatchObject({ evidenceStatus: 'uncertain', attention: 'details' })
+  })
   it('keeps reviewer failures explicit instead of dropping review state', () => {
     const [event] = markEventsNotReviewed(
       [scaryEvent()],

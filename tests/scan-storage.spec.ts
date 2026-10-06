@@ -247,7 +247,7 @@ describe('ScanStorage', () => {
         promptVersion: 'test',
         schemaVersion: 'test',
       },
-    }, '[0] Нормализованный transcript', [event])
+    }, '[0] Нормализованный transcript', [event], [], [], undefined, undefined, undefined, undefined, undefined, [{ startMs: 12000, endMs: 15000 }])
 
     await storage.save({
       ...result,
@@ -263,6 +263,7 @@ describe('ScanStorage', () => {
     ])
     const diagnostic = await readFile(join(root, storage.scanId, 'openai-analysis.json'), 'utf8')
     expect(diagnostic).toContain('Нормализованный transcript')
+    expect(JSON.parse(diagnostic)[0].normalizedTimeline).toEqual([{ startMs: 12000, endMs: 15000 }])
     expect(diagnostic).toContain('modelOutputText')
     expect(diagnostic).toContain('classifiedEvents')
     expect(diagnostic).toContain('normalizedContentEvents')

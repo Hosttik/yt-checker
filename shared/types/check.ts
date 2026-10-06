@@ -66,6 +66,7 @@ export type ContentReviewRunStatus = 'not_needed' | 'completed' | 'partial' | 'f
 
 export interface VideoContentReview {
   status: ContentReviewRunStatus
+  coverageStatus?: 'not_run' | 'completed' | 'failed'
   candidateCount: number
   reviewedCount: number
   rejectedCount: number
@@ -252,6 +253,7 @@ export interface ScanSelection {
 
 export interface VideoContentReport {
   videoId: string
+  coverageStatus?: 'not_run' | 'completed' | 'failed'
   categoryReports: VideoCategoryReport[]
   scenes: PresentationScene[]
   contentSummary?: string

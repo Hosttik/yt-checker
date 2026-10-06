@@ -168,7 +168,7 @@ describe('contextual parent relevance', () => {
     const scenes = buildPresentationScenes([mild])
     const summary = buildVideoContentSummary(scenes)
 
-    expect(summary).toContain('Существенных сцен в проанализированных субтитрах не обнаружено')
-    expect(summary).toContain('лёгких или спорных находок: 1')
+    expect(summary).toContain('Среди найденных сцен нет требующих основного внимания')
+    expect(summary).toContain('лёгких находок: 1')
   })
 })

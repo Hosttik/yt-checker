@@ -56,6 +56,44 @@ function sceneOutput(decisions: Array<Record<string, unknown>>) {
 }
 
 describe('OpenAI scene-level batch review', () => {
+  it.each(['wrong_scene', 'unknown_scene', 'duplicate_scene'])('rejects %s before attaching shared roles or relevance', async (mode) => {
+    const decision = (index: number) => ({ reviewItemId: `video_review_${index}`, verdict: 'confirmed',
+      event: null, parentRelevance: 'moderate', evidenceSufficiency: 'sufficient', rationale: 'Fixture.' })
+    const first = sceneOutput([decision(mode === 'wrong_scene' ? 1 : 0)])
+    const second = { ...sceneOutput([decision(mode === 'wrong_scene' ? 0 : 1)]),
+      sceneReviewId: mode === 'duplicate_scene' ? 'video_scene_0' : mode === 'unknown_scene' ? 'invented' : 'video_scene_1' }
+    const provider = new OpenAIAnalysisProvider('test', 'fixture', undefined, {
+      responses: { parse: async () => ({ status: 'completed', output_parsed: { items: [{ itemId: 'video', scenes: [first, second] }] } }) },
+    } as never)
+    await expect(provider.reviewBatch([{
+      itemId: 'video', language: 'ru', enabledCategories: ['violence'],
+      transcript: normalizeTranscript([{ text: 'Scene signal.', startMs: 1000, endMs: 2000 }]),
+      events: [baseViolence('a', 'a'), baseViolence('b', 'b')],
+    }])).rejects.toThrow('Scene review returned')
+  })
+
+  it('reviews distant phases separately before shared scene assessments can leak between them', async () => {
+    const first = baseViolence('threat', 'broad_scene')
+    const second = { ...baseViolence('rescue', 'broad_scene'), startMs: 600_000, endMs: 602_000,
+      sceneStartMs: 1000, sceneEndMs: 602_000, evidenceRanges: [{ startMs: 600_000, endMs: 602_000 }],
+      details: { harmLevel: 'none', targetType: 'object', weaponRole: 'used', actionPurpose: 'rescue' },
+    } as ClassifiedContentEvent
+    const parse = vi.fn().mockResolvedValue({ status: 'completed', output_parsed: { items: [{ itemId: 'video', scenes: [
+      { ...sceneOutput([{ reviewItemId: 'video_review_0', verdict: 'confirmed', event: null,
+        parentRelevance: 'moderate', evidenceSufficiency: 'sufficient', rationale: 'Threat.' }]), actor: 'Captor' },
+      { ...sceneOutput([{ reviewItemId: 'video_review_1', verdict: 'confirmed', event: null,
+        parentRelevance: 'minimal', evidenceSufficiency: 'sufficient', rationale: 'Rescue.' }]),
+        sceneReviewId: 'video_scene_1', actor: 'Rescuer', intent: 'rescue', parentSummary: 'Освобождение.' },
+    ] }] } })
+    const provider = new OpenAIAnalysisProvider('test', 'fixture', undefined, { responses: { parse } } as never)
+    const result = await provider.reviewBatch([{ itemId: 'video', language: 'ru', enabledCategories: ['violence'],
+      transcript: normalizeTranscript([{ text: 'Threat.', startMs: 1000, endMs: 2000 }, { text: 'Rescue.', startMs: 600_000, endMs: 602_000 }]),
+      events: [first, second],
+    }])
+    const request = JSON.stringify(parse.mock.calls[0])
+    expect(request).toContain('video_scene_1')
+    expect(result.items[0]?.reviewedEvents[1]?.review).toMatchObject({ actor: 'Rescuer', intent: 'rescue', parentSummary: 'Освобождение.' })
+  })
   it('groups two category candidates with the same sceneId into one scene request', async () => {
     const parse = vi.fn().mockResolvedValue({
       id: 'resp_scene',
