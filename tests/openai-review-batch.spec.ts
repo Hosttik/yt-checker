@@ -125,4 +125,55 @@ describe('OpenAI cross-video review batch', () => {
     expect(userText).toContain('ITEM_START video_b')
     expect(userText).toContain('video_b_review_0')
   })
+
+  it('returns omitted outer items as partial instead of failing the whole batch', async () => {
+    const parse = vi.fn().mockResolvedValue({
+      id: 'resp_review_batch_partial',
+      status: 'completed',
+      output_text: '{"items":[{"itemId":"video_a","reviews":[]}],"missedHighPriorityEvents":[]}',
+      output_parsed: {
+        items: [
+          { itemId: 'video_a', reviews: [confirmed('video_a_review_0', 'Угроза в первом видео.')] },
+        ],
+        missedHighPriorityEvents: [],
+      },
+      usage: { input_tokens: 200, output_tokens: 40, total_tokens: 240 },
+    })
+    const provider = new OpenAIAnalysisProvider(
+      'secret',
+      'gpt-test',
+      undefined,
+      { responses: { parse } } as unknown as OpenAI,
+    )
+    const transcriptA = normalizeTranscript([
+      { text: 'Если не уйдёшь, тебе конец.', startMs: 10_000, endMs: 11_000 },
+    ])
+    const transcriptB = normalizeTranscript([
+      { text: 'Сейчас я тебя поймаю.', startMs: 90_000, endMs: 91_000 },
+    ])
+
+    const result = await provider.reviewBatch([
+      {
+        itemId: 'video_a',
+        transcript: transcriptA,
+        language: 'ru',
+        enabledCategories: ['violence'],
+        events: [threat('a', 10_000, 'Если не уйдёшь, тебе конец.')],
+      },
+      {
+        itemId: 'video_b',
+        transcript: transcriptB,
+        language: 'ru',
+        enabledCategories: ['violence'],
+        events: [threat('b', 90_000, 'Сейчас я тебя поймаю.')],
+      },
+    ])
+
+    expect(result.items[0]?.complete).toBe(true)
+    expect(result.items[1]?.complete).toBe(false)
+    expect(result.items[1]?.reviewedCandidates).toBe(0)
+    expect(result.items[1]?.reviewedEvents[0]?.review?.status).toBe('not_reviewed')
+  })
+
+
 })
