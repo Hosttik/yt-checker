@@ -300,6 +300,8 @@ describe('OpenAI contextual reviewer', () => {
     const developerText = request.input?.find((item) => item.role === 'developer')?.content[0]?.text ?? ''
     const userText = request.input?.find((item) => item.role === 'user')?.content[0]?.text ?? ''
     expect(developerText).toContain('dedicated HIGH-PRIORITY coverage pass')
+    expect(developerText).toContain('For a Russian transcript')
+    expect(developerText).toContain('must be natural Russian, not English')
     expect(userText).toContain('Covered direct-evidence segment indexes: [0]')
     expect(result.requestCount).toBe(1)
     expect(result.rescuedCandidates).toBe(1)
