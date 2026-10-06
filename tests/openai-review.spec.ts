@@ -1006,7 +1006,7 @@ describe('OpenAI contextual reviewer', () => {
     expect(result.reviewedEvents[0]?.review?.status).toBe('corrected')
   })
 
-  it('preserves first-pass reported and mention provenance when review tries to upgrade the same candidate', async () => {
+  it('allows a sufficient correction to repair reported and mention detector mistakes', async () => {
     const transcript = normalizeTranscript([
       { text: 'Админ сообщил, что к деревне идут тысячи зомби.', startMs: 10_000, endMs: 11_000 },
     ])
@@ -1101,8 +1101,8 @@ describe('OpenAI contextual reviewer', () => {
     const result = await provider.review(transcript, 'ru', ['scary_and_disturbing'], [event])
 
     expect(result.complete).toBe(true)
-    expect(result.reviewedEvents[0]?.assertionStatus).toBe('reported')
-    expect(result.reviewedEvents[0]?.engagementLevel).toBe('mention')
+    expect(result.reviewedEvents[0]?.assertionStatus).toBe('actual')
+    expect(result.reviewedEvents[0]?.engagementLevel).toBe('depiction')
     expect(result.reviewedEvents[0]?.review?.recommendedParentRelevance).toBe('moderate')
   })
 
