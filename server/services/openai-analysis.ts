@@ -1081,7 +1081,7 @@ function reviewProvidesBenignContradiction(item: z.infer<typeof reviewItemSchema
   const noSeriousConsequence = item.consequence === 'none' || item.consequence === 'property_only'
   const noAggressiveIntent = benignIntent || item.intent === 'unclear'
 
-  return item.evidenceSufficiency !== 'partial'
+  return item.evidenceSufficiency === 'sufficient'
     && noDirectedAggression
     && noAggressiveIntent
     && noSeriousConsequence
