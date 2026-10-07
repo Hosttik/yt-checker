@@ -1,0 +1,20 @@
+{
+  "note": "Known exposed corpus as of 2026-10-07. Exclude these videos and channels from the independent cross-channel holdout.",
+  "videoIds": [
+    "7_bCIsH-XEc",
+    "B7PGgMjJyoQ",
+    "CmABITGAsNs",
+    "FNSMDfV3KnA",
+    "MmdIhSW5B7Q",
+    "RmGCg3FRdb8",
+    "_xR7fZ24O4g",
+    "ed7JivZ43xs",
+    "edgRlTMnF0o",
+    "kQCshtG4DOw",
+    "n4S8yHB4zk0",
+    "wiuuBaYC8B8"
+  ],
+  "channelIds": [
+    "UC0cWWruNMb95iCBEOzPnjRA"
+  ]
+}

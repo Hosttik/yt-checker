@@ -17,6 +17,7 @@ import {
 import { normalizeClassifiedEvents } from '../server/domain/content-normalization'
 import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { validateClassifiedEvents } from '../server/domain/content-validation'
+import { auditHumanGold, humanGoldSchema, validateHumanGold, type HumanGold } from './human-gold'
 import { restoreSavedTranscript } from './saved-transcript'
 import type { NormalizedTranscript } from '../server/domain/normalize-transcript'
 import { optionalPositiveIntegerEnv, ProviderScheduler } from '../server/utils/provider-scheduler'
@@ -42,7 +43,7 @@ import {
 } from '../server/services/openai-analysis-stack'
 
 const RUN = process.env.RUN_PARENTAL_QUALITY_EVAL === '1'
-const QUALITY_EVAL_VERSION = '2026-10-06.verified-coverage-v19'
+const QUALITY_EVAL_VERSION = '2026-10-06.human-gold-v20'
 const ALL_CATEGORIES: ContentCategory[] = [
   'profanity_and_rude_language',
   'insults',
@@ -200,6 +201,7 @@ interface VideoRunStat {
 }
 
 interface RunOutput {
+  humanGoldAudit?: { tuning: ReturnType<typeof auditHumanGold>; holdout: ReturnType<typeof auditHumanGold> }
   videoOrder: string[]
   metrics: MetricSet
   onePassMetrics: MetricSet
@@ -233,7 +235,7 @@ interface RunOutput {
 }
 
 interface StabilityCheckpoint {
-  version: 19
+  version: 20
   key: string
   runOutputs: RunOutput[]
 }
@@ -943,13 +945,19 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     )
     const selectedVideoIds = new Set(selected.map((record) => record.videoId))
     const transcriptByVideo = new Map(selected.map((record) => [record.videoId, record.transcript]))
+    let humanGold: HumanGold | undefined
+    if (process.env.QUALITY_HUMAN_GOLD_PATH) {
+      const loadedGold = humanGoldSchema.parse(JSON.parse(await readFile(resolve(process.env.QUALITY_HUMAN_GOLD_PATH), 'utf8')))
+      humanGold = validateHumanGold({ ...loadedGold, videos: loadedGold.videos.filter(v => selectedVideoIds.has(v.videoId)) }, transcriptByVideo)
+      if (!humanGold.videos.some(v => v.complete)) throw new Error('No completed human gold in the selected videos. No paid evaluation was started.')
+    }
     const applicableAnnotations = annotations
       .filter((annotation) => selectedVideoIds.has(annotation.sourceVideo))
       .map((annotation) => {
         const transcript = transcriptByVideo.get(annotation.sourceVideo)
         return transcript ? resolveAnnotationAnchor(annotation, transcript) : annotation
       })
-    if (applicableAnnotations.length === 0 && !allowUnannotated) {
+    if (applicableAnnotations.length === 0 && !allowUnannotated && !humanGold) {
       throw new Error('None of the annotated videos are present in the selected saved scans. Set QUALITY_ALLOW_UNANNOTATED=1 for cross-channel diagnostics.')
     }
     const unresolvedAnchors = applicableAnnotations.filter((annotation) =>
@@ -988,6 +996,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     const checkpointKey = createHash('sha256')
       .update(JSON.stringify({
         qualityEvalVersion: QUALITY_EVAL_VERSION,
+        humanGold,
         scanDirs,
         selected: selected.map((record) => `${record.videoId}:${record.transcriptHash}`),
         runs,
@@ -1016,7 +1025,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
 
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8')) as StabilityCheckpoint
-      if (checkpoint.version === 19 && checkpoint.key === checkpointKey) {
+      if (checkpoint.version === 20 && checkpoint.key === checkpointKey) {
         runOutputs = checkpoint.runOutputs.slice(0, runs)
       }
     } catch (error) {
@@ -1143,6 +1152,10 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
         }
       })
       runOutputs.push({
+        humanGoldAudit: humanGold ? {
+          tuning: auditHumanGold(humanGold, transcriptByVideo, new Map([...currentByVideo].map(([id, events]) => [id, buildPresentationScenes(events)])), 'tuning'),
+          holdout: auditHumanGold(humanGold, transcriptByVideo, new Map([...currentByVideo].map(([id, events]) => [id, buildPresentationScenes(events)])), 'holdout'),
+        } : undefined,
         videoOrder: orderedSelected.map((record) => record.videoId),
         metrics: metricsFor(applicableAnnotations, currentByVideo),
         onePassMetrics: metricsFor(applicableAnnotations, onePassByVideo),
@@ -1184,7 +1197,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
       await writeFile(
         checkpointPath,
         JSON.stringify({
-          version: 19,
+          version: 20,
           key: checkpointKey,
           runOutputs,
         } satisfies StabilityCheckpoint, null, 2) + '\n',
@@ -1285,6 +1298,7 @@ describe.skipIf(!RUN)('parental quality evaluation on saved full transcripts', (
     })
 
     const report = {
+      humanGoldAudits: runOutputs.map(output => output.humanGoldAudit ?? null),
       generatedAt: new Date().toISOString(),
       scope: {
         scanDirs,
