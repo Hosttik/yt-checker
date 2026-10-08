@@ -489,15 +489,15 @@ describe('child-safety semantic modifiers', () => {
     }, {
       context: 'real_world',
       realism: 'realistic',
-      imitationRisk: 'high',
+      imitationRisk: 'medium',
       behaviorOutcome: 'neutral',
     })
 
     const younger = applyContentPolicy(classified, 'age-7', 'normal', { childAge: 7 })
     const teen = applyContentPolicy(classified, 'age-13', 'normal', { childAge: 13 })
 
-    expect(younger.parentRelevance).toBe('high')
-    expect(teen.parentRelevance).toBe('moderate')
+    expect(younger.parentRelevance).toBe('moderate')
+    expect(teen.parentRelevance).toBe('low')
   })
 
   it('does not let reviewer relevance opinion override deterministic event policy', () => {
