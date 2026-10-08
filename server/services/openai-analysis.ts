@@ -462,11 +462,13 @@ Verdicts:
 - rejected: the hypothesis is not a genuine event (negated, benign utility/rescue, ASR ambiguity, unsupported inference, etc.). event must be null.
 - uncertain: evidence is insufficient or genuinely ambiguous. Return an event only if a conservative factual description can be supported; otherwise null.
 
-Parent relevance is NOT content intensity and NOT confidence:
+Parent relevance is NOT content intensity and NOT confidence. It is a diagnostic reviewer recommendation only; backend policy makes the final deterministic relevance/display decision:
 - minimal: genuine signal but normally not useful as a separate parent-facing item.
 - low: useful only in expandable light/disputed details.
 - moderate: useful as a main parent-facing scene.
 - high: exceptional high-priority parent-facing scene.
+
+When returning confirmed/corrected event semantics, explicitly verify realism, imitationRisk and behaviorOutcome from transcript evidence. Keep them independent from severity. Distinguish endorsement (approval/recommendation) from encouragement (direct push to act) and instruction (actionable method). Do not infer visual realism or copyability that the transcript cannot establish.
 
 For every non-rejected review also write parentSummary: one short, natural Russian sentence describing only the core fact(s) supported by event.evidenceSegments. It is UI copy, not an internal classification explanation: avoid taxonomy names, confidence scores, duplicated clauses and speculation.
 mitigatingContext is separate UI context. Use null unless contextSegments directly support a material qualifier such as rescue, humorous framing, game/fiction framing that changes interpretation, or a later safe resolution. Do not use mitigating context to erase a real earlier threat.
@@ -502,7 +504,7 @@ Rules:
 - Same actors or same broader story arc do NOT make a later distinct event a duplicate. A later explicit threat/coercive condition with different direct evidence is eligible.
 - parentRelevance=moderate for supported repeated distress without exceptional danger; high requires a concrete escalation. highPriorityReason must be null for moderate. Your outputs are hypotheses: a separate reviewer will verify/correct/reject them before they are treated as verified.
 - Write every human-readable field in the transcript language. For a Russian transcript, event.reason, actor, target, parentSummary, mitigatingContext, highPriorityReason and rationale must be natural Russian, not English.
-- Use the same event taxonomy and evidence discipline as the detector. event.reason must be supported by event.evidenceSegments themselves.
+- Use the same event taxonomy and evidence discipline as the detector, including realism, imitationRisk, behaviorOutcome and endorsement/encouragement/instruction distinctions. event.reason must be supported by event.evidenceSegments themselves.
 `
 
 
