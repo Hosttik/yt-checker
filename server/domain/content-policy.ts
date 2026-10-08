@@ -442,7 +442,16 @@ function reviewEstablishesHighPriorityCoercion(event: ClassifiedContentEvent): b
   if (!review || (review.status !== 'confirmed' && review.status !== 'corrected')) return false
   if (review.evidenceSufficiency !== 'sufficient') return false
   if (review.intent !== 'coercive' || review.aggressionDirection !== 'actor_to_target') return false
-  if (review.consequence !== 'threatened_harm'
+
+  const sustainedConfinement = event.category === 'scary_and_disturbing'
+    && event.subtype === 'confinement'
+    && event.details.threatPresent
+    && (review.duration === 'sustained'
+      || review.repetition === 'repeated'
+      || review.repetition === 'pattern')
+
+  if (!sustainedConfinement
+    && review.consequence !== 'threatened_harm'
     && review.consequence !== 'injury_or_severe_harm'
     && review.consequence !== 'death') {
     return false
@@ -483,6 +492,15 @@ function reviewAdjustedRelevance(
   if (!review || review.status === 'not_reviewed' || review.status === 'uncertain') return baseline
 
   if (reviewEstablishesHighPriorityCoercion(event)) return 'high'
+
+  const isolatedNonDistressingInsult = event.category === 'insults'
+    && review.evidenceSufficiency === 'sufficient'
+    && review.repetition === 'single'
+    && (review.duration === 'momentary' || review.duration === 'brief')
+    && (review.distress === 'none' || review.distress === 'mild')
+    && review.consequence === 'none'
+    && (review.narrativeFraming === 'neutral' || review.narrativeFraming === 'humorous')
+  if (isolatedNonDistressingInsult) return 'low'
 
   // Reviewer output supplies factual context and may correct the normalized event,
   // but final parent relevance is a deterministic product-policy decision.
