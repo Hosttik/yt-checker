@@ -23,9 +23,12 @@ export type ReportLevel = 'none' | 'low' | 'moderate' | 'high'
 export type EvidenceStrength = 'explicit' | 'strong_context' | 'weak_context'
 export type EvidenceSource = 'transcript' | 'title' | 'description' | 'metadata'
 export type ContentContext = 'game' | 'fiction' | 'real_world' | 'educational' | 'unknown'
-export type EngagementLevel = 'mention' | 'depiction' | 'participation' | 'encouragement' | 'instruction'
+export type EngagementLevel = 'mention' | 'depiction' | 'participation' | 'endorsement' | 'encouragement' | 'instruction'
 export type Portrayal = 'neutral' | 'normalized' | 'glamorized' | 'discouraged' | 'educational' | 'humorous' | 'unknown'
 export type Explicitness = 'none' | 'mild' | 'explicit' | 'graphic'
+export type ContentRealism = 'fantasy' | 'stylized' | 'realistic' | 'unknown'
+export type ImitationRisk = 'none' | 'low' | 'medium' | 'high'
+export type BehaviorOutcome = 'negative_consequences' | 'neutral' | 'no_consequences' | 'rewarded' | 'unknown'
 export type AssertionStatus = 'actual' | 'threatened' | 'hypothetical' | 'negated' | 'reported'
 export type ViolenceActionPurpose = 'attack' | 'threat' | 'defense' | 'rescue' | 'utility' | 'sport' | 'demonstration' | 'accident' | 'destruction' | 'unknown'
 export type PrevalenceLevel = 'none' | 'rare' | 'occasional' | 'common' | 'pervasive'
@@ -215,6 +218,12 @@ export interface BaseContentEvent {
   engagementLevel?: EngagementLevel
   portrayal?: Portrayal
   explicitness?: Explicitness
+  /** How closely the described event maps to real-world behavior. Optional for stored legacy events. */
+  realism?: ContentRealism
+  /** Ease and plausibility of a child copying the described behavior; distinct from harm severity. */
+  imitationRisk?: ImitationRisk
+  /** Whether the local narrative rewards, discourages, or leaves consequences absent/neutral. */
+  behaviorOutcome?: BehaviorOutcome
   assertionStatus: AssertionStatus
   review?: ContentEventReview
   parentRelevance: ParentRelevance
