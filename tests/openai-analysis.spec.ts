@@ -133,6 +133,10 @@ describe('OpenAI content-event classifier', () => {
     expect(schema).toContain('actionPurpose')
     expect(schema).toContain('fearIntensity')
     expect(schema).toContain('intentionality')
+    expect(schema).toContain('realism')
+    expect(schema).toContain('imitationRisk')
+    expect(schema).toContain('behaviorOutcome')
+    expect(schema).toContain('endorsement')
     expect(schema).not.toContain('parentRelevance')
     expect(schema).not.toContain('displayLevel')
     expect(request.input[1].content[0].text).toContain('[0] Мне подарили меч.')
@@ -282,6 +286,11 @@ describe('OpenAI content-event classifier', () => {
     expect(OPENAI_SYSTEM_PROMPT).toContain('11 000 зомби')
     expect(OPENAI_SYSTEM_PROMPT).toContain('demonstration')
     expect(OPENAI_SYSTEM_PROMPT).toContain('ASR')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('realism: fantasy')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('imitationRisk')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('behaviorOutcome')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('endorsement')
+    expect(OPENAI_SYSTEM_PROMPT).toContain('Do not automatically downgrade an event because context=educational')
   })
 
   it('contains regression guidance for self-harm and weak violence candidates', () => {
