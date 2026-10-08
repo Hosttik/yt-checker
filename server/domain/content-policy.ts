@@ -58,6 +58,77 @@ function severityFloor(event: ClassifiedContentEvent): ParentRelevance {
   return 'low'
 }
 
+function maxRelevance(left: ParentRelevance, right: ParentRelevance): ParentRelevance {
+  return relevanceRank[left] >= relevanceRank[right] ? left : right
+}
+
+function bumpRelevance(relevance: ParentRelevance): ParentRelevance {
+  const levels: ParentRelevance[] = ['minimal', 'low', 'moderate', 'high']
+  return levels[Math.min(levels.length - 1, levels.indexOf(relevance) + 1)]!
+}
+
+function isPromotionMode(event: ClassifiedContentEvent): boolean {
+  return event.engagementLevel === 'endorsement'
+    || event.engagementLevel === 'encouragement'
+    || event.engagementLevel === 'instruction'
+}
+
+function semanticRelevanceFloor(event: ClassifiedContentEvent): ParentRelevance {
+  const promotional = isPromotionMode(event)
+
+  if (event.category === 'self_harm' && promotional) return 'high'
+  if ((event.category === 'substances' || event.category === 'gambling') && promotional) return 'high'
+
+  if (event.category === 'violence') {
+    const rewardedOrGlamorized = event.behaviorOutcome === 'rewarded'
+      || event.portrayal === 'glamorized'
+    if (event.imitationRisk === 'high' && (promotional || rewardedOrGlamorized)) return 'high'
+    if (event.imitationRisk === 'high' && event.realism === 'realistic') return 'moderate'
+    if (event.imitationRisk === 'medium' && promotional) return 'moderate'
+  }
+
+  return 'minimal'
+}
+
+function ageAdjustedRelevance(
+  event: ClassifiedContentEvent,
+  relevance: ParentRelevance,
+  preferences?: ParentPolicyPreferences,
+): ParentRelevance {
+  const childAge = preferences?.childAge
+  if (childAge === undefined || relevance === 'minimal') return relevance
+
+  const behaviorallySalient = event.imitationRisk === 'high'
+    || event.behaviorOutcome === 'rewarded'
+    || event.portrayal === 'glamorized'
+    || event.portrayal === 'normalized'
+  const realisticThreat = event.realism === 'realistic'
+    && (event.category === 'violence' || event.category === 'scary_and_disturbing')
+
+  if (childAge <= 7) {
+    const youngChildSalience = realisticThreat
+      || event.imitationRisk === 'medium'
+      || behaviorallySalient
+    if (youngChildSalience
+      && (event.category === 'violence'
+        || event.category === 'scary_and_disturbing'
+        || event.category === 'substances'
+        || event.category === 'gambling')) {
+      return bumpRelevance(relevance)
+    }
+  } else if (childAge <= 9) {
+    if (behaviorallySalient
+      && (event.category === 'violence'
+        || event.category === 'scary_and_disturbing'
+        || event.category === 'substances'
+        || event.category === 'gambling')) {
+      return bumpRelevance(relevance)
+    }
+  }
+
+  return relevance
+}
+
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)]
 }
@@ -409,24 +480,19 @@ function reviewAdjustedRelevance(
   baseline: ParentRelevance,
 ): ParentRelevance {
   const review = event.review
-  if (!review || review.status === 'not_reviewed') return baseline
+  if (!review || review.status === 'not_reviewed' || review.status === 'uncertain') return baseline
 
   if (reviewEstablishesHighPriorityCoercion(event)) return 'high'
 
-  if (review.status === 'uncertain') {
-    // Keep the detector's potential seriousness, but do not let an uncertain
-    // review promote or demote it. Presentation certainty is handled
-    // separately by display/evidence status.
-    return baseline
-  }
-
-  const recommended = review.recommendedParentRelevance
-  if (recommended === 'high'
+  // Reviewer output supplies factual context and may correct the normalized event,
+  // but final parent relevance is a deterministic product-policy decision.
+  // Keep recommendedParentRelevance only as diagnostic/backward-compatible data.
+  if (baseline === 'high'
     && (event.category === 'violence' || event.category === 'scary_and_disturbing')
     && !reviewedHighPriorityIsSupported(event)) {
     return 'moderate'
   }
-  return recommended
+  return baseline
 }
 
 function preferenceAdjustedRelevance(
@@ -451,7 +517,9 @@ export function applyContentPolicy(
   const policy = categoryPolicies[event.category] as CategoryPolicy
   const baselineRelevance = policy.getParentRelevance(event)
   const reviewedRelevance = reviewAdjustedRelevance(event, baselineRelevance)
-  const parentRelevance = preferenceAdjustedRelevance(event.category, reviewedRelevance, preferences)
+  const semanticRelevance = maxRelevance(reviewedRelevance, semanticRelevanceFloor(event))
+  const ageRelevance = ageAdjustedRelevance(event, semanticRelevance, preferences)
+  const parentRelevance = preferenceAdjustedRelevance(event.category, ageRelevance, preferences)
   const displayLevel = policy.getDisplayLevel(event, parentRelevance, profile)
   return {
     ...event,
