@@ -77,7 +77,14 @@ function semanticRelevanceFloor(event: ClassifiedContentEvent): ParentRelevance 
   const promotional = isPromotionMode(event)
 
   if (event.category === 'self_harm' && promotional) return 'high'
-  if ((event.category === 'substances' || event.category === 'gambling') && promotional) return 'high'
+  if (event.category === 'substances' || event.category === 'gambling') {
+    if (event.engagementLevel === 'instruction' || event.engagementLevel === 'encouragement') return 'high'
+    if (event.engagementLevel === 'endorsement') {
+      return event.portrayal === 'glamorized' || event.behaviorOutcome === 'rewarded'
+        ? 'high'
+        : 'moderate'
+    }
+  }
 
   if (event.category === 'violence') {
     const rewardedOrGlamorized = event.behaviorOutcome === 'rewarded'
@@ -114,7 +121,7 @@ function ageAdjustedRelevance(
         || event.category === 'scary_and_disturbing'
         || event.category === 'substances'
         || event.category === 'gambling')) {
-      return bumpRelevance(relevance)
+      return relevance === 'moderate' ? 'moderate' : bumpRelevance(relevance)
     }
   } else if (childAge <= 9) {
     if (behaviorallySalient
@@ -122,7 +129,7 @@ function ageAdjustedRelevance(
         || event.category === 'scary_and_disturbing'
         || event.category === 'substances'
         || event.category === 'gambling')) {
-      return bumpRelevance(relevance)
+      return relevance === 'moderate' ? 'moderate' : bumpRelevance(relevance)
     }
   }
 
