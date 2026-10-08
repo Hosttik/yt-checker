@@ -16,23 +16,26 @@ import { CONTENT_CATEGORIES } from '../../shared/types/content'
 import { markEventsNotReviewed } from '../domain/content-review-state'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
-export const OPENAI_PROMPT_VERSION = '2026-10-06.content-events-batch-v9'
-export const OPENAI_SCHEMA_VERSION = '10'
-export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-06.parent-scene-review-v10'
-export const OPENAI_REVIEW_SCHEMA_VERSION = '5'
-export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-06.parent-attention-coverage-v3'
-export const OPENAI_COVERAGE_SCHEMA_VERSION = '2'
+export const OPENAI_PROMPT_VERSION = '2026-10-08.content-events-batch-v10'
+export const OPENAI_SCHEMA_VERSION = '11'
+export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-08.parent-scene-review-v11'
+export const OPENAI_REVIEW_SCHEMA_VERSION = '6'
+export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-08.parent-attention-coverage-v4'
+export const OPENAI_COVERAGE_SCHEMA_VERSION = '3'
 
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high'
 
 const contextSchema = z.enum(['game', 'fiction', 'real_world', 'educational', 'unknown'])
 const severitySchema = z.enum(['low', 'medium', 'high'])
 const evidenceStrengthSchema = z.enum(['explicit', 'strong_context', 'weak_context'])
-const engagementSchema = z.enum(['mention', 'depiction', 'participation', 'encouragement', 'instruction']).nullable()
+const engagementSchema = z.enum(['mention', 'depiction', 'participation', 'endorsement', 'encouragement', 'instruction']).nullable()
 const portrayalSchema = z.enum([
   'neutral', 'normalized', 'glamorized', 'discouraged', 'educational', 'humorous', 'unknown',
 ]).nullable()
 const explicitnessSchema = z.enum(['none', 'mild', 'explicit', 'graphic']).nullable()
+const realismSchema = z.enum(['fantasy', 'stylized', 'realistic', 'unknown']).nullable()
+const imitationRiskSchema = z.enum(['none', 'low', 'medium', 'high']).nullable()
+const behaviorOutcomeSchema = z.enum(['negative_consequences', 'neutral', 'no_consequences', 'rewarded', 'unknown']).nullable()
 const assertionStatusSchema = z.enum(['actual', 'threatened', 'hypothetical', 'negated', 'reported'])
 
 const commonEventFields = {
@@ -45,6 +48,9 @@ const commonEventFields = {
   engagementLevel: engagementSchema,
   portrayal: portrayalSchema,
   explicitness: explicitnessSchema,
+  realism: realismSchema,
+  imitationRisk: imitationRiskSchema,
+  behaviorOutcome: behaviorOutcomeSchema,
   assertionStatus: assertionStatusSchema,
   evidenceSegments: z.array(z.number().int().nonnegative()).min(1).max(6),
   sceneStartSegment: z.number().int().nonnegative(),
@@ -360,9 +366,17 @@ For every accepted event determine:
 - context: game, fiction, real_world, educational, or unknown;
 - evidenceStrength: explicit, strong_context, or weak_context;
 - assertionStatus: actual if the event/action is presently occurring; threatened for a genuine threat or coercive condition issued by an actor (for example, "if you do not do X, I will hurt Y"); reported when a speaker reports a real current/past/off-screen event (for example, "админ сообщил, что прямо сейчас к деревне идут 11 000 зомби"); hypothetical only for a prediction, fear, possibility or imagined consequence that is not established as occurring; negated when surrounding context explicitly denies it;
-- engagementLevel, portrayal, explicitness when semantically useful; otherwise null;
+- engagementLevel: mention for a reference, depiction for behavior merely shown/described, participation for the speaker/subject taking part, endorsement for approving/recommending the behavior without directly telling the audience to do it, encouragement for a direct push to imitate/do it, instruction for actionable steps or methods; use null only when the dimension is genuinely inapplicable;
+- portrayal and explicitness when semantically useful; otherwise null;
+- realism: fantasy for clearly fantastical/game-only mechanics or creatures, stylized for exaggerated/cartoon-like behavior, realistic for behavior presented as plausible real-world conduct, unknown when transcript evidence cannot establish this. Do not infer visual style;
+- imitationRisk: ease and plausibility of a child copying the behavior from what the transcript establishes. This is not harm severity. Use high only for accessible/copyable behavior with enough concrete semantics; use none when there is no behavior to imitate;
+- behaviorOutcome: negative_consequences when the local narrative clearly shows adverse consequences/disapproval, rewarded when the behavior is rewarded or framed as producing a desirable outcome, no_consequences when meaningful harmful behavior occurs without consequences in the established scene, neutral when outcome is irrelevant, unknown when evidence is insufficient;
 - category-specific details;
 - short factual reason in Russian. The reason must be supported by evidenceSegments themselves; never cite a later/earlier fact that is outside the selected evidence just because it exists elsewhere in the transcript.
+
+Do not automatically downgrade an event because context=educational or portrayal=educational. In particular, actionable harmful instructions remain instructional; educational/recovery framing is a separate fact.
+
+Realism, imitation risk and behavior outcome are cross-category modifiers, not substitutes for category severity. A realistic easy-to-copy act can be important even without graphic detail; fantasy or stylized presentation can reduce imitation salience but does not erase an otherwise severe event.
 
 Multi-label is allowed and expected when one scene genuinely has several dimensions. Reuse the exact same sceneId. Example: zombies forcing their way into a bunker while the hero panics may be both violence/dangerous_situation and scary_and_disturbing/threatening_character. Do not create duplicate labels when a second category adds no meaningful information.
 
@@ -829,6 +843,9 @@ export function materializeEvents(
         engagementLevel: item.engagementLevel ?? undefined,
         portrayal: item.portrayal ?? undefined,
         explicitness: item.explicitness ?? undefined,
+        realism: item.realism ?? undefined,
+        imitationRisk: item.imitationRisk ?? undefined,
+        behaviorOutcome: item.behaviorOutcome ?? undefined,
         assertionStatus: item.assertionStatus,
       }
 
