@@ -415,3 +415,126 @@ it('shows an established mild funeral theme without turning it into a high warni
   expect([event.parentRelevance, event.displayLevel]).toEqual(['low', 'summary'])
   expect(applyContentPolicy({ ...theme, details: { ...theme.details, themePresent: false } }, 'word', 'normal').displayLevel).toBe('hidden')
 })
+
+
+describe('child-safety semantic modifiers', () => {
+  it('keeps stylized fantasy behavior below realistic easy-to-copy behavior', () => {
+    const fantasy = applyContentPolicy(violence('weapon_use', {
+      harmLevel: 'none',
+      targetType: 'object',
+      weaponRole: 'used',
+      actionPurpose: 'sport',
+    }, {
+      context: 'game',
+      realism: 'fantasy',
+      imitationRisk: 'low',
+      behaviorOutcome: 'neutral',
+    }), 'fantasy-training', 'normal')
+
+    const realistic = applyContentPolicy(violence('weapon_use', {
+      harmLevel: 'none',
+      targetType: 'object',
+      weaponRole: 'used',
+      actionPurpose: 'sport',
+    }, {
+      context: 'real_world',
+      realism: 'realistic',
+      imitationRisk: 'high',
+      behaviorOutcome: 'neutral',
+    }), 'real-training', 'normal')
+
+    expect(fantasy.parentRelevance).toBe('low')
+    expect(realistic.parentRelevance).toBe('moderate')
+  })
+
+  it('raises rewarded easy-to-copy harmful behavior without turning reward into severity', () => {
+    const event = applyContentPolicy(violence('dangerous_situation', {
+      harmLevel: 'threatened',
+      targetType: 'person',
+      weaponRole: 'none',
+      actionPurpose: 'unknown',
+    }, {
+      severity: 'medium',
+      realism: 'realistic',
+      imitationRisk: 'high',
+      behaviorOutcome: 'rewarded',
+      engagementLevel: 'depiction',
+      portrayal: 'glamorized',
+    }), 'rewarded-danger', 'normal')
+
+    expect(event.severity).toBe('medium')
+    expect(event.parentRelevance).toBe('high')
+    expect(event.displayLevel).toBe('highlight')
+  })
+
+  it('keeps harmful instruction high even in educational context', () => {
+    const event = applyContentPolicy(substances('drugs', 'instruction', {
+      context: 'educational',
+      engagementLevel: 'instruction',
+      portrayal: 'educational',
+      realism: 'realistic',
+      imitationRisk: 'high',
+      behaviorOutcome: 'negative_consequences',
+    }), 'educational-instruction', 'normal')
+
+    expect(event.parentRelevance).toBe('high')
+  })
+
+  it('uses child age only as a deterministic salience modifier, not as a category shortcut', () => {
+    const classified = violence('weapon_use', {
+      harmLevel: 'none',
+      targetType: 'object',
+      weaponRole: 'used',
+      actionPurpose: 'sport',
+    }, {
+      context: 'real_world',
+      realism: 'realistic',
+      imitationRisk: 'medium',
+      behaviorOutcome: 'neutral',
+    })
+
+    const younger = applyContentPolicy(classified, 'age-7', 'normal', { childAge: 7 })
+    const teen = applyContentPolicy(classified, 'age-13', 'normal', { childAge: 13 })
+
+    expect(younger.parentRelevance).toBe('moderate')
+    expect(teen.parentRelevance).toBe('low')
+  })
+
+  it('does not let reviewer relevance opinion override deterministic event policy', () => {
+    const event = applyContentPolicy(violence('fantasy_combat', {
+      harmLevel: 'implied',
+      targetType: 'fantasy_creature',
+      weaponRole: 'used',
+      actionPurpose: 'attack',
+    }, {
+      review: {
+        status: 'confirmed',
+        recommendedParentRelevance: 'low',
+        evidenceSufficiency: 'sufficient',
+        contextRanges: [],
+        aggressionDirection: 'mutual',
+        intent: 'aggressive',
+        distress: 'mild',
+        consequence: 'none',
+        duration: 'brief',
+        repetition: 'single',
+        narrativeFraming: 'neutral',
+        parentSummary: 'Герои сражаются с фантастическими существами.',
+        rationale: 'Фантастический игровой бой подтверждён.',
+      },
+    }), 'review-opinion', 'normal')
+
+    expect(event.parentRelevance).toBe('moderate')
+  })
+
+  it('preserves legacy behavior when new semantic fields are absent', () => {
+    const event = applyContentPolicy(violence('weapon_use', {
+      harmLevel: 'none',
+      targetType: 'object',
+      weaponRole: 'used',
+      actionPurpose: 'sport',
+    }), 'legacy-training', 'normal')
+
+    expect([event.parentRelevance, event.displayLevel]).toEqual(['low', 'summary'])
+  })
+})
