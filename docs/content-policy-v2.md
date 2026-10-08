@@ -75,3 +75,26 @@ Paid model evals are useful calibration evidence but are not a substitute for de
 - New semantic fields may initially be noisy; therefore they only introduce conservative relevance floors and age adjustments.
 - Old saved events do not contain the new fields, so fields are optional in TypeScript and policy falls back to legacy behavior.
 - This change does not add a positive/educational-value scorer. Positive/usefulness assessment should remain a separate axis and requires its own evaluation set rather than being inferred as the inverse of safety.
+
+
+## Deliberate scope gaps
+
+This version does not claim full coverage of every external child-safety taxonomy. In particular, dedicated eating-disorder, bullying/hate, dangerous-challenge and commercial-pressure categories require independent examples, human labels and reporting rules before being promoted to first-class categories. Existing categories may capture parts of those concepts, but that is not equivalent to dedicated coverage.
+
+Positive value/usefulness (educational value, prosocial behavior, positive role models, creativity, critical thinking) must be implemented as a separate assessment axis with its own evaluation set. Absence of positive value is not a safety concern, and positive value must not cancel a safety concern.
+
+## Methodology references
+
+The semantic dimensions are informed by public guidance rather than copied as a numerical rating formula:
+
+- BBFC classification guidance: context, realism/style, detail, frequency and imitable behavior matter when judging violence and dangerous behavior.
+  https://www.bbfc.co.uk/parents-guide-age-ratings/bbfc-guide-violence
+- BBFC age-rating guidance: context/frequency matter for language; drug misuse should not be glamorized or instructional; dangerous behavior should not dwell on easily copied detail.
+  https://www.bbfc.co.uk/rating/12
+  https://www.bbfc.co.uk/rating/u
+- Ofcom child-safety guidance distinguishes depiction from content that encourages, promotes or provides instructions for harmful behavior.
+  https://www.ofcom.org.uk/online-safety/protecting-children/protection-of-children-duties-under-the-online-safety-act
+- Common Sense Media developmental guidance highlights imitation, whether aggression is rewarded, the attractiveness of the aggressor and consequences, especially for younger children.
+  https://www.commonsensemedia.org/about-us/our-mission/about-our-ratings/8-9
+
+These sources do not define one universal mathematical score. The deterministic policy in this repository is a product policy derived from these recurring factors and must be calibrated against our own labeled data.
