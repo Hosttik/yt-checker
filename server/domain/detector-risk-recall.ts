@@ -14,9 +14,14 @@ export interface UncoveredRiskWindow {
 // routes a short excerpt through the existing classifier and reviewer.
 // JavaScript \b/\w word-boundaries are ASCII-oriented: for Cyrillic use Unicode letters.
 const WEAPON = /(?:^|[^\p{L}])(?:вил[аыи]|вилами|копь(?:я|ё|е|ями)|пистолет[\p{L}]*|ружь[\p{L}]*|нож[\p{L}]*|оружи[\p{L}]*|автомат[\p{L}]*|gun|knife|rifle|weapon)(?![\p{L}])/iu
-const DIRECTED_DANGER = /(?:набр[ао]с\w*|напад\w*|цел\w*|стреля\w*|стрельб\w*|загнал\w*|преслед\w*|кида\w*|броса\w*|бей\b|уби\w*|помогит\w*|спасит\w*|остановит\w*|тупик\w*|aim\w*|shoot\w*|attack\w*|chase\w*|kill\w*)/iu
+const DIRECTED_DANGER = /(?:набр[ао]с[\p{L}]*|напад[\p{L}]*|цел[\p{L}]*|стреля[\p{L}]*|стрельб[\p{L}]*|загнал[\p{L}]*|преслед[\p{L}]*|кида[\p{L}]*|броса[\p{L}]*|бей\b|уби[\p{L}]*|помогит[\p{L}]*|спасит[\p{L}]*|остановит[\p{L}]*|тупик[\p{L}]*|aim\w*|shoot\w*|attack\w*|chase\w*|kill\w*)/iu
 const IMMEDIATE_DISTRESS = /(?:помогит\w*|спасит\w*|загнал\w*|в\s+тупик|в\s+меня\s+не\s+цел|остановит\w*|сейчас\s+убь\w*|help\s+me|stop\s+(?:shooting|aiming))/iu
-const RESTRAINT = /(?:привяз\w*|связал\w*|прикован\w*|приковал\w*|tied|bound|chained)/iu
+const RESTRAINT = /(?:привяз[\p{L}]*|связал[\p{L}]*|прикован[\p{L}]*|приковал[\p{L}]*|tied|bound|chained)/iu
+// The transcript may say "please stop aiming at me" without naming a gun.
+// Require BOTH a specific directed request and nearby coercive speech;
+// words such as "aim" or "gun" on their own are not safety findings.
+const DIRECTED_AIM_REQUEST = /(?:в\s+меня\s+(?:не\s+)?цел[\p{L}]*|(?:не\s+)?цел[\p{L}]*\s+в\s+меня|(?:don't|stop|please\s+don't)\s+(?:aim|point)\s+(?:it\s+)?at\s+me)/iu
+const COERCIVE_SPEECH = /(?:вставай|встал[,.!\s]|быстро\s+говори|на\s+кого\s+ты\s+работаешь|кто\s+твоя\s+жертва|руки\s+вверх|подними\s+руки|hands\s+up|tell\s+me\s+now|who\s+are\s+you)/iu
 const TRAIN = /(?:поезд\w*|рельс\w*|train|tracks)/iu
 
 interface CueMatch {
@@ -110,14 +115,15 @@ export function uncoveredRiskWindows(
     const hasWeapon = WEAPON.test(excerpt)
     const hasDirectedDanger = DIRECTED_DANGER.test(excerpt)
     const railDanger = RESTRAINT.test(excerpt) && TRAIN.test(excerpt)
-    if (!railDanger && !(hasWeapon && hasDirectedDanger)) continue
+    const impliedAimedThreat = DIRECTED_AIM_REQUEST.test(excerpt) && COERCIVE_SPEECH.test(excerpt)
+    if (!railDanger && !impliedAimedThreat && !(hasWeapon && hasDirectedDanger)) continue
     const cue: UncoveredRiskWindow['cue'] = railDanger ? 'helpless_rail_danger' : 'directed_weapon_danger'
     if (riskAlreadyRepresented(segments[i]!.startMs, events, cue)) continue
 
     const distress = IMMEDIATE_DISTRESS.test(excerpt)
     matches.push({
       index: i,
-      score: (railDanger ? 5 : 2) + (distress ? 3 : 0),
+      score: (impliedAimedThreat ? 9 : railDanger ? 5 : 2) + (distress ? 3 : 0),
       cue,
     })
   }
