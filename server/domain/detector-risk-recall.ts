@@ -25,16 +25,70 @@ interface CueMatch {
   cue: UncoveredRiskWindow['cue']
 }
 
-function riskCovered(
+const MAX_COHERENT_SCENE_MS = 150_000
+const EVIDENCE_PADDING_MS = 20_000
+
+/**
+ * A direct high-risk event may have sparse evidence across a continuous scene.
+ * Using evidenceRanges alone incorrectly triggers recall on the closing line
+ * of that *same* armed pursuit. Conversely, a generic death/fear event cannot
+ * certify that an unrelated weapon threat has been examined.
+ */
+function relevantSafetyEvent(
+  event: ClassifiedContentEvent,
+  cue: UncoveredRiskWindow['cue'],
+): boolean {
+  if (cue === 'helpless_rail_danger') {
+    return (event.category === 'violence' && (
+      event.subtype === 'life_threatening_situation'
+      || event.subtype === 'violent_threat'
+      || event.subtype === 'dangerous_situation'
+    )) || (event.category === 'scary_and_disturbing'
+      && (event.subtype === 'confinement' || event.subtype === 'intense_peril'))
+  }
+  return event.category === 'violence'
+    && (event.subtype === 'violent_threat'
+      || event.subtype === 'physical_attack'
+      || event.subtype === 'weapon_use'
+      || event.subtype === 'dangerous_situation')
+    && (event.details.weaponRole === 'used'
+      || event.details.weaponRole === 'threatened_use'
+      || (event.subtype === 'violent_threat' && event.details.actionPurpose === 'threat'))
+}
+
+export function riskAlreadyRepresented(
   atMs: number,
   events: ClassifiedContentEvent[],
+  cue: UncoveredRiskWindow['cue'],
 ): boolean {
-  return events.some((event) => {
-    if (event.category !== 'violence' && event.category !== 'scary_and_disturbing') return false
+  return events.some(event => {
+    if (!relevantSafetyEvent(event, cue)) return false
+    const startMs = event.sceneStartMs ?? event.startMs
+    const endMs = event.sceneEndMs ?? event.endMs
+    if (endMs >= startMs && endMs - startMs <= MAX_COHERENT_SCENE_MS
+      && atMs >= startMs - EVIDENCE_PADDING_MS
+      && atMs <= endMs + EVIDENCE_PADDING_MS) return true
     const ranges = event.evidenceRanges?.length ? event.evidenceRanges : [event]
-    return ranges.some((range) => atMs >= range.startMs - 20_000
-      && atMs <= range.endMs + 20_000)
+    return ranges.some(range =>
+      atMs >= range.startMs - EVIDENCE_PADDING_MS
+      && atMs <= range.endMs + EVIDENCE_PADDING_MS)
   })
+}
+
+/** Suppress follow-up mentions of an already classified danger story, but
+ * preserve independently evidenced *actual* attacks or injuries. */
+export function isDuplicateRiskRecall(
+  event: ClassifiedContentEvent,
+  primaryEvents: ClassifiedContentEvent[],
+  cue: UncoveredRiskWindow['cue'],
+): boolean {
+  if (event.assertionStatus === 'actual'
+    && event.category === 'violence'
+    && (event.subtype === 'physical_attack' || event.subtype === 'injury')) {
+    return false
+  }
+  const ranges = event.evidenceRanges?.length ? event.evidenceRanges : [event]
+  return ranges.every(range => riskAlreadyRepresented(range.startMs, primaryEvents, cue))
 }
 
 /**
@@ -57,13 +111,14 @@ export function uncoveredRiskWindows(
     const hasDirectedDanger = DIRECTED_DANGER.test(excerpt)
     const railDanger = RESTRAINT.test(excerpt) && TRAIN.test(excerpt)
     if (!railDanger && !(hasWeapon && hasDirectedDanger)) continue
-    if (riskCovered(segments[i]!.startMs, events)) continue
+    const cue: UncoveredRiskWindow['cue'] = railDanger ? 'helpless_rail_danger' : 'directed_weapon_danger'
+    if (riskAlreadyRepresented(segments[i]!.startMs, events, cue)) continue
 
     const distress = IMMEDIATE_DISTRESS.test(excerpt)
     matches.push({
       index: i,
       score: (railDanger ? 5 : 2) + (distress ? 3 : 0),
-      cue: railDanger ? 'helpless_rail_danger' : 'directed_weapon_danger',
+      cue,
     })
   }
 

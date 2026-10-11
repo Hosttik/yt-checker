@@ -224,6 +224,61 @@ describe('BatchedOpenAIReviewer', () => {
     expect(results.reduce((sum, result) => sum + result.usage.totalTokens, 0)).toBe(880)
   })
 
+  it('runs independent incomplete-video fallbacks concurrently without bypassing the provider scheduler', async () => {
+    let active = 0
+    let peak = 0
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const usage = { inputTokens: 20, outputTokens: 2, reasoningTokens: 0,
+      cachedTokens: 0, cacheWriteTokens: 0, totalTokens: 22 }
+    const reviewBatch = vi.fn(async (inputs: OpenAIReviewBatchInput[]): Promise<OpenAIReviewBatchResult> => ({
+      items: inputs.map(input => ({
+        itemId: input.itemId,
+        reviewedEvents: [], decisions: [],
+        totalCandidates: 1, reviewedCandidates: 0, rejectedCandidates: 0,
+        uncertainCandidates: 0, complete: false,
+      })),
+      usage, provider: { latencyMs: 10 }, requestCount: 1,
+    }))
+    const review = vi.fn(async (_transcript, language: string,
+      enabledCategories, events: ClassifiedContentEvent[]): Promise<OpenAIReviewResult> => {
+      active += 1
+      peak = Math.max(peak, active)
+      await gate
+      active -= 1
+      return {
+        reviewedEvents: events, decisions: [], totalCandidates: 1, reviewedCandidates: 1,
+        rejectedCandidates: 0, uncertainCandidates: 0, complete: true,
+        requestCount: 1, retryCount: 0, missingBeforeRetry: 0, missingAfterRetry: 0,
+        rescuedCandidates: 0, rescueRejectedCandidates: 0, rescuedEvents: [],
+        usage, provider: { latencyMs: 10 },
+        requestMetadata: {
+          model: 'test', reasoningEffort: 'low', transcriptLanguage: language,
+          enabledCategories, promptVersion: 'test', schemaVersion: 'test',
+          stage: 'review',
+        },
+      }
+    })
+    const provider = { model: 'test', reasoningEffort: 'low',
+      reviewBatch, review } as unknown as OpenAIAnalysisProvider
+    const reviewer = new BatchedOpenAIReviewer(provider,
+      new ProviderScheduler({ concurrency: 2, maxRetries: 0 }), {
+        batchConcurrency: 2, coalesceMs: 1, batchMaxItems: 2, estimatedPromptTokens: 1,
+      })
+    const pending = Promise.all([0, 1].map(index =>
+      reviewer.review(transcript('video-' + index), 'ru', ['violence'], [event(String(index))])))
+    try {
+      await vi.waitFor(() => expect(review).toHaveBeenCalledTimes(2), { timeout: 2000 })
+      expect(peak).toBe(2)
+    } finally {
+      release?.()
+    }
+    const outputs = await pending
+    expect(outputs.every(result => result.complete)).toBe(true)
+    expect(outputs.reduce((sum, result) => sum + (result.fallbackRequestCount ?? 0), 0)).toBe(2)
+    expect(outputs.reduce((sum, result) => sum + result.requestCount, 0)).toBe(3)
+  })
+
   it('limits default batch complexity by video and candidate counts', async () => {
     const reviewBatch = vi.fn(async (
       inputs: OpenAIReviewBatchInput[],

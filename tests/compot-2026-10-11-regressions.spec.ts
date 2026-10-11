@@ -72,6 +72,32 @@ describe('Compot 2026-10-11 evidence-based controls', () => {
     expect(copyGroundingIssue(evidence, faithful)).toBeUndefined()
   })
 
+  it('wiuuBaYC8B8 07:05: fantasy property peril stays moderate despite strong fear and a high reviewer proposal', () => {
+    const base = gameConfinement({
+      subtype: 'intense_peril', severity: 'high', realism: 'fantasy', imitationRisk: 'none',
+      assertionStatus: 'actual',
+      details: { fearIntensity: 'strong', themePresent: true, threatPresent: true, supernatural: false },
+      review: review({
+        intent: 'accidental', aggressionDirection: 'none', distress: 'clear',
+        consequence: 'property_only', duration: 'sustained', repetition: 'single',
+        recommendedParentRelevance: 'high',
+      }),
+    })
+    const harmless = applyContentPolicy(base, 'fantasy-blackhole', 'normal')
+    expect(harmless.parentRelevance).toBe('moderate')
+    expect(buildPresentationScenes([harmless])[0]?.attention).toBe('main')
+
+    // Real bodily harm in a fantasy story must still be eligible for high.
+    const injured = applyContentPolicy({
+      ...base,
+      review: review({
+        intent: 'accidental', aggressionDirection: 'none',
+        consequence: 'injury_or_severe_harm', distress: 'strong', duration: 'sustained',
+      }),
+    }, 'harmful-blackhole', 'normal')
+    expect(injured.parentRelevance).toBe('high')
+  })
+
   it('wiuuBaYC8B8 06:15: fantastic accidental peril does not become high automatically', () => {
     const event = applyContentPolicy(gameConfinement({
       subtype: 'intense_peril', severity: 'high', realism: 'fantasy', imitationRisk: 'none',

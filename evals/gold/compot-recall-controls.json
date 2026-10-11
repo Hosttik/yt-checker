@@ -1,0 +1,54 @@
+{
+  "status": "provisional_human_controls",
+  "source": "Three saved Compot diagnostic scans, 2026-10-11; only short event labels, no transcripts.",
+  "warning": "This is a focused recall smoke benchmark, not a comprehensive false-positive sample or independently adjudicated accuracy dataset.",
+  "cases": [
+    {
+      "id": "directed-police-weapon-threat",
+      "videoId": "edgRlTMnF0o",
+      "atMs": 480000,
+      "mode": "required_main",
+      "notes": "Directed weapon coercion in a police interrogation"
+    },
+    {
+      "id": "armed-pursuit",
+      "videoId": "_xR7fZ24O4g",
+      "atMs": 578720,
+      "mode": "required_main",
+      "notes": "Pitchfork/spear pursuit and requests to stop; missed by 10:04 detector"
+    },
+    {
+      "id": "black-hole-peril",
+      "videoId": "wiuuBaYC8B8",
+      "atMs": 375400,
+      "mode": "required_main",
+      "notes": "Clearly distressed character drawn into a black hole; main but not necessarily high"
+    },
+    {
+      "id": "fantasy-mutual-shooting",
+      "videoId": "tKmnOpeiIg0",
+      "atMs": 505840,
+      "mode": "required_event",
+      "notes": "Visible in details; avoid treating as unreported clean video"
+    },
+    {
+      "id": "reported-conditional-threat",
+      "videoId": "sopiEI-rya0",
+      "atMs": 408520,
+      "mode": "required_event",
+      "notes": "Conditional comedic threat; generally details"
+    },
+    {
+      "id": "quiet-pool-build",
+      "videoId": "pQ4GfN38egE",
+      "mode": "no_main",
+      "notes": "Do not invent a parental high-risk headline from pool-build plot"
+    },
+    {
+      "id": "birthday-gifts",
+      "videoId": "B7PGgMjJyoQ",
+      "mode": "no_main",
+      "notes": "No safety headline for an ordinary birthday gift plot"
+    }
+  ]
+}

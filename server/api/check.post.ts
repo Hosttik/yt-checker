@@ -424,7 +424,9 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
         logger.debug('content.detector_risk_recall', {
           videoId: video.id,
           cueWindows: analysis.riskRecall.cueWindows,
-          proposedEvents: analysis.riskRecall.rescuedEvents,
+          proposedEvents: analysis.riskRecall.proposedEvents,
+          novelEvents: analysis.riskRecall.rescuedEvents,
+          duplicateEvents: analysis.riskRecall.duplicateEvents,
           providerRequests: analysis.riskRecall.requestCount,
           failed: analysis.riskRecall.failed,
         })

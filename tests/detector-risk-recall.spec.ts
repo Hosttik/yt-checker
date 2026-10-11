@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { normalizeTranscript } from '../server/domain/normalize-transcript'
-import { uncoveredRiskWindows } from '../server/domain/detector-risk-recall'
+import { uncoveredRiskWindows, isDuplicateRiskRecall } from '../server/domain/detector-risk-recall'
 import { BatchedOpenAIAnalyzer } from '../server/services/openai-batched-analyzer'
 import type { ClassifiedContentEvent, ContentCategory } from '../shared/types/content'
 import type {
@@ -68,6 +68,41 @@ describe('deterministic targeted danger recall', () => {
 
   it('does not recheck a threat already covered by primary safety evidence', () => {
     expect(uncoveredRiskWindows(clips(), [confirmedThreat()])).toHaveLength(0)
+  })
+
+  it('does not recheck closing remarks within an already verified armed-pursuit story arc', () => {
+    const transcript = normalizeTranscript([
+      { text: 'Я не зомби, жители, прекратите.', startMs: 639_000, endMs: 643_000 },
+      { text: 'Когда вы не кидаетесь на меня с копьями и вилами.', startMs: 659_000, endMs: 662_279 },
+    ])
+    const primary = {
+      ...confirmedThreat(),
+      startMs: 578_720,
+      endMs: 612_519,
+      evidenceRanges: [{ startMs: 578_720, endMs: 592_399 }, { startMs: 609_279, endMs: 612_519 }],
+      sceneStartMs: 554_000,
+      sceneEndMs: 662_279,
+    }
+    expect(uncoveredRiskWindows(transcript, [primary])).toHaveLength(0)
+    const closingReport = {
+      ...confirmedThreat(),
+      subtype: 'physical_attack' as const,
+      assertionStatus: 'reported' as const,
+      engagementLevel: 'mention' as const,
+      startMs: 659_000, endMs: 662_279,
+      evidenceRanges: [{ startMs: 659_000, endMs: 662_279 }],
+    }
+    expect(isDuplicateRiskRecall(closingReport, [primary], 'directed_weapon_danger')).toBe(true)
+    expect(isDuplicateRiskRecall({
+      ...closingReport, assertionStatus: 'actual',
+    }, [primary], 'directed_weapon_danger')).toBe(false)
+    // A separate fear/death theme is not enough to certify that an armed
+    // threat was assessed at all.
+    expect(uncoveredRiskWindows(transcript, [{
+      ...primary, category: 'scary_and_disturbing', subtype: 'death_related_theme',
+      details: { fearIntensity: 'moderate', threatPresent: false,
+        themePresent: true, supernatural: false },
+    }])).toHaveLength(1)
   })
 
   it('does not recheck a harmless gameplay sword inventory', () => {

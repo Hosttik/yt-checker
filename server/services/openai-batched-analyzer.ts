@@ -1,7 +1,7 @@
 import type { OpenAIUsage } from '../../shared/types/check'
 import type { ClassifiedContentEvent, ContentCategory, RejectedContentCandidate } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
-import { uncoveredRiskWindows } from '../domain/detector-risk-recall'
+import { uncoveredRiskWindows, isDuplicateRiskRecall, type UncoveredRiskWindow } from '../domain/detector-risk-recall'
 import { mapWithConcurrency } from '../utils/concurrency'
 import type { ProviderScheduler, ProviderSchedulerTiming } from '../utils/provider-scheduler'
 import {
@@ -394,7 +394,8 @@ export class BatchedOpenAIAnalyzer {
         },
       )
       const chunkResults = perBatch.flat()
-      const recallByJob = new Map<number, { cueWindows: number; rescuedEvents: number; requestCount: number; failed: boolean }>()
+      const recallByJob = new Map<number, { cueWindows: number; proposedEvents: number; rescuedEvents: number; duplicateEvents: number; requestCount: number; failed: boolean }>()
+      const recallCueByJob = new Map<number, UncoveredRiskWindow['cue']>()
 
       // One short high-risk window per video at most, and a bounded total
       // across this coalesced scan. Ordinary low-risk gameplay adds no calls.
@@ -412,8 +413,10 @@ export class BatchedOpenAIAnalyzer {
 
         const rescueChunks: TranscriptChunk[] = windows.map(({ job, window }, index) => {
           recallByJob.set(job.id, {
-            cueWindows: 1, rescuedEvents: 0, requestCount: 0, failed: false,
+            cueWindows: 1, proposedEvents: 0, rescuedEvents: 0,
+            duplicateEvents: 0, requestCount: 0, failed: false,
           })
+          recallCueByJob.set(job.id, window.cue)
           return {
             itemId: `job_${job.id}_risk_${index}`,
             transcript: job.transcript,
@@ -475,10 +478,21 @@ export class BatchedOpenAIAnalyzer {
           },
         )
         for (const result of rescued.flat()) {
-          chunkResults.push(result)
           const diagnostic = recallByJob.get(result.chunk.jobId)!
-          diagnostic.rescuedEvents += result.result.classifiedEvents.length
+          const primary = chunkResults
+            .filter(item => item.chunk.jobId === result.chunk.jobId)
+            .flatMap(item => item.result.classifiedEvents)
+          const cue = recallCueByJob.get(result.chunk.jobId)!
+          const proposed = result.result.classifiedEvents
+          const unique = proposed.filter(event => !isDuplicateRiskRecall(event, primary, cue))
+          diagnostic.proposedEvents += proposed.length
+          diagnostic.duplicateEvents += proposed.length - unique.length
+          diagnostic.rescuedEvents += unique.length
           diagnostic.requestCount += result.requestCount
+          chunkResults.push({
+            ...result,
+            result: { ...result.result, classifiedEvents: unique },
+          })
         }
       }
 
