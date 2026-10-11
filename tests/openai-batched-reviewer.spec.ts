@@ -142,6 +142,7 @@ describe('BatchedOpenAIReviewer', () => {
         rejectedCandidates: 0,
         uncertainCandidates: 0,
         complete: index !== 1,
+        incompleteReasons: index === 1 ? ['missing_or_unreviewed_candidate'] : [],
       })),
       usage: batchUsage,
       provider: { requestId: 'resp_partial', status: 'completed', latencyMs: 20 },
@@ -218,6 +219,8 @@ describe('BatchedOpenAIReviewer', () => {
 
     expect(reviewBatch).toHaveBeenCalledTimes(1)
     expect(review).toHaveBeenCalledTimes(1)
+    expect(results[1]?.batchIncompleteReasons).toEqual(['missing_or_unreviewed_candidate'])
+    expect(results[0]?.batchIncompleteReasons).toBeUndefined()
     expect(results.every((result) => result.complete)).toBe(true)
     expect(results.reduce((sum, result) => sum + result.requestCount, 0)).toBe(2)
     expect(results.reduce((sum, result) => sum + result.usage.inputTokens, 0)).toBe(800)
