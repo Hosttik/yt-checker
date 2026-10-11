@@ -365,6 +365,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     detection: aggregateUsage(),
     review: aggregateUsage(),
   }
+  let detectorRiskRecallRequests = 0
   let reviewFallbackRequests = 0
   let coverageRequests = 0
   let reviewDisabledAfterFailure = false
@@ -418,6 +419,16 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
       openaiStages.detection.requests += analysis.requestCount
       addUsage(openaiUsage, analysis.usage)
       addUsage(openaiStages.detection, analysis.usage)
+      detectorRiskRecallRequests += analysis.riskRecall?.requestCount ?? 0
+      if (analysis.riskRecall) {
+        logger.debug('content.detector_risk_recall', {
+          videoId: video.id,
+          cueWindows: analysis.riskRecall.cueWindows,
+          proposedEvents: analysis.riskRecall.rescuedEvents,
+          providerRequests: analysis.riskRecall.requestCount,
+          failed: analysis.riskRecall.failed,
+        })
+      }
 
       const firstPassEvents = analysis.classifiedEvents.filter((classifiedEvent) =>
         enabledRuleIds.some((ruleId) => ruleMatchesClassification(ruleId, classifiedEvent)),
@@ -623,6 +634,13 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
             code: coverageError.code ?? null,
           })
         }
+      }
+
+      if (analysis.riskRecall?.failed
+        && (contentReview.status === 'completed' || contentReview.status === 'not_needed')) {
+        // A failed optional first-pass recovery is not an independently
+        // verified clean video; surface degraded coverage, not false certainty.
+        contentReview = { ...contentReview, status: 'partial' }
       }
 
       const semanticValidation = validateClassifiedEvents(reviewedEvents)
@@ -949,6 +967,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     openaiStages,
     openaiRequests: {
       detectorRequests: openaiStages.detection.requests,
+      detectorRiskRecallRequests,
       reviewRequests: Math.max(
         0,
         openaiStages.review.requests - reviewFallbackRequests - coverageRequests,
@@ -1000,7 +1019,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
     summary: legacySummary,
     videos: videoResults,
     limitations: [
-      'Transcripts are split and coalesced into language-agnostic token-aware detector batches. Videos with detected candidates are contextually reviewed using local transcript windows; the additional coverage pass runs in diagnostic profile or when OPENAI_COVERAGE_ENABLED=true, and its proposals undergo separate contextual review.',
+      'Transcripts are split into token-aware detector batches. When enabled, a small, capped targeted second pass revisits uncovered direct danger cues; its candidate events still undergo contextual review, and it is not a full recall guarantee. Full coverage remains diagnostic or opt-in with OPENAI_COVERAGE_ENABLED=true.',
       `Paid transcript credits are capped at ${transcriptCreditBudget} for this scan.`,
       'Transcript retrieval failures are replaced with the next caption-eligible video only while the paid transcript budget remains.',
       transcriptCreditBudgetExhausted
