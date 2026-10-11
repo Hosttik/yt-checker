@@ -432,7 +432,9 @@ function reviewedHighPriorityIsSupported(event: ClassifiedContentEvent): boolean
     const accidentalFictionalThreatOnly = fictional
       && review.intent === 'accidental'
       && review.aggressionDirection === 'none'
-      && review.consequence === 'threatened_harm'
+      && (review.consequence === 'threatened_harm' || review.consequence === 'property_only' || review.consequence === 'none')
+      && (event.realism === 'fantasy' || event.realism === 'stylized')
+      && (event.imitationRisk === 'none' || event.imitationRisk === 'low')
 
     const immediatePeril = event.subtype === 'intense_peril'
       && event.details.threatPresent
