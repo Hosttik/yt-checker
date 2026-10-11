@@ -258,12 +258,11 @@ export class BatchedOpenAIReviewer {
             }
           })
 
-          const recovered: ResolvedReview[] = []
-          for (const item of base) {
-            if (item.result.complete) {
-              recovered.push(item)
-              continue
-            }
+          // Incomplete per-video reviews are independent. Running them in a
+          // bounded pool avoids adding their network latencies in series;
+          // the shared ProviderScheduler continues to enforce process limits.
+          return mapWithConcurrency(base, this.batchConcurrency, async (item): Promise<ResolvedReview> => {
+            if (item.result.complete) return item
 
             let fallbackAttempts = 0
             try {
@@ -280,7 +279,7 @@ export class BatchedOpenAIReviewer {
                 },
                 this.options.onSchedulerTiming,
               )
-              recovered.push({
+              return {
                 job: item.job,
                 result: {
                   itemId: `review_job_${item.job.id}`,
@@ -301,10 +300,10 @@ export class BatchedOpenAIReviewer {
                   ...fallback.provider,
                   latencyMs: item.provider.latencyMs + fallback.provider.latencyMs,
                 },
-              })
+              }
             } catch (error) {
               const fallbackError = error as { usage?: OpenAIUsage; provider?: OpenAIProviderMetadata }
-              recovered.push({
+              return {
                 ...item,
                 usage: mergedUsage(item.usage, fallbackError.usage),
                 requestCount: item.requestCount + fallbackAttempts,
@@ -315,11 +314,9 @@ export class BatchedOpenAIReviewer {
                       latencyMs: item.provider.latencyMs + fallbackError.provider.latencyMs,
                     }
                   : item.provider,
-              })
+              }
             }
-          }
-
-          return recovered
+          })
         },
       )
 
