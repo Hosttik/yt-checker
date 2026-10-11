@@ -645,6 +645,13 @@ export interface OpenAIAnalysisResult {
   usage: OpenAIUsage
   provider: OpenAIProviderMetadata
   requestCount: number
+  /** Narrow, post-detector danger recall; not a full coverage certification. */
+  riskRecall?: {
+    cueWindows: number
+    rescuedEvents: number
+    requestCount: number
+    failed: boolean
+  }
   requestMetadata: {
     model: string
     reasoningEffort: OpenAIReasoningEffort
@@ -1260,6 +1267,7 @@ export class OpenAIAnalysisProvider {
     items: OpenAIAnalysisBatchInput[],
     enabledCategories: ContentCategory[],
     diagnostic: boolean,
+    targetedRiskRecall = false,
   ): Promise<OpenAIAnalysisBatchResult> {
     if (items.length === 0) {
       throw new OpenAIAnalysisError('schema', 'Analysis batch must contain at least one item.')
@@ -1279,6 +1287,9 @@ export class OpenAIAnalysisProvider {
       : ''
     const dynamicInput = [
       'Analyze every transcript item independently.',
+      ...(targetedRiskRecall ? [
+        'TARGETED SECOND PASS: Look specifically for a directed attack or weapon threat, an armed pursuit of a frightened target, or an immediate peril involving helpless people. Include strong explicit evidence even when an earlier broad pass missed it. Do not automatically classify an inventory item, casual game combat, an imagined event, or nonviolent play as significant danger. Return an empty events array when the provided excerpt does not establish a genuine event. Only use direct transcript segments, no guessed visuals or outcomes.',
+      ] : []),
       'Return exactly one result for every supplied itemId, with the same itemId. Do not omit, duplicate, rename, or mix items.',
       'Segment indexes are local to each supplied item transcript and must be copied exactly from that item.',
       `Enabled categories: ${enabledCategories.join(', ')}${diagnosticInstruction}`,
