@@ -60,15 +60,16 @@ describe('Compot 2026-10-11 evidence-based controls', () => {
     expect(event.review?.copyGroundingFallback).toBe('negation_reversed')
   })
 
-  it('edgRlTMnF0o 08:00: reviewer may not add unsupported future consequences', () => {
-    const evidence = 'Пожалуйста, в меня не целиться? Быстро говори, ты кто такой?'
-    const mistaken = 'Полицейский угрожает пожизненным заключением после экспертизы пластилиновой головы.'
+  it('edgRlTMnF0o 08:00: preserves a correct paraphrase of the directed threat', () => {
+    const evidence = 'Встал, я сказал: вставай. А можно, пожалуйста, в меня не целиться? Быстро говори, ты кто такой?'
+    const faithful = 'Полицейский требует от Компота встать и отвечать, а тот просит не целиться в него.'
     const event = groundEventCopy(gameConfinement({
-      text: evidence, reason: 'Персонаж просит в него не целиться.',
-      review: review({ parentSummary: mistaken }),
+      text: evidence, reason: 'Во время допроса Компот просит не целиться в него.',
+      review: review({ parentSummary: faithful }),
     }))
-    expect(event.review?.copyGroundingFallback).toBe('unsupported_clause')
-    expect(event.review?.parentSummary).not.toContain('пожизненным')
+    expect(event.review?.copyGroundingFallback).toBeUndefined()
+    expect(event.review?.parentSummary).toBe(faithful)
+    expect(copyGroundingIssue(evidence, faithful)).toBeUndefined()
   })
 
   it('wiuuBaYC8B8 06:15: fantastic accidental peril does not become high automatically', () => {

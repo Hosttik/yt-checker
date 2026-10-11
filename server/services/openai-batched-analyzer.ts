@@ -1,6 +1,7 @@
 import type { OpenAIUsage } from '../../shared/types/check'
 import type { ClassifiedContentEvent, ContentCategory, RejectedContentCandidate } from '../../shared/types/content'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
+import { uncoveredRiskWindows } from '../domain/detector-risk-recall'
 import { mapWithConcurrency } from '../utils/concurrency'
 import type { ProviderScheduler, ProviderSchedulerTiming } from '../utils/provider-scheduler'
 import {
@@ -21,6 +22,8 @@ export interface BatchedAnalyzerOptions {
   batchConcurrency?: number
   batchMaxItems?: number
   estimatedPromptTokens?: number
+  riskRecallEnabled?: boolean
+  riskRecallMaxWindows?: number
   onSchedulerTiming?: (timing: ProviderSchedulerTiming) => void
 }
 
@@ -262,6 +265,8 @@ export class BatchedOpenAIAnalyzer {
   private readonly batchConcurrency: number
   private readonly batchMaxItems: number
   private readonly estimatedPromptTokens: number
+  private readonly riskRecallEnabled: boolean
+  private readonly riskRecallMaxWindows: number
   private readonly pending: PendingJob[] = []
   private timer?: ReturnType<typeof setTimeout>
   private nextJobId = 0
@@ -281,6 +286,8 @@ export class BatchedOpenAIAnalyzer {
     this.batchConcurrency = positive(this.options.batchConcurrency, 2)
     this.batchMaxItems = Math.min(32, positive(this.options.batchMaxItems, 5))
     this.estimatedPromptTokens = positive(this.options.estimatedPromptTokens, 12_000)
+    this.riskRecallEnabled = this.options.riskRecallEnabled ?? true
+    this.riskRecallMaxWindows = Math.min(10, positive(this.options.riskRecallMaxWindows, 5))
   }
 
   analyze(
@@ -387,6 +394,93 @@ export class BatchedOpenAIAnalyzer {
         },
       )
       const chunkResults = perBatch.flat()
+      const recallByJob = new Map<number, { cueWindows: number; rescuedEvents: number; requestCount: number; failed: boolean }>()
+
+      // One short high-risk window per video at most, and a bounded total
+      // across this coalesced scan. Ordinary low-risk gameplay adds no calls.
+      if (this.riskRecallEnabled
+        && (categories.includes('violence') || categories.includes('scary_and_disturbing'))) {
+        const windows = jobs.flatMap((job) => {
+          const detected = chunkResults
+            .filter(result => result.chunk.jobId === job.id)
+            .flatMap(result => result.result.classifiedEvents)
+          return uncoveredRiskWindows(job.transcript, detected, 1).map((window) => ({
+            job, window,
+          }))
+        }).sort((a, b) => b.window.priority - a.window.priority || a.job.id - b.job.id)
+          .slice(0, this.riskRecallMaxWindows)
+
+        const rescueChunks: TranscriptChunk[] = windows.map(({ job, window }, index) => {
+          recallByJob.set(job.id, {
+            cueWindows: 1, rescuedEvents: 0, requestCount: 0, failed: false,
+          })
+          return {
+            itemId: `job_${job.id}_risk_${index}`,
+            transcript: job.transcript,
+            transcriptText: window.transcriptText,
+            language: job.language,
+            estimatedTokens: estimateTextTokens(window.transcriptText),
+            jobId: job.id,
+          }
+        })
+        const rescueBatches = packChunks(
+          rescueChunks,
+          this.batchMaxEstimatedTokens,
+          Math.min(this.batchMaxItems, 5),
+        )
+        const rescued = await mapWithConcurrency(
+          rescueBatches,
+          this.batchConcurrency,
+          async (batch): Promise<ChunkResult[]> => {
+            const input: OpenAIAnalysisBatchInput[] = batch.map(chunk => ({
+              itemId: chunk.itemId,
+              transcript: chunk.transcript,
+              transcriptText: chunk.transcriptText,
+              language: chunk.language,
+            }))
+            let attempts = 0
+            try {
+              const response = await this.scheduler.run(
+                this.estimatedPromptTokens + batch.reduce((total, chunk) => total + chunk.estimatedTokens, 0),
+                async () => {
+                  attempts += 1
+                  return this.provider.analyzeBatch(input, categories, diagnostic, true)
+                },
+                this.options.onSchedulerTiming,
+              )
+              const byId = new Map(response.items.map(item => [item.itemId, item]))
+              const usages = distributeUsage(response.usage, batch.map(chunk => chunk.estimatedTokens))
+              return batch.map((chunk, index) => {
+                const result = byId.get(chunk.itemId)
+                if (!result) throw new Error(`Missing targeted detector result for ${chunk.itemId}`)
+                return {
+                  chunk, result, usage: usages[index]!,
+                  requestCount: index === 0 ? attempts + Math.max(0, response.requestCount - 1) : 0,
+                  provider: response.provider,
+                }
+              })
+            } catch (error) {
+              // A failed optional recall must not discard already detected events.
+              // Retain attempted provider calls in usage/diagnostics.
+              const failure = error as { usage?: OpenAIUsage; provider?: OpenAIProviderMetadata }
+              for (const chunk of batch) recallByJob.get(chunk.jobId)!.failed = true
+              return batch.map((chunk, index) => ({
+                chunk,
+                result: { itemId: chunk.itemId, classifiedEvents: [] },
+                usage: index === 0 ? failure.usage ?? { ...ZERO_USAGE } : { ...ZERO_USAGE },
+                requestCount: index === 0 ? attempts : 0,
+                provider: failure.provider ?? { latencyMs: 0 },
+              }))
+            }
+          },
+        )
+        for (const result of rescued.flat()) {
+          chunkResults.push(result)
+          const diagnostic = recallByJob.get(result.chunk.jobId)!
+          diagnostic.rescuedEvents += result.result.classifiedEvents.length
+          diagnostic.requestCount += result.requestCount
+        }
+      }
 
       for (const job of jobs) {
         const own = chunkResults.filter((item) => item.chunk.jobId === job.id)
@@ -409,6 +503,7 @@ export class BatchedOpenAIAnalyzer {
           usage,
           requestCount,
           provider: slowest?.provider ?? { latencyMs: 0 },
+          riskRecall: recallByJob.get(job.id),
           requestMetadata: {
             model: this.providerModel(),
             reasoningEffort: this.providerReasoningEffort(),

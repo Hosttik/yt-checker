@@ -105,6 +105,8 @@ export interface ScanTimings {
 
 export interface OpenAIRequestBreakdown {
   detectorRequests: number
+  /** Included in detectorRequests. Narrow follow-up calls, not full coverage. */
+  detectorRiskRecallRequests?: number
   reviewRequests: number
   reviewFallbackRequests: number
   coverageRequests: number
