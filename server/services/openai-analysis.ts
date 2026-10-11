@@ -591,6 +591,7 @@ export interface OpenAIReviewBatchItemResult {
   rejectedCandidates: number
   uncertainCandidates: number
   complete: boolean
+  incompleteReasons?: string[]
 }
 
 export interface OpenAIReviewBatchResult {
@@ -611,6 +612,8 @@ export interface OpenAIReviewResult {
   complete: boolean
   requestCount: number
   fallbackRequestCount?: number
+  /** Why the first batch omitted or could not verify candidates (before fallback). */
+  batchIncompleteReasons?: string[]
   retryCount: number
   missingBeforeRetry: number
   missingAfterRetry: number
@@ -1898,8 +1901,18 @@ export class OpenAIAnalysisProvider {
         }
 
         const reviewedCandidates = decisions.filter((item) => item.verdict !== 'not_reviewed').length
+        const incompleteReasons = [
+          ...(!parsedById.has(input.itemId) ? ['missing_outer_item'] : []),
+          ...(duplicateIds ? ['duplicate_candidate_id'] : []),
+          ...(unknownIds ? ['unknown_candidate_id'] : []),
+          ...(materializationFailure ? ['invalid_or_moved_evidence'] : []),
+          ...(decisions.some(decision => decision.verdict === 'not_reviewed'
+            && decision.rationale.includes('Unsafe reviewer downgrade')) ? ['unsafe_downgrade'] : []),
+          ...(reviewedCandidates !== input.events.length ? ['missing_or_unreviewed_candidate'] : []),
+        ]
         return {
           itemId: input.itemId,
+          incompleteReasons,
           reviewedEvents,
           decisions,
           totalCandidates: input.events.length,
