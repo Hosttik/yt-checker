@@ -47,9 +47,14 @@ function evaluate(scan: ChannelCheckResponse, control: Control) {
  */
 describe('fixed-scene recall and attention controls', () => {
   const paths = process.env.SCAN_RECALL_RESULTS?.split(';').filter(Boolean) ?? []
-  ;(paths.length ? it : it.skip)('checks exact video/time against manually defined controls', () => {
+  const enforce = process.env.SCAN_RECALL_ENFORCE === '1'
+  ;(paths.length || enforce ? it : it.skip)('checks exact video/time against manually defined controls', () => {
+    if (enforce) {
+      expect(paths.length, 'Strict fixed-scene eval requires SCAN_RECALL_RESULTS').toBeGreaterThan(0)
+    }
     let totalMeasured = 0
     let misses = 0
+    let absentRequired = 0
     const runs = paths.map((path) => {
       const filename = path.endsWith('.json') ? resolve(path) : resolve(join(path, 'result.json'))
       const scan = JSON.parse(readFileSync(filename, 'utf8')) as ChannelCheckResponse
@@ -58,6 +63,8 @@ describe('fixed-scene recall and attention controls', () => {
       }))
       totalMeasured += measurements.filter(item => item.status !== 'not_in_scan').length
       misses += measurements.filter(item => item.status === 'miss').length
+      absentRequired += measurements.filter(item =>
+        item.mode !== 'no_main' && item.status === 'not_in_scan').length
       const required = measurements.filter(item =>
         item.mode !== 'no_main' && item.status !== 'not_in_scan')
       return {
@@ -73,8 +80,20 @@ describe('fixed-scene recall and attention controls', () => {
     })
     console.log(JSON.stringify({ reference: fixture.status, totalMeasured, misses, runs }, null, 2))
     expect(totalMeasured, 'No videos matching the benchmark controls').toBeGreaterThan(0)
-    if (process.env.SCAN_RECALL_ENFORCE === '1') {
+    if (enforce) {
+      expect(absentRequired, 'Strict benchmark cannot pass with missing mandatory videos').toBe(0)
       expect(misses, 'Fixed-scene mandatory recall/attention regressions').toBe(0)
     }
+  })
+  it('identifies missing and present mandatory scene controls using time-aligned evidence', () => {
+    const sample = {
+      videos: [{ id: 'edgRlTMnF0o', status: 'analyzed' }],
+      contentEvents: [],
+      videoReports: [{ videoId: 'edgRlTMnF0o', scenes: [] }],
+    } as unknown as ChannelCheckResponse
+    const police = fixture.cases.find(control => control.id === 'directed-police-weapon-threat')!
+    expect(evaluate(sample, police).status).toBe('miss')
+    const absent = fixture.cases.find(control => control.id === 'armed-pursuit')!
+    expect(evaluate(sample, absent).status).toBe('not_in_scan')
   })
 })
