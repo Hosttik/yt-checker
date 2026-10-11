@@ -16,7 +16,7 @@ import { CONTENT_CATEGORIES } from '../../shared/types/content'
 import { markEventsNotReviewed } from '../domain/content-review-state'
 import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
-export const OPENAI_PROMPT_VERSION = '2026-10-08.content-events-batch-v10'
+export const OPENAI_PROMPT_VERSION = '2026-10-11.content-events-batch-v11'
 export const OPENAI_SCHEMA_VERSION = '11'
 export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-11.parent-scene-review-v12'
 export const OPENAI_REVIEW_SCHEMA_VERSION = '6'
@@ -1293,7 +1293,7 @@ export class OpenAIAnalysisProvider {
     const dynamicInput = [
       'Analyze every transcript item independently.',
       ...(targetedRiskRecall ? [
-        'TARGETED SECOND PASS: Look specifically for a directed attack or weapon threat, an armed pursuit of a frightened target, or an immediate peril involving helpless people. Include strong explicit evidence even when an earlier broad pass missed it. Do not automatically classify an inventory item, casual game combat, an imagined event, or nonviolent play as significant danger. Return an empty events array when the provided excerpt does not establish a genuine event. Only use direct transcript segments, no guessed visuals or outcomes.',
+        'TARGETED SECOND PASS: Look specifically for a directed attack or weapon threat, a coerced person asking another to stop aiming at them, an armed pursuit of a frightened target, or immediate peril involving helpless people. A victim asking someone not to aim at them can establish a directed threat without explicitly naming a gun. Never infer a gun, a shot, physical harm or unseen actions from that phrase alone. Include strong transcript evidence even when an earlier broad pass missed it. Do not automatically classify an inventory item, casual game combat, an imagined event, or nonviolent play as significant danger. Return an empty events array when the excerpt does not establish a genuine event. Only use direct transcript segments, no guessed visuals or outcomes.',
       ] : []),
       'Return exactly one result for every supplied itemId, with the same itemId. Do not omit, duplicate, rename, or mix items.',
       'Segment indexes are local to each supplied item transcript and must be copied exactly from that item.',
