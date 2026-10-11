@@ -28,6 +28,8 @@ export interface OpenAIBatchingManifest {
     chunkOverlapMs: number
     coalesceMs: number
     batchConcurrency: number
+    riskRecallEnabled: boolean
+    riskRecallMaxWindows: number
   }
   reviewer: {
     batchMaxEstimatedTokens: number
@@ -51,6 +53,8 @@ export function openAIBatchingManifestFromEnv(
       chunkOverlapMs: positiveIntegerEnv('OPENAI_DETECTOR_CHUNK_OVERLAP_MS', 90_000),
       coalesceMs: positiveIntegerEnv('OPENAI_DETECTOR_COALESCE_MS', 100),
       batchConcurrency: positiveIntegerEnv('OPENAI_SCAN_BATCH_CONCURRENCY', 2),
+      riskRecallEnabled: process.env.OPENAI_DETECTOR_RISK_RECALL_ENABLED !== 'false',
+      riskRecallMaxWindows: Math.min(10, positiveIntegerEnv('OPENAI_DETECTOR_RISK_RECALL_MAX_WINDOWS', 5)),
     },
     reviewer: {
       batchMaxEstimatedTokens: positiveIntegerEnv('OPENAI_REVIEW_BATCH_MAX_ESTIMATED_TOKENS', 70_000),
