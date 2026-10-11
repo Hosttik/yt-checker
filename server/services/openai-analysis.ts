@@ -648,6 +648,8 @@ export interface OpenAIAnalysisResult {
   /** Narrow, post-detector danger recall; not a full coverage certification. */
   riskRecall?: {
     cueWindows: number
+    proposedEvents: number
+    duplicateEvents: number
     rescuedEvents: number
     requestCount: number
     failed: boolean
