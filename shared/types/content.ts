@@ -63,6 +63,8 @@ export interface ContentEventReview {
   duration: SceneDuration
   repetition: RepetitionLevel
   narrativeFraming: NarrativeFraming
+  /** Provenance marker for conservative evidence-copy fallback in server validation. */
+  copyGroundingFallback?: 'negation_reversed' | 'unsupported_clause'
   /** Short parent-facing description grounded in direct evidence. */
   parentSummary?: string
   /** Separate mitigating context grounded in reviewed surrounding context. */
