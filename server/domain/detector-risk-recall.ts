@@ -7,6 +7,7 @@ export interface UncoveredRiskWindow {
   transcriptText: string
   /** Why the deterministic first-pass recall gate was activated. */
   cue: 'directed_weapon_danger' | 'helpless_rail_danger'
+  priority: number
 }
 
 // Intentionally narrow and cheap. A match is NOT a content finding: it only
@@ -84,6 +85,7 @@ export function uncoveredRiskWindows(
         .map((segment, offset) => `[${begin + offset}] ${segment.text}`)
         .join('\n'),
       cue: candidate.cue,
+      priority: candidate.score,
     })
     if (selected.length >= maxWindows) break
   }
