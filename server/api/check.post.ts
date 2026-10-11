@@ -17,6 +17,7 @@ import type { AnalysisProfile, ClassifiedContentEvent, ContentEvent, RejectedCon
 import { buildDetections, buildLegacyViolations, buildRuleSummary } from '../domain/analyze-transcript'
 import { normalizeRequestedCategories, ruleMatchesClassification } from '../domain/content-categories'
 import { applyContentPolicy } from '../domain/content-policy'
+import { groundEventCopy } from '../domain/content-evidence'
 import { normalizeClassifiedEvents } from '../domain/content-normalization'
 import { markEventsNotReviewed } from '../domain/content-review-state'
 import { validateClassifiedEvents } from '../domain/content-validation'
@@ -671,7 +672,7 @@ export default defineEventHandler(async (event): Promise<ChannelCheckResponse> =
           reviewStatus: classifiedEvent.review?.status ?? 'not_reviewed',
         })
         const eventId = `${video.id}:${classifiedEvent.sourceCandidateId ?? `event_${eventIndex}`}:${classifiedEvent.category}:${classifiedEvent.subtype}`
-        const contentEvent = applyContentPolicy(normalizedEvent, eventId, profile)
+        const contentEvent = applyContentPolicy(groundEventCopy(normalizedEvent), eventId, profile)
         logger.debug('content.classified', {
           videoId: video.id,
           eventId,
