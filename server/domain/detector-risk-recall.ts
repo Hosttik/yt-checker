@@ -12,7 +12,8 @@ export interface UncoveredRiskWindow {
 
 // Intentionally narrow and cheap. A match is NOT a content finding: it only
 // routes a short excerpt through the existing classifier and reviewer.
-const WEAPON = /\b(?:вил[аыи]|вилами|копь(?:я|ё|е|ями)|пистолет\w*|ружь\w*|нож\w*|оружи\w*|автомат\w*|gun|knife|rifle|weapon)\b/iu
+// JavaScript \b/\w word-boundaries are ASCII-oriented: for Cyrillic use Unicode letters.
+const WEAPON = /(?:^|[^\p{L}])(?:вил[аыи]|вилами|копь(?:я|ё|е|ями)|пистолет\w*|ружь\w*|нож\w*|оружи\w*|автомат\w*|gun|knife|rifle|weapon)(?![\p{L}])/iu
 const DIRECTED_DANGER = /(?:набр[ао]с\w*|напад\w*|цел\w*|стреля\w*|стрельб\w*|загнал\w*|преслед\w*|кида\w*|броса\w*|бей\b|уби\w*|помогит\w*|спасит\w*|остановит\w*|тупик\w*|aim\w*|shoot\w*|attack\w*|chase\w*|kill\w*)/iu
 const IMMEDIATE_DISTRESS = /(?:помогит\w*|спасит\w*|загнал\w*|в\s+тупик|в\s+меня\s+не\s+цел|остановит\w*|сейчас\s+убь\w*|help\s+me|stop\s+(?:shooting|aiming))/iu
 const RESTRAINT = /(?:привяз\w*|связал\w*|прикован\w*|приковал\w*|tied|bound|chained)/iu
