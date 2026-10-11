@@ -60,5 +60,23 @@ describe('offline saved-scan policy replay', () => {
       perVideo,
     }, null, 2))
     expect(updated).toHaveLength(result.contentEvents.length)
+
+    // Check locally curated labels only on their exact originating scan.
+    // Other saved scans still produce diagnostic diffs without forced labels.
+    const gold = JSON.parse(readFileSync(resolve('evals/gold/compot-2026-10-11.json'), 'utf8')) as {
+      scanId: string
+      cases: Array<{ videoId: string; startMs: number; attention: 'main' | 'details' | 'hidden' }>
+    }
+    if (result.scanId === gold.scanId) {
+      for (const expected of gold.cases) {
+        const events = updated.filter(event => event.id.startsWith(expected.videoId + ':'))
+        const scenes = buildPresentationScenes(events)
+        const actual = scenes.find(scene =>
+          scene.startMs <= expected.startMs && scene.endMs >= expected.startMs,
+        )
+        expect(actual?.attention ?? 'hidden',
+          `${expected.videoId}@${expected.startMs}`).toBe(expected.attention)
+      }
+    }
   })
 })
