@@ -1,0 +1,90 @@
+{
+  "scanId": "2026-10-11T09-21-23-122Z_e9b44d6a-9c79-4ae9-9539-0fa0cc49985b",
+  "status": "provisional_manual_labels",
+  "labelMeaning": {
+    "main": "worth bringing to parent attention",
+    "details": "valid but not primary attention",
+    "hidden": "not useful to surface"
+  },
+  "provenance": "2026-10-11 Compot 10-video saved result.json; reviewed against direct transcript excerpts; requires second independent reviewer before benchmark sign-off.",
+  "cases": [
+    {
+      "videoId": "tKmnOpeiIg0",
+      "startMs": 197440,
+      "attention": "details",
+      "notes": "brief direct insult"
+    },
+    {
+      "videoId": "tKmnOpeiIg0",
+      "startMs": 288280,
+      "attention": "details",
+      "notes": "fictional property-only vehicle intrusion"
+    },
+    {
+      "videoId": "tKmnOpeiIg0",
+      "startMs": 434000,
+      "attention": "details",
+      "notes": "brief gameplay refusal; duration not proven sustained"
+    },
+    {
+      "videoId": "tKmnOpeiIg0",
+      "startMs": 505840,
+      "attention": "details",
+      "notes": "fantasy mutual shooting"
+    },
+    {
+      "videoId": "sopiEI-rya0",
+      "startMs": 408520,
+      "attention": "details",
+      "notes": "reported comedic conditional threat"
+    },
+    {
+      "videoId": "edgRlTMnF0o",
+      "startMs": 480000,
+      "attention": "main",
+      "notes": "directed weapon threat during questioning; copy must stay grounded"
+    },
+    {
+      "videoId": "_xR7fZ24O4g",
+      "startMs": 303440,
+      "attention": "details",
+      "notes": "mistaken death theme with later resolution"
+    },
+    {
+      "videoId": "_xR7fZ24O4g",
+      "startMs": 578720,
+      "attention": "main",
+      "notes": "directed attack and pursuit with pitchforks"
+    },
+    {
+      "videoId": "wiuuBaYC8B8",
+      "startMs": 375400,
+      "attention": "main",
+      "notes": "ongoing peril, but fantasy and non-imitable"
+    },
+    {
+      "videoId": "wiuuBaYC8B8",
+      "startMs": 425199,
+      "attention": "details",
+      "notes": "fantasy property destruction"
+    },
+    {
+      "videoId": "MmdIhSW5B7Q",
+      "startMs": 169680,
+      "attention": "details",
+      "notes": "isolated mild stigmatizing joke; negation fidelity"
+    },
+    {
+      "videoId": "7_bCIsH-XEc",
+      "startMs": 99880,
+      "attention": "details",
+      "notes": "reported future zombie danger"
+    },
+    {
+      "videoId": "7_bCIsH-XEc",
+      "startMs": 472680,
+      "attention": "main",
+      "notes": "active bunker siege with repeated distress"
+    }
+  ]
+}
