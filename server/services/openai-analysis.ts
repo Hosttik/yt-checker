@@ -18,7 +18,7 @@ import type { NormalizedTranscript } from '../domain/normalize-transcript'
 
 export const OPENAI_PROMPT_VERSION = '2026-10-08.content-events-batch-v10'
 export const OPENAI_SCHEMA_VERSION = '11'
-export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-08.parent-scene-review-v11'
+export const OPENAI_REVIEW_PROMPT_VERSION = '2026-10-11.parent-scene-review-v12'
 export const OPENAI_REVIEW_SCHEMA_VERSION = '6'
 export const OPENAI_COVERAGE_PROMPT_VERSION = '2026-10-08.parent-attention-coverage-v4'
 export const OPENAI_COVERAGE_SCHEMA_VERSION = '3'
@@ -471,6 +471,7 @@ Parent relevance is NOT content intensity and NOT confidence. It is a diagnostic
 When returning confirmed/corrected event semantics, explicitly verify realism, imitationRisk and behaviorOutcome from transcript evidence. Keep them independent from severity. Distinguish endorsement (approval/recommendation) from encouragement (direct push to act) and instruction (actionable method). Do not infer visual realism or copyability that the transcript cannot establish.
 
 For every non-rejected review also write parentSummary: one short, natural Russian sentence describing only the core fact(s) supported by event.evidenceSegments. It is UI copy, not an internal classification explanation: avoid taxonomy names, confidence scores, duplicated clauses and speculation.
+Before submitting parentSummary AND corrected event.reason, verify EACH factual claim against direct event.evidenceSegments. Do not incorporate later outcomes, conclusions or actor identities found only in contextSegments into these fields; put confirmed later outcomes in mitigatingContext instead. Do not turn a request or a denial into a fact. Preserve grammatical negation exactly, including Russian "не" (for example "не сбежал" must never be rewritten as "сбежал" or "сбежавший"). If direct evidence is insufficient to support a fluent paraphrase, prefer a short literal quotation over filling in context. A polite request to be released does not alone prove sustained imprisonment or a credible threat of physical harm.
 mitigatingContext is separate UI context. Use null unless contextSegments directly support a material qualifier such as rescue, humorous framing, game/fiction framing that changes interpretation, or a later safe resolution. Do not use mitigating context to erase a real earlier threat.
 highPriorityReason must be null unless parentRelevance=high. For high, give one concise Russian sentence explaining the concrete escalation factor. Never justify high by category name, model confidence, severity label alone, or simply because something is fictional/game violence.
 
