@@ -433,6 +433,18 @@ function moderateEventBelongsOnMain(event: ContentEvent): boolean {
     return false
   }
 
+  // An isolated, brief refusal to release a character in fiction/gameplay
+  // is a valid detail, but not automatically a headline. Repeated/sustained
+  // coercion and scenes with documented physical injury remain eligible.
+  if (event.subtype === 'confinement'
+    && review?.duration !== 'sustained'
+    && (review?.duration === 'brief' || review?.duration === 'momentary')
+    && review.repetition === 'single'
+    && review.consequence !== 'injury_or_severe_harm'
+    && review.consequence !== 'death') {
+    return false
+  }
+
   if (review?.intent === 'coercive' && review.aggressionDirection === 'actor_to_target') {
     return true
   }
