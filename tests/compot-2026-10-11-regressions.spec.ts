@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ClassifiedContentEvent, ContentEventReview } from '../shared/types/content'
 import { applyContentPolicy } from '../server/domain/content-policy'
+import { buildPresentationScenes } from '../server/domain/content-reporting'
 import { groundEventCopy, copyGroundingIssue } from '../server/domain/content-evidence'
 
 function review(overrides: Partial<ContentEventReview> = {}): ContentEventReview {
@@ -36,6 +37,7 @@ describe('Compot 2026-10-11 evidence-based controls', () => {
   it('tKmnOpeiIg0 07:14: brief gameplay refusal is not exceptional high priority', () => {
     const event = applyContentPolicy(gameConfinement(), 'brief', 'normal')
     expect([event.parentRelevance, event.displayLevel]).toEqual(['moderate', 'summary'])
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('details')
   })
 
   it('sustained confinement remains high with the same taxonomy', () => {
@@ -43,6 +45,7 @@ describe('Compot 2026-10-11 evidence-based controls', () => {
       review: review({ duration: 'sustained', repetition: 'repeated' }),
     }), 'sustained', 'normal')
     expect(event.parentRelevance).toBe('high')
+    expect(buildPresentationScenes([event])[0]?.attention).toBe('main')
   })
 
   it('MmdIhSW5B7Q 02:49: reviewer may not reverse an explicit negation', () => {
