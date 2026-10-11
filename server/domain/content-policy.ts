@@ -375,12 +375,18 @@ function reviewedHighPriorityIsSupported(event: ClassifiedContentEvent): boolean
   const hasSeriousConsequence = review.consequence === 'threatened_harm'
     || review.consequence === 'injury_or_severe_harm'
     || review.consequence === 'death'
+  // A one-off refusal to release a character is not by itself evidence of
+  // severe confinement, even if a reviewer broadly labels it "threatened_harm".
+  // Sustained/repeated coercion and physically dangerous directed threats differ.
+  const sustainedCoercion = review.duration === 'sustained'
+    || review.repetition === 'repeated'
+    || review.repetition === 'pattern'
+  const supportedViolentCoercion = event.category === 'violence'
+    && hasSeriousConsequence
+    && event.details.harmLevel !== 'none'
   const directedCoercion = review.intent === 'coercive'
     && review.aggressionDirection === 'actor_to_target'
-    && (review.duration === 'sustained'
-      || review.repetition === 'repeated'
-      || review.repetition === 'pattern'
-      || hasSeriousConsequence)
+    && (sustainedCoercion || supportedViolentCoercion)
 
   if (event.category === 'violence') {
     const details = event.details
@@ -456,13 +462,15 @@ function reviewEstablishesHighPriorityCoercion(event: ClassifiedContentEvent): b
     && (review.duration === 'sustained'
       || review.repetition === 'repeated'
       || review.repetition === 'pattern')
+  const seriousDirectedViolence = event.category === 'violence'
+    && event.details.harmLevel !== 'none'
+    && (review.consequence === 'threatened_harm'
+      || review.consequence === 'injury_or_severe_harm'
+      || review.consequence === 'death')
 
-  if (!sustainedConfinement
-    && review.consequence !== 'threatened_harm'
-    && review.consequence !== 'injury_or_severe_harm'
-    && review.consequence !== 'death') {
-    return false
-  }
+  // The reviewer consequence enum is too coarse to distinguish a brief
+  // verbal refusal from a credible physical threat; do not use it alone.
+  if (!sustainedConfinement && !seriousDirectedViolence) return false
   if (event.assertionStatus === 'reported'
     || event.assertionStatus === 'hypothetical'
     || event.assertionStatus === 'negated') {
