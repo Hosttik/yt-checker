@@ -105,6 +105,51 @@ describe('deterministic targeted danger recall', () => {
     }])).toHaveLength(1)
   })
 
+  it('recalls the police interrogation despite no explicit weapon name (saved transcript 07:58–08:19)', () => {
+    const transcript = normalizeTranscript([
+      { text: 'Встал, я сказал: вставай. На кого ты работаешь?', startMs: 475_000, endMs: 479_000 },
+      { text: 'Я ни на кого не работаю. А можно, пожалуйста,', startMs: 479_000, endMs: 480_000 },
+      { text: 'в меня не целиться?', startMs: 480_000, endMs: 482_000 },
+      { text: 'Быстро говори, ты кто такой? Откуда у тебя голова?', startMs: 482_000, endMs: 486_000 },
+      { text: 'Нет никакой жертвы, это пластилин.', startMs: 486_000, endMs: 491_000 },
+      { text: 'Да хватит в меня целиться.', startMs: 497_000, endMs: 500_000 },
+    ])
+    const unrelated = {
+      ...confirmedThreat(),
+      category: 'scary_and_disturbing' as const,
+      subtype: 'disturbing_theme' as const,
+      startMs: 170_000, endMs: 187_000,
+      sceneStartMs: 170_000, sceneEndMs: 213_000,
+      evidenceRanges: [{ startMs: 170_000, endMs: 187_000 }],
+    }
+    const windows = uncoveredRiskWindows(transcript, [unrelated], 1)
+    expect(windows).toHaveLength(1)
+    expect(windows[0]?.cue).toBe('directed_weapon_danger')
+    expect(windows[0]?.transcriptText).toContain('в меня не целиться')
+    expect(windows[0]?.transcriptText).toContain('Быстро говори')
+  })
+
+  it('does not recheck an already detected police armed threat', () => {
+    const transcript = normalizeTranscript([
+      { text: 'Вставай, кто ты?', startMs: 477_000, endMs: 480_000 },
+      { text: 'Пожалуйста, в меня не целиться. Быстро говори!', startMs: 480_000, endMs: 484_000 },
+    ])
+    const prior = {
+      ...confirmedThreat(), startMs: 480_000, endMs: 484_000,
+      sceneStartMs: 475_000, sceneEndMs: 510_000,
+      evidenceRanges: [{ startMs: 480_000, endMs: 484_000 }],
+    }
+    expect(uncoveredRiskWindows(transcript, [prior], 1)).toEqual([])
+  })
+
+  it('does not interpret ordinary game aiming or an uncontextualized request as coercion', () => {
+    const benign = normalizeTranscript([
+      { text: 'Я целюсь в блок из лука, вставай и посмотри.', startMs: 1000, endMs: 5000 },
+      { text: 'Пожалуйста, в меня не целиться, мы просто тренируемся.', startMs: 5000, endMs: 9000 },
+    ])
+    expect(uncoveredRiskWindows(benign, [])).toHaveLength(0)
+  })
+
   it('does not recheck a harmless gameplay sword inventory', () => {
     const transcript = normalizeTranscript([
       { text: 'У меня есть меч, который я хочу испытать.', startMs: 1000, endMs: 4000 },
