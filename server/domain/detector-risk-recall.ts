@@ -21,7 +21,7 @@ const RESTRAINT = /(?:привяз[\p{L}]*|связал[\p{L}]*|прикован
 // Require BOTH a specific directed request and nearby coercive speech;
 // words such as "aim" or "gun" on their own are not safety findings.
 const DIRECTED_AIM_REQUEST = /(?:в\s+меня\s+(?:не\s+)?цел[\p{L}]*|(?:не\s+)?цел[\p{L}]*\s+в\s+меня|(?:don't|stop|please\s+don't)\s+(?:aim|point)\s+(?:it\s+)?at\s+me)/iu
-const COERCIVE_SPEECH = /(?:вставай|встал[,.!\s]|быстро\s+говори|на\s+кого\s+ты\s+работаешь|кто\s+твоя\s+жертва|руки\s+вверх|подними\s+руки|hands\s+up|tell\s+me\s+now|who\s+are\s+you)/iu
+const COERCIVE_SPEECH = /(?:встал[,\s]+я\s+сказал|я\s+сказал[:\s]+вставай|вставай[,;\s]+кто\s+ты|быстро\s+говори|на\s+кого\s+ты\s+работаешь|кто\s+твоя\s+жертва|руки\s+вверх|подними\s+руки|hands\s+up|tell\s+me\s+now|who\s+are\s+you)/iu
 const TRAIN = /(?:поезд\w*|рельс\w*|train|tracks)/iu
 
 interface CueMatch {
